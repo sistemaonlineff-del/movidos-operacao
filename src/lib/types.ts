@@ -1,0 +1,3 @@
+export type DropStatus = 'INTERESSADO' | 'AG. ASSINATURA' | 'CONTRATO ASSINADO' | 'ENVIADO - AG. APROVAÇÃO' | 'ATIVO' | 'CONGELADO' | 'PROBLEMA' | 'EXCLUÍDO'
+export type Drop = { id: string; legacy_id?: number | null; name: string; partner?: string | null; responsible?: string | null; status: DropStatus; phone?: string | null; email?: string | null; municipality?: string | null; state?: string | null; zone?: string | null; address?: string | null; postal_code?: string | null; monthly_value?: number | null; created_at: string }
+export type Profile = { id: string; full_name?: string | null; email: string; role: 'admin' | 'operador' | 'financeiro'; is_active: boolean }
