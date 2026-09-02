@@ -8,3 +8,6 @@ supabase/staging/
 *.xlsm
 __pycache__/
 *.pyc
+
+.vercel
+.env*

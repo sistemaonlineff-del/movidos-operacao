@@ -11,6 +11,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.56.0",
     "@types/leaflet": "^1.9.22",
+    "@vercel/node": "^5.5.20",
     "docxtemplater": "^3.69.3",
     "file-saver": "^2.0.5",
     "jspdf": "^4.2.1",
