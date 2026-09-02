@@ -1,0 +1,17 @@
+.brand-mark {
+  overflow: hidden;
+  padding: 7px;
+}
+
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.side-brand .side-logo {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  filter: drop-shadow(0 3px 8px #10b9b655);
+}

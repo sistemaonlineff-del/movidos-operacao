@@ -6,6 +6,7 @@ import './styles.css'
 import './navigation.css'
 import './formatting.css'
 import './clean-ui.css'
+import './brand.css'
 
 const UFS = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO']
 let municipalitiesLoaded = false
