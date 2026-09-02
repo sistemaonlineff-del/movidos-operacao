@@ -1,0 +1,9 @@
+.map-card { margin-top: 1.25rem; }
+.map-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.map-heading h2 { margin: 0; }
+.map-heading > span { color: #637278; font-size: .85rem; }
+.drops-map { height: min(58vh, 560px); min-height: 320px; border-radius: 12px; overflow: hidden; background: #e8f3f3; }
+.form-message { margin: 1rem 0 0; padding: .8rem 1rem; color: #087570; background: #e4f8f7; border-radius: 10px; }
+.danger-action { margin-left: .4rem; color: #a94236; background: #fbe5e2; padding: .35rem .55rem; }
+.toolbar > div { display: flex; align-items: center; gap: .6rem; }
+@media (max-width: 640px) { .map-heading { align-items: flex-start; flex-direction: column; } .drops-map { height: 390px; } }
