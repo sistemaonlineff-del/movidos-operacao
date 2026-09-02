@@ -13,6 +13,7 @@
     "@types/leaflet": "^1.9.22",
     "docxtemplater": "^3.69.3",
     "file-saver": "^2.0.5",
+    "jspdf": "^4.2.1",
     "leaflet": "^1.9.4",
     "pizzip": "^3.2.0",
     "react": "^19.0.0",
