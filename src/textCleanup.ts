@@ -27,7 +27,10 @@ function cleanTree(root: Node) {
     for (const element of [root, ...root.querySelectorAll('[placeholder], [title], [aria-label]')]) {
       for (const attribute of ['placeholder', 'title', 'aria-label']) {
         const value = element.getAttribute(attribute)
-        if (value) element.setAttribute(attribute, repair(value))
+        if (value) {
+          const cleaned = repair(value)
+          if (cleaned !== value) element.setAttribute(attribute, cleaned)
+        }
       }
     }
   }
