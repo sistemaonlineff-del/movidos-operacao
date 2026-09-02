@@ -10,6 +10,21 @@
   object-fit: contain;
 }
 
+/* Marca completa no painel de acesso; o peixe continua como ícone do sistema. */
+.auth-panel .brand-mark {
+  width: min(220px, 72%);
+  height: 72px;
+  margin: -1.1rem auto 1.7rem;
+  padding: 0;
+  border-radius: 0;
+  background: url('/brand/movidos-wordmark.png') center / contain no-repeat;
+  box-shadow: none;
+}
+
+.auth-panel .brand-mark img {
+  display: none;
+}
+
 .side-brand .side-logo {
   width: 34px;
   height: 34px;
