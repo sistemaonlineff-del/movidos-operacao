@@ -2,8 +2,24 @@
 .map-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .map-heading h2 { margin: 0; }
 .map-heading > span { color: #637278; font-size: .85rem; }
+.map-controls { display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; margin: 0 0 .8rem; }
+.map-controls label { display: grid; gap: .35rem; font-size: .78rem; font-weight: 800; color: #415258; min-width: min(100%, 280px); }
+.map-controls input { border: 1px solid #d5e4e5; border-radius: 8px; padding: .68rem .75rem; background: #fff; }
+.map-controls .secondary { padding: .65rem .9rem; }
+.map-legend { display: flex; gap: .7rem 1rem; align-items: center; flex-wrap: wrap; margin: 0 0 .8rem; color: #526166; font-size: .78rem; font-weight: 700; }
+.map-legend span { display: inline-flex; align-items: center; gap: .35rem; }
+.map-legend small { color: #78868b; font-weight: 600; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.status-active { background: #008b89; }
+.status-progress { background: #237be7; }
+.status-frozen { background: #7556c7; }
+.status-problem { background: #d94b44; }
+.pill.status-active { background: #dcf8f7; color: #008b89; }
+.pill.status-progress { background: #e7f0ff; color: #237be7; }
+.pill.status-frozen { background: #eee9ff; color: #7556c7; }
+.pill.status-problem { background: #fbe5e2; color: #d94b44; }
 .drops-map { height: min(58vh, 560px); min-height: 320px; border-radius: 12px; overflow: hidden; background: #e8f3f3; }
 .form-message { margin: 1rem 0 0; padding: .8rem 1rem; color: #087570; background: #e4f8f7; border-radius: 10px; }
 .danger-action { margin-left: .4rem; color: #a94236; background: #fbe5e2; padding: .35rem .55rem; }
 .toolbar > div { display: flex; align-items: center; gap: .6rem; }
-@media (max-width: 640px) { .map-heading { align-items: flex-start; flex-direction: column; } .drops-map { height: 390px; } }
+@media (max-width: 640px) { .map-heading { align-items: flex-start; flex-direction: column; } .drops-map { height: 390px; } .map-controls { align-items: stretch; } .map-controls label { width: 100%; } }
