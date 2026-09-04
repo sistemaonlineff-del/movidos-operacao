@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { ChangeEvent, useEffect, useMemo, useState } from 'react'
+import { ChangeEvent, useEffect, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from './lib/supabase'
 
@@ -28,6 +28,7 @@ const excelDate=(value:unknown)=>{
   const parsed=new Date(raw)
   return Number.isNaN(parsed.getTime())?null:parsed.toISOString()
 }
+const hasInvalidRows=(closing:Row[],losses:Row[])=>closing.some(row=>!required(row,['Periodo','Parceiro','Drop'])||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0)||losses.some(row=>!required(row,['Periodo','Parceiro','Drop'])||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento)))
 
 export default function Financeiro(){
   const [views,setViews]=useState<View[]>([])
@@ -95,24 +96,23 @@ export default function Financeiro(){
       if(!close.length)throw new Error('A aba Fechamento não possui linhas para importar.')
       const invalid=close.filter(row=>!required(row,['Periodo','Parceiro','Drop'])||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0).length+loss.filter(row=>!required(row,['Periodo','Parceiro','Drop'])||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento))).length
       setClosing(close);setLosses(loss);setTitle(file.name.replace(/\.[^.]+$/,''));setSourceFile(file.name)
-      setMessage(invalid?`${invalid} linha(s) precisam ser corrigidas antes da importação.`:`Prévia pronta: ${close.length} itens de fechamento e ${loss.length} extravios. Ao criar a View, os dados também entrarão no consolidado geral.`)
+      if(invalid){setMessage(`${invalid} linha(s) precisam ser corrigidas antes da importação.`);return}
+      await importView(close,loss,file.name.replace(/\.[^.]+$/,''),file.name)
     }catch(error){setClosing([]);setLosses([]);setMessage(error instanceof Error?error.message:'Não foi possível ler a planilha.')}
   }
-  const invalid=useMemo(()=>closing.some(row=>!required(row,['Periodo','Parceiro','Drop'])||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0)||losses.some(row=>!required(row,['Periodo','Parceiro','Drop'])||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento))),[closing,losses])
-
-  const importView=async()=>{
-    if(!supabase||!closing.length||invalid)return
+  const importView=async(sourceClosing=closing,sourceLosses=losses,sourceTitle=title,sourceFileName=sourceFile)=>{
+    if(!supabase||!sourceClosing.length||hasInvalidRows(sourceClosing,sourceLosses))return
     setBusy(true);setMessage('Importando View...')
     try{
-      const {data:view,error:viewError}=await supabase.from('financial_views').insert({title,source_file_name:sourceFile||`${title}.xlsx`,source_rows:closing.length+losses.length,import_status:'rascunho'}).select().single()
+      const {data:view,error:viewError}=await supabase.from('financial_views').insert({title:sourceTitle,source_file_name:sourceFileName||`${sourceTitle}.xlsx`,source_rows:sourceClosing.length+sourceLosses.length,import_status:'rascunho'}).select().single()
       if(viewError)throw viewError
-      const groups=[...new Map([...closing,...losses].map(row=>[`${text(row.Periodo)}|${text(row.Parceiro)}`,{label:text(row.Periodo),partner:text(row.Parceiro)}])).values()]
+      const groups=[...new Map([...sourceClosing,...sourceLosses].map(row=>[`${text(row.Periodo)}|${text(row.Parceiro)}`,{label:text(row.Periodo),partner:text(row.Parceiro)}])).values()]
       const {data:periods,error:periodError}=await supabase.from('financial_periods').insert(groups.map(group=>({...group,financial_view_id:view.id,status:'aberto'}))).select()
       if(periodError)throw periodError
       const periodIndex=new Map((periods??[]).map(period=>[`${period.label}|${period.partner}`,period.id]))
       const chunks=<T,>(rows:T[])=>Array.from({length:Math.ceil(rows.length/400)},(_,index)=>rows.slice(index*400,index*400+400))
-      for(const part of chunks(closing)){const {error}=await supabase.from('financial_drop_items').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${text(row.Parceiro)}`),drop_name_snapshot:text(row.Drop),quantity_packages:number(row.QuantidadePacote),unit_value:0,reimbursement:0})));if(error)throw error}
-      for(const part of chunks(losses)){const {error}=await supabase.from('loss_events').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${text(row.Parceiro)}`),partner:text(row.Parceiro),period_label:text(row.Periodo),drop_name_snapshot:text(row.Drop),waybill:text(row.Waybill),label_code:text(row.CodigoEtiqueta),bag_code:text(row.Saca),status:text(row.Status),seller:text(row.Seller),received_at:excelDate(row.DataRecebimento),amount:number(row.ValorExtravio),observation:text(row.Obs)})));if(error)throw error}
+      for(const part of chunks(sourceClosing)){const {error}=await supabase.from('financial_drop_items').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${text(row.Parceiro)}`),drop_name_snapshot:text(row.Drop),quantity_packages:number(row.QuantidadePacote),unit_value:0,reimbursement:0})));if(error)throw error}
+      for(const part of chunks(sourceLosses)){const {error}=await supabase.from('loss_events').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${text(row.Parceiro)}`),partner:text(row.Parceiro),period_label:text(row.Periodo),drop_name_snapshot:text(row.Drop),waybill:text(row.Waybill),label_code:text(row.CodigoEtiqueta),bag_code:text(row.Saca),status:text(row.Status),seller:text(row.Seller),received_at:excelDate(row.DataRecebimento),amount:number(row.ValorExtravio),observation:text(row.Obs)})));if(error)throw error}
       await supabase.from('financial_views').update({import_status:'importado'}).eq('id',view.id)
       setClosing([]);setLosses([]);setSourceFile('');setSelected(view.id)
       setMessage('View importada com sucesso e consolidado geral atualizado.')
@@ -129,7 +129,6 @@ export default function Financeiro(){
   }
   return <section className="finance-page">
     <section className="card finance-upload"><div><p className="eyebrow">FECHAMENTOS</p><h2>Nova View financeira</h2><p>Envie o modelo quinzenal. Cada arquivo cria uma versão independente e atualiza a base geral.</p></div><a className="secondary" href="/templates/modelo-fechamento-financeiro.xlsx" download>Baixar modelo</a><label className="upload-button">Selecionar planilha<input type="file" accept=".xlsx" onChange={choose}/></label></section>
-    {closing.length>0&&<section className="card finance-preview"><label>Nome da View<input value={title} onChange={event=>setTitle(event.target.value)}/></label><strong>{closing.length} itens · {losses.length} extravios</strong><button className="primary compact" disabled={busy||invalid} onClick={()=>void importView}>{busy?'Importando...':'Criar View'}</button></section>}
     {message&&<p className="form-message">{message}</p>}
     <section className="finance-summary"><article className="metric"><span>Views salvas</span><strong>{views.length}</strong></article><article className="metric"><span>Itens na base geral</span><strong>{general.items}</strong></article><article className="metric"><span>Pacotes na base geral</span><strong>{general.packages.toLocaleString('pt-BR')}</strong></article><article className="metric red"><span>Extravios na base geral</span><strong>{general.losses} · R$ {general.lossAmount.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></article></section>
     <section className="card"><div className="finance-head"><div><p className="eyebrow">VIEWS SALVAS</p><h2>Consultar fechamento</h2></div><button className="secondary" onClick={()=>void refresh()}>Atualizar</button></div><select className="view-select" value={selected} onChange={event=>setSelected(event.target.value)}><option value="">Selecione uma View</option>{views.map(view=><option key={view.id} value={view.id}>{view.title} · {new Date(view.created_at).toLocaleString('pt-BR')}</option>)}</select></section>
