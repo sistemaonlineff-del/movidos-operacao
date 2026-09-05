@@ -35,6 +35,7 @@ export default function Financeiro(){
   const [selected,setSelected]=useState('')
   const [closing,setClosing]=useState<Row[]>([])
   const [losses,setLosses]=useState<Row[]>([])
+  const [uploadPeriod,setUploadPeriod]=useState('')
   const [title,setTitle]=useState('')
   const [sourceFile,setSourceFile]=useState('')
   const [message,setMessage]=useState('')
@@ -84,6 +85,8 @@ export default function Financeiro(){
   const choose=async(event:ChangeEvent<HTMLInputElement>)=>{
     const file=event.target.files?.[0]
     if(!file)return
+    const period=uploadPeriod.trim()
+    if(!period){setMessage('Informe o período deste fechamento antes de anexar a planilha.');event.target.value='';return}
     setMessage('')
     try{
       const workbook=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true})
@@ -94,10 +97,12 @@ export default function Financeiro(){
       const lossHeaders=(XLSX.utils.sheet_to_json(lossSheet,{header:1,defval:''})[0]??[]) as unknown[]
       if(!hasColumns(closeHeaders,['Periodo','Parceiro','Drop','QuantidadePacote'])||!hasColumns(lossHeaders,['Periodo','Parceiro','Drop','Waybill','CodigoEtiqueta','Saca','Status','Seller','DataRecebimento','ValorExtravio','Obs']))throw new Error('As colunas do modelo foram alteradas. Baixe o modelo atualizado e mantenha os cabeçalhos.')
       if(!close.length)throw new Error('A aba Fechamento não possui linhas para importar.')
-      const invalid=close.filter(row=>!required(row,['Periodo','Parceiro','Drop'])||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0).length+loss.filter(row=>!required(row,['Periodo','Parceiro','Drop'])||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento))).length
-      setClosing(close);setLosses(loss);setTitle(file.name.replace(/\.[^.]+$/,''));setSourceFile(file.name)
+      const closingForPeriod=close.map(row=>({...row,Periodo:period}) as Row)
+      const lossesForPeriod=loss.map(row=>({...row,Periodo:period}) as Row)
+      const invalid=closingForPeriod.filter(row=>!required(row,['Periodo','Parceiro','Drop'])||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0).length+lossesForPeriod.filter(row=>!required(row,['Periodo','Parceiro','Drop'])||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento))).length
+      setClosing(closingForPeriod);setLosses(lossesForPeriod);setTitle(period);setSourceFile(file.name)
       if(invalid){setMessage(`${invalid} linha(s) precisam ser corrigidas antes da importação.`);return}
-      await importView(close,loss,file.name.replace(/\.[^.]+$/,''),file.name)
+      await importView(closingForPeriod,lossesForPeriod,period,file.name)
     }catch(error){setClosing([]);setLosses([]);setMessage(error instanceof Error?error.message:'Não foi possível ler a planilha.')}
   }
   const importView=async(sourceClosing=closing,sourceLosses=losses,sourceTitle=title,sourceFileName=sourceFile)=>{
@@ -114,8 +119,8 @@ export default function Financeiro(){
       for(const part of chunks(sourceClosing)){const {error}=await supabase.from('financial_drop_items').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${text(row.Parceiro)}`),drop_name_snapshot:text(row.Drop),quantity_packages:number(row.QuantidadePacote),unit_value:0,reimbursement:0})));if(error)throw error}
       for(const part of chunks(sourceLosses)){const {error}=await supabase.from('loss_events').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${text(row.Parceiro)}`),partner:text(row.Parceiro),period_label:text(row.Periodo),drop_name_snapshot:text(row.Drop),waybill:text(row.Waybill),label_code:text(row.CodigoEtiqueta),bag_code:text(row.Saca),status:text(row.Status),seller:text(row.Seller),received_at:excelDate(row.DataRecebimento),amount:number(row.ValorExtravio),observation:text(row.Obs)})));if(error)throw error}
       await supabase.from('financial_views').update({import_status:'importado'}).eq('id',view.id)
-      setClosing([]);setLosses([]);setSourceFile('');setSelected(view.id)
-      setMessage('View importada com sucesso e consolidado geral atualizado.')
+      setClosing([]);setLosses([]);setSourceFile('');setUploadPeriod('');setSelected(view.id)
+      setMessage(`View de ${sourceTitle} importada com sucesso e consolidado geral atualizado.`)
       await refresh()
     }catch(error){setMessage(error instanceof Error?error.message:'Erro ao importar.')}finally{setBusy(false)}
   }
@@ -128,10 +133,10 @@ export default function Financeiro(){
     if(!error){await loadGeneral();setSelected('');setTimeout(()=>setSelected(views.find(view=>view.id===selected)?.id??''),0)}
   }
   return <section className="finance-page">
-    <section className="card finance-upload"><div><p className="eyebrow">FECHAMENTOS</p><h2>Nova View financeira</h2><p>Envie o modelo quinzenal. Cada arquivo cria uma versão independente e atualiza a base geral.</p></div><a className="secondary" href="/templates/modelo-fechamento-financeiro.xlsx" download>Baixar modelo</a><label className="upload-button">Selecionar planilha<input type="file" accept=".xlsx" onChange={choose}/></label></section>
+    <section className="card finance-upload"><div><p className="eyebrow">FECHAMENTOS</p><h2>Novo fechamento quinzenal</h2><p>1. Informe o período. 2. Anexe a planilha. O sistema cria a View, registra o histórico e atualiza a base geral.</p></div><label className="finance-period">Período do fechamento<input value={uploadPeriod} onChange={event=>setUploadPeriod(event.target.value)} placeholder="Ex.: 33. 1Q DE AGOSTO" disabled={busy}/></label><a className="secondary" href="/templates/modelo-fechamento-financeiro.xlsx" download>Baixar modelo</a><label className={`upload-button ${!uploadPeriod.trim()||busy?'disabled':''}`}>Anexar planilha<input type="file" accept=".xlsx" onChange={choose} disabled={!uploadPeriod.trim()||busy}/></label></section>
     {message&&<p className="form-message">{message}</p>}
     <section className="finance-summary"><article className="metric"><span>Views salvas</span><strong>{views.length}</strong></article><article className="metric"><span>Itens na base geral</span><strong>{general.items}</strong></article><article className="metric"><span>Pacotes na base geral</span><strong>{general.packages.toLocaleString('pt-BR')}</strong></article><article className="metric red"><span>Extravios na base geral</span><strong>{general.losses} · R$ {general.lossAmount.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></article></section>
     <section className="card"><div className="finance-head"><div><p className="eyebrow">VIEWS SALVAS</p><h2>Consultar fechamento</h2></div><button className="secondary" onClick={()=>void refresh()}>Atualizar</button></div><select className="view-select" value={selected} onChange={event=>setSelected(event.target.value)}><option value="">Selecione uma View</option>{views.map(view=><option key={view.id} value={view.id}>{view.title} · {new Date(view.created_at).toLocaleString('pt-BR')}</option>)}</select></section>
-    {selected&&<><section className="finance-summary"><article className="metric"><span>Itens por Drop</span><strong>{details.length}</strong></article><article className="metric red"><span>Extravios</span><strong>{viewLosses.length}</strong></article></section><section className="card"><h2>Itens da View</h2><div className="table-wrap"><table><thead><tr><th>Período</th><th>Parceiro</th><th>Drop</th><th>Pacotes</th><th>Valor unitário</th><th>Total</th></tr></thead><tbody>{details.map(item=><tr key={item.id}><td>{item.period?.label}</td><td>{item.period?.partner}</td><td>{item.drop_name_snapshot}</td><td>{item.quantity_packages}</td><td>R$ {Number(item.unit_value).toFixed(2)}</td><td>R$ {Number(item.total_amount).toFixed(2)}</td></tr>)}</tbody></table></div></section><section className="card"><h2>Extravios da View</h2><div className="table-wrap"><table><thead><tr><th>Drop</th><th>Waybill</th><th>Status</th><th>Valor</th><th>Observação</th><th>Ação</th></tr></thead><tbody>{viewLosses.map(item=><tr key={item.id}><td>{item.drop_name_snapshot}</td><td>{item.waybill}</td><td>{item.status}</td><td>R$ {Number(item.amount).toFixed(2)}</td><td>{item.observation}</td><td><button className="table-action" onClick={()=>void editLoss(item)}>Editar</button></td></tr>)}</tbody></table></div></section></>}
+    {selected&&<><section className="finance-summary"><article className="metric"><span>Linhas em Fechamento</span><strong>{details.length}</strong></article><article className="metric red"><span>Linhas em Extravios</span><strong>{viewLosses.length}</strong></article></section><section className="card"><h2>Fechamento</h2><div className="table-wrap"><table><thead><tr><th>Período</th><th>Parceiro</th><th>Drop</th><th>Pacotes</th><th>Valor unitário</th><th>Total</th></tr></thead><tbody>{details.map(item=><tr key={item.id}><td>{item.period?.label}</td><td>{item.period?.partner}</td><td>{item.drop_name_snapshot}</td><td>{item.quantity_packages}</td><td>R$ {Number(item.unit_value).toFixed(2)}</td><td>R$ {Number(item.total_amount).toFixed(2)}</td></tr>)}</tbody></table></div></section><section className="card"><h2>Extravios</h2><div className="table-wrap"><table><thead><tr><th>Período</th><th>Parceiro</th><th>Drop</th><th>Waybill</th><th>Status</th><th>Valor</th><th>Observação</th><th>Ação</th></tr></thead><tbody>{viewLosses.map(item=><tr key={item.id}><td>{item.period_label}</td><td>{item.partner}</td><td>{item.drop_name_snapshot}</td><td>{item.waybill}</td><td>{item.status}</td><td>R$ {Number(item.amount).toFixed(2)}</td><td>{item.observation}</td><td><button className="table-action" onClick={()=>void editLoss(item)}>Editar</button></td></tr>)}</tbody></table></div></section></>}
   </section>
 }

@@ -28,6 +28,9 @@
 .finance-upload p:not(.eyebrow) { color: #637278; margin-bottom: 0; }
 .upload-button { background: #10b9b6; color: white; border-radius: 9px; padding: .7rem 1rem; font-weight: 800; cursor: pointer; }
 .upload-button input { display: none; }
+.upload-button.disabled { opacity: .5; cursor: not-allowed; }
+.finance-period { display: grid; gap: .35rem; font-size: .78rem; font-weight: 800; color: #415258; min-width: min(100%, 300px); }
+.finance-period input { border: 1px solid #d5e4e5; border-radius: 8px; padding: .68rem; background: #fff; min-width: 260px; }
 .finance-preview label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 800; min-width: min(100%, 360px); }
 .finance-preview input, .view-select { border: 1px solid #d5e4e5; border-radius: 8px; padding: .68rem; }
 .view-select { width: 100%; margin-top: 1rem; background: white; }
