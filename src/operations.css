@@ -31,6 +31,12 @@
 .upload-button.disabled { opacity: .5; cursor: not-allowed; }
 .finance-period { display: grid; gap: .35rem; font-size: .78rem; font-weight: 800; color: #415258; min-width: min(100%, 300px); }
 .finance-period input { border: 1px solid #d5e4e5; border-radius: 8px; padding: .68rem; background: #fff; min-width: 260px; }
+.finance-history { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap; border-color: #f2d3cf; }
+.finance-history h2 { margin: 0; }
+.finance-history p:not(.eyebrow) { color: #637278; margin-bottom: 0; }
+.history-upload { background: #b54438; color: #fff; border-radius: 9px; padding: .7rem 1rem; font-weight: 800; cursor: pointer; }
+.history-upload input { display: none; }
+.history-upload.disabled { opacity: .5; cursor: not-allowed; }
 .finance-preview label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 800; min-width: min(100%, 360px); }
 .finance-preview input, .view-select { border: 1px solid #d5e4e5; border-radius: 8px; padding: .68rem; }
 .view-select { width: 100%; margin-top: 1rem; background: white; }
