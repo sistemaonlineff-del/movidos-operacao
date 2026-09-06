@@ -4,7 +4,7 @@ const phoneDigits = (value: string) => value.replace(/\D/g, '')
 
 export default function WhatsappLinks() {
   useEffect(() => {
-    const decoratePhones = () => document.querySelectorAll('table tbody td').forEach(cell => {
+    const decoratePhones = () => document.querySelectorAll<HTMLTableCellElement>('table tbody td').forEach(cell => {
       const table = cell.closest('table')
       const header = table?.querySelectorAll('thead th')[cell.cellIndex]?.textContent?.trim()
       const number = phoneDigits(cell.textContent ?? '')
