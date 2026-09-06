@@ -1,9 +1,21 @@
 import PizZip from 'pizzip'
 import Docxtemplater from 'docxtemplater'
 import { jsPDF } from 'jspdf'
+import { supabase } from './lib/supabase'
+
+async function activeTemplate(template: string) {
+  if (!supabase || template !== '/templates/modelo-contrato-prestacao-servico.docx') return template
+  const { data: session } = await supabase.auth.getSession()
+  const response = await fetch('/api/contract-templates', { headers: { Authorization: `Bearer ${session.session?.access_token ?? ''}` } })
+  if (!response.ok) return template
+  const config = await response.json()
+  if (!config.serviceTemplatePath) return template
+  const { data, error } = await supabase.storage.from('movidos-documents').createSignedUrl(config.serviceTemplatePath, 120)
+  return error || !data?.signedUrl ? template : data.signedUrl
+}
 
 export async function downloadContractPdf(template: string, data: Record<string, string>, filename: string) {
-  const response = await fetch(template)
+  const response = await fetch(await activeTemplate(template))
   if (!response.ok) throw new Error('Modelo do documento não encontrado.')
   const docx = new Docxtemplater(new PizZip(await response.arrayBuffer()), { paragraphLoop: true, linebreaks: true })
   docx.render(data)
