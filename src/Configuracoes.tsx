@@ -27,6 +27,8 @@ export default function Configuracoes() {
   const [message, setMessage] = useState('')
   const load = async () => {
     if (!supabase || !isAdmin) return
+    const { data: sessionData } = await supabase.auth.getSession()
+    await fetch('/api/bootstrap-admin', { method: 'POST', headers: { Authorization: `Bearer ${sessionData.session?.access_token ?? ''}` } })
     const [{ data: profiles, error }, { data: permissionRows }] = await Promise.all([
       supabase.from('user_profiles').select('id,email,full_name,role,is_active,created_at').order('created_at', { ascending: false }),
       supabase.from('user_module_permissions').select('*')
