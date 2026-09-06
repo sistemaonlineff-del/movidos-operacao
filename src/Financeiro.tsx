@@ -125,24 +125,35 @@ export default function Financeiro(){
   const chooseHistory=async(event:ChangeEvent<HTMLInputElement>)=>{
     const file=event.target.files?.[0]
     if(!file||!supabase)return
-    if(!confirm('Esta ação apaga todas as Views financeiras, fechamentos e extravios atuais e substitui tudo pelo Pasta1.xlsx. Deseja continuar?')){event.target.value='';return}
+    if(!confirm('Esta ação apaga todas as Views financeiras, fechamentos e extravios atuais e substitui tudo pelos dados deste arquivo. Deseja continuar?')){event.target.value='';return}
     setBusy(true);setMessage('Lendo e substituindo a base histórica...')
     try{
       const workbook=XLSX.read(await file.arrayBuffer(),{type:'array'})
-      const sheet=workbook.Sheets.Planilha1
-      if(!sheet)throw new Error('Use o Pasta1.xlsx com a aba Planilha1.')
-      const rows=XLSX.utils.sheet_to_json<Row>(sheet,{defval:''})
-      const headers=['PERÍODO','DROP','PARCEIRO','TOTAL PACOTE','VALOR ACORDADO']
-      if(!rows.length||!headers.every(header=>Object.prototype.hasOwnProperty.call(rows[0],header)))throw new Error('As colunas do Pasta1.xlsx não correspondem ao histórico esperado.')
-      const payload=rows.map(row=>({period:text(row['PERÍODO']),drop:text(row.DROP),partner:text(row.PARCEIRO),quantity:number(row['TOTAL PACOTE']),agreed:number(row['VALOR ACORDADO'])})).filter(row=>row.period&&row.drop)
+      let payload:any[]=[];let losses:any[]=[];let drops:any[]=[]
+      if(workbook.Sheets['Pgto Detalhes']&&workbook.Sheets['Extravios']&&workbook.Sheets['Cadastro']){
+        const details=XLSX.utils.sheet_to_json<any[]>(workbook.Sheets['Pgto Detalhes'],{header:1,defval:''})
+        const lossRows=XLSX.utils.sheet_to_json<any[]>(workbook.Sheets['Extravios'],{header:1,defval:''})
+        const registration=XLSX.utils.sheet_to_json<any[]>(workbook.Sheets['Cadastro'],{header:1,defval:''})
+        payload=details.slice(3).map(row=>({period:text(row[12]),drop:text(row[13]),partner:text(row[14]),quantity:number(row[16]),agreed:number(row[17]),subtotal:number(row[18]),lossAmount:number(row[21]),reimbursement:number(row[22]),receivable:number(row[23]),paymentDate:excelDate(row[24]),pixKey:text(row[25])})).filter(row=>row.period&&row.drop)
+        losses=lossRows.slice(3).map(row=>({period:text(row[0]),drop:text(row[1]),waybill:text(row[2]),labelCode:text(row[3]),bagCode:text(row[4]),status:text(row[5]),seller:text(row[6]),receivedAt:excelDate(row[7]),amount:number(row[8]),observation:text(row[9])})).filter(row=>row.period&&row.drop)
+        drops=registration.slice(1).map(row=>({name:text(row[0]),partner:text(row[1]),agreed:number(row[2]),pixKey:text(row[3]),email:text(row[4])})).filter(row=>row.name&&row.partner)
+      }else{
+        const sheet=workbook.Sheets.Planilha1
+        if(!sheet)throw new Error('Use o Controle Financeiro completo ou o Pasta1.xlsx com a aba Planilha1.')
+        const rows=XLSX.utils.sheet_to_json<Row>(sheet,{defval:''})
+        const headers=['PERÍODO','DROP','PARCEIRO','TOTAL PACOTE','VALOR ACORDADO']
+        if(!rows.length||!headers.every(header=>Object.prototype.hasOwnProperty.call(rows[0],header)))throw new Error('As colunas do arquivo não correspondem ao histórico esperado.')
+        payload=rows.map(row=>({period:text(row['PERÍODO']),drop:text(row.DROP),partner:text(row.PARCEIRO),quantity:number(row['TOTAL PACOTE']),agreed:number(row['VALOR ACORDADO'])})).filter(row=>row.period&&row.drop)
+      }
+      if(!payload.length)throw new Error('Nenhuma linha de Fechamento foi encontrada no arquivo.')
       const {data:{session}}=await supabase.auth.getSession()
-      const response=await fetch('/api/financial/rebuild-history',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${session?.access_token??''}`},body:JSON.stringify({rows:payload})})
+      const response=await fetch('/api/financial/rebuild-history',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${session?.access_token??''}`},body:JSON.stringify({rows:payload,losses,drops,sourceFile:file.name})})
       const result=await response.json()
       if(!response.ok)throw new Error(result.error??'Não foi possível substituir a base histórica.')
       setSelected('')
       await refresh()
       setSelected(result.lastViewId)
-      setMessage(`Histórico substituído: ${result.views} Views e ${result.rows} linhas de Fechamento importadas.`)
+      setMessage(`Base substituída: ${result.views} Views, ${result.rows} linhas de Fechamento e ${result.losses??0} extravios importados.`)
     }catch(error){setMessage(error instanceof Error?error.message:'Não foi possível importar o histórico.')}finally{setBusy(false);event.target.value=''}
   }
   const importView=async(sourceClosing=closing,sourceLosses=losses,sourceTitle=title,sourceFileName=sourceFile)=>{
@@ -175,7 +186,7 @@ export default function Financeiro(){
   }
   return <section className="finance-page">
     <section className="card finance-upload"><div><p className="eyebrow">FECHAMENTOS</p><h2>Novo fechamento quinzenal</h2><p>1. Informe o período. 2. Anexe a planilha. O sistema cria a View, registra o histórico e atualiza a base geral.</p></div><label className="finance-period">Período do fechamento<input value={uploadPeriod} onChange={event=>setUploadPeriod(event.target.value)} placeholder="Ex.: 33. 1Q DE AGOSTO" disabled={busy}/></label><a className="secondary" href="/templates/modelo-fechamento-financeiro.xlsx" download>Baixar modelo</a><label className={`upload-button ${!uploadPeriod.trim()||busy?'disabled':''}`}>Anexar planilha<input type="file" accept=".xlsx" onChange={choose} disabled={!uploadPeriod.trim()||busy}/></label></section>
-    <section className="card finance-history"><div><p className="eyebrow">BASE HISTÓRICA</p><h2>Substituir histórico financeiro</h2><p>Use apenas para reiniciar a base com o Pasta1.xlsx. Esta ação remove todas as Views, fechamentos e extravios atuais.</p></div><label className={`history-upload ${busy?'disabled':''}`}>Importar Pasta1.xlsx<input type="file" accept=".xlsx" onChange={chooseHistory} disabled={busy}/></label></section>
+    <section className="card finance-history"><div><p className="eyebrow">BASE HISTÓRICA</p><h2>Substituir base financeira</h2><p>Importe o Controle Financeiro completo. A ação atualiza Cadastros, recria as Views, os Fechamentos e os Extravios.</p></div><label className={`history-upload ${busy?'disabled':''}`}>Importar base completa<input type="file" accept=".xlsx" onChange={chooseHistory} disabled={busy}/></label></section>
     {message&&<p className="form-message">{message}</p>}
     <section className="finance-summary"><article className="metric"><span>Views salvas</span><strong>{views.length}</strong></article><article className="metric"><span>Itens na base geral</span><strong>{general.items}</strong></article><article className="metric"><span>Pacotes na base geral</span><strong>{general.packages.toLocaleString('pt-BR')}</strong></article><article className="metric red"><span>Extravios na base geral</span><strong>{general.losses} · R$ {general.lossAmount.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></article></section>
     <section className="card"><div className="finance-head"><div><p className="eyebrow">VIEWS SALVAS</p><h2>Consultar fechamento</h2></div><button className="secondary" onClick={()=>void refresh()}>Atualizar</button></div><select className="view-select" value={selected} onChange={event=>setSelected(event.target.value)}><option value="">Selecione uma View</option>{views.map(view=><option key={view.id} value={view.id}>{view.title} · {new Date(view.created_at).toLocaleString('pt-BR')}</option>)}</select></section>
