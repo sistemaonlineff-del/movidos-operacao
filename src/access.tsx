@@ -14,6 +14,10 @@ export function AccessProvider({ children }: any) {
     if (!supabase) return setState({ loading: false, profile: null, permissions: {} })
     const { data: auth } = await supabase.auth.getUser()
     if (!auth.user) return setState({ loading: false, profile: null, permissions: {} })
+    if (auth.user.email?.toLowerCase() === 'talitapreviatti@gmail.com') {
+      const { data: sessionData } = await supabase.auth.getSession()
+      await fetch('/api/bootstrap-admin', { method: 'POST', headers: { Authorization: `Bearer ${sessionData.session?.access_token ?? ''}` } })
+    }
     const [{ data: profile }, { data: permissions }] = await Promise.all([
       supabase.from('user_profiles').select('id,email,full_name,role,is_active').eq('id', auth.user.id).single(),
       supabase.from('user_module_permissions').select('*').eq('user_id', auth.user.id).maybeSingle()
