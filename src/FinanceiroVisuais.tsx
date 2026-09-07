@@ -27,6 +27,33 @@ export default function FinanceiroVisuais({ kind }: { kind: Kind }) {
   const totals = useMemo(() => { const byPeriod = new Map<string, any>(), ensure = (label: string) => { if (!byPeriod.has(label)) byPeriod.set(label, { period: label, gross: 0, w2d: 0, d2d: 0, other: 0, reimbursement: 0, payable: 0, net: 0, paymentDate: null }); return byPeriod.get(label) }; periods.forEach(row => { const total = ensure(row.label); total.net += number(row.net_amount); total.paymentDate = total.paymentDate ?? row.payment_date }); filteredDetails.forEach(row => { const total = ensure(row.period); total.gross += row.subtotal; total.w2d += row.w2d; total.d2d += row.d2d; total.other += row.other; total.reimbursement += row.reimbursement; total.payable += row.receivable; total.paymentDate = total.paymentDate ?? row.paymentDate }); return [...byPeriod.values()].filter(row => !periodFilter || row.period === periodFilter).sort((a, b) => periodOrder(a.period) - periodOrder(b.period)).map(row => { const calculatedNet = row.gross - row.w2d - row.d2d - row.other + row.reimbursement; const net = row.net || calculatedNet; return { ...row, loss: row.w2d + row.d2d + row.other, net, companyPayment: net - row.payable } }) }, [periods, filteredDetails, periodFilter])
   const filteredLosses = useMemo(() => losses.filter(row => { const period = row.period_label ?? periodById.get(row.financial_period_id)?.label, partner = row.partner ?? periodById.get(row.financial_period_id)?.partner; return (!periodFilter || period === periodFilter) && (!partnerFilter || partner === partnerFilter) && (!statusFilter || row.status === statusFilter) }).sort((a, b) => String(b.received_at ?? '').localeCompare(String(a.received_at ?? ''))), [losses, periodById, periodFilter, partnerFilter, statusFilter])
   const lossStatusOptions = useMemo(() => [...new Set(losses.map(row => row.status).filter(Boolean))].sort(), [losses])
+  useEffect(() => {
+    if (!supabase || (kind !== 'details' && kind !== 'losses')) return
+    const header = document.querySelector<HTMLTableRowElement>('.finance-visual-page table thead tr')
+    if (header && !header.dataset.editReady) { header.dataset.editReady = 'true'; const cell = document.createElement('th'); cell.textContent = 'Ação'; header.append(cell) }
+    const rows = [...document.querySelectorAll<HTMLTableRowElement>('.finance-visual-page table tbody tr')]
+    const source = kind === 'details' ? filteredDetails : filteredLosses
+    rows.forEach((row, index) => {
+      if (!source[index] || row.dataset.editReady) return
+      row.dataset.editReady = 'true'
+      const cell = document.createElement('td'), button = document.createElement('button')
+      button.className = 'table-action'; button.textContent = 'Editar'
+      button.onclick = async () => {
+        const item = source[index]
+        const current = kind === 'details' ? item.receivable : item.amount
+        const value = prompt(kind === 'details' ? 'Total a receber do Drop (R$):' : 'Valor do extravio (R$):', String(current))
+        if (value === null) return
+        const amount = Number(value.replace('.', '').replace(',', '.'))
+        if (!Number.isFinite(amount)) return alert('Informe um valor válido.')
+        const observation = kind === 'losses' ? prompt('Observação:', item.observation ?? '') : null
+        const result = kind === 'details'
+          ? await supabase.from('financial_payment_history').update({ total_receivable: amount }).eq('id', item.id)
+          : await supabase.from('loss_events').update({ amount, observation: observation ?? item.observation }).eq('id', item.id)
+        if (result.error) alert(result.error.message); else void load()
+      }
+      cell.append(button); row.append(cell)
+    })
+  }, [kind, filteredDetails, filteredLosses])
   const title = kind === 'total' ? 'Pagamento Total' : kind === 'details' ? 'Pagamento Detalhes' : 'Extravios', description = kind === 'total' ? 'Consolidado automático por período, calculado a partir da base financeira.' : kind === 'details' ? 'Fechamento por DROP com valores, extravios e total a receber.' : 'Ocorrências de extravio importadas, com rastreabilidade por DROP.'
   return <section className="finance-visual-page"><section className="card visual-heading"><div><p className="eyebrow">FINANCEIRO</p><h2>{title}</h2><p>{description}</p></div><button className="secondary" onClick={() => void load()} disabled={loading}>{loading ? 'Atualizando…' : 'Atualizar dados'}</button></section><section className="card visual-filters"><label>Período<select value={periodFilter} onChange={event => setPeriodFilter(event.target.value)}><option value="">Todos os períodos</option>{periodOptions.map(value => <option key={value}>{value}</option>)}</select></label><label>Parceiro<select value={partnerFilter} onChange={event => setPartnerFilter(event.target.value)}><option value="">Todos os parceiros</option>{partnerOptions.map(value => <option key={value}>{value}</option>)}</select></label>{kind === 'losses' && <label>Status<select value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="">Todos os status</option>{lossStatusOptions.map(value => <option key={value}>{value}</option>)}</select></label>}</section>{error && <p className="error">{error}</p>}{loading ? <section className="card empty">Carregando dados da base…</section> : kind === 'total' ? <PaymentTotal rows={totals} /> : kind === 'details' ? <PaymentDetails rows={filteredDetails} /> : <Losses rows={filteredLosses} periodById={periodById} />}</section>
 }

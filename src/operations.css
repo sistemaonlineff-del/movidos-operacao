@@ -51,4 +51,5 @@
 .loss-value { color: #b54438; font-weight: 800; }
 .positive-value { color: #087e7c; font-weight: 800; }
 .table-subtitle { display: block; margin-top: .2rem; color: #738287; font-weight: 600; }
+.danger-action { display: none; }
 @media (max-width: 640px) { .map-heading { align-items: flex-start; flex-direction: column; } .drops-map { height: 390px; } .map-controls { align-items: stretch; } .map-controls label { width: 100%; } }
