@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 type HistoryRow = { period: string; drop: string; partner: string; quantity: number; agreed: number; subtotal: number; lossAmount: number; reimbursement: number; receivable: number; paymentDate: string | null; pixKey: string }
 type LossRow = { period: string; drop: string; waybill: string; labelCode: string; bagCode: string; status: string; seller: string; receivedAt: string | null; amount: number; observation: string }
 type DropRow = { name: string; partner: string; agreed: number; pixKey: string; email: string }
+type SummaryRow = { period:string; observation:string; gross:number; w2d:number; d2d:number; loss:number; reimbursement:number; invoice:number; paidDrops:number; deducted:number; assumed:number; talitaJorge:number; paymentDate:string|null }
 const text = (value: unknown) => String(value ?? '').trim()
 const number = (value: unknown) => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0
@@ -45,6 +46,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     name: text(row.name), partner: text(row.partner), agreed: number(row.agreed), pixKey: text(row.pixKey), email: text(row.email),
   })).filter(row => row.name)
   const sourceFile = text(req.body?.sourceFile) || 'Pasta1.xlsx'
+  const summaries:SummaryRow[]=(Array.isArray(req.body?.summaries)?req.body.summaries:[]).map((row:any)=>({period:text(row.period),observation:text(row.observation),gross:number(row.gross),w2d:number(row.w2d),d2d:number(row.d2d),loss:number(row.loss),reimbursement:number(row.reimbursement),invoice:number(row.invoice),paidDrops:number(row.paidDrops),deducted:number(row.deducted),assumed:number(row.assumed),talitaJorge:number(row.talitaJorge),paymentDate:text(row.paymentDate)||null})).filter(row=>row.period)
+  const summaryByPeriod=new Map(summaries.map(row=>[row.period,row]))
 
   try {
     await admin.from('loss_events').delete().not('id', 'is', null)
@@ -83,7 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const periodLosses = losses.filter(row => row.period === label)
       const { data: view, error: viewError } = await admin.from('financial_views').insert({
         title: label, source_file_name: sourceFile, source_rows: periodRows.length + periodLosses.length,
-        import_status: 'rascunho', notes: `Histórico geral importado do ${sourceFile}`,
+        import_status: 'rascunho', notes: JSON.stringify({ sourceFile, summary: summaryByPeriod.get(label) ?? null }),
       }).select().single()
       if (viewError || !view) throw viewError ?? new Error('Não foi possível criar a View histórica.')
       lastViewId = view.id
@@ -117,6 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }))
         if (error) throw error
       }
+      if(periodLosses.length){const {count,error}=await admin.from('loss_events').select('id',{count:'exact',head:true}).eq('period_label',label);if(error||!count)throw error??new Error(`Extravios do período ${label} não foram gravados.`)}
       const { error: completeError } = await admin.from('financial_views').update({ import_status: 'importado' }).eq('id', view.id)
       if (completeError) throw completeError
     }
