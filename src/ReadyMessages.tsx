@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { supabase } from './lib/supabase'
 
-const messages = [
-  { title: 'Mensagem inicial', text: `Quer aumentar o fluxo de clientes da sua loja e ainda ter uma renda extra? Torne-se um ponto de coleta para grandes transportadoras e você vai conseguir isto.
+const defaultMessages = [
+  { key: 'ready-message-initial', title: 'Mensagem inicial', text: `Quer aumentar o fluxo de clientes da sua loja e ainda ter uma renda extra? Torne-se um ponto de coleta para grandes transportadoras e você vai conseguir isto.
 
 Estou entrando em contato para procurar um parceiro para ser ponto de coleta, pois na sua região está com uma alta demanda e precisamos encontrar um lojista parceiro.
 
@@ -10,7 +11,7 @@ Os Sellers vão deixar os pacotes em sua loja durante o dia, você irá bipar os
 
 Caso tenha interesse em ser ponto de coleta parceiro, peço que me dê um retorno.
 Estarei disponível para dúvidas!` },
-  { title: 'Regras para abertura', text: `Requisitos:
+  { key: 'ready-message-rules', title: 'Regras para abertura', text: `Requisitos:
 * Sempre ter um maior de 18 anos no local
 * Necessário ser térreo
 * Possuir computador, impressora e bipe/leitor de código de barras
@@ -26,14 +27,14 @@ Estarei disponível para dúvidas!` },
 8. Após a assinatura, enviaremos seus dados para a transportadora aprovar ou não a abertura do ponto de coleta.
 9. Os insumos (sacas e lacres) serão enviados por nós. Também daremos o treinamento e todo o suporte necessário para você operar como ponto de coleta.
 10. Quando quiser sair, avise com antecedência de 30 dias, pois eles precisam fazer os trâmites internos para encerrar o ponto e normalmente liberam antes dos 30 dias.` },
-  { title: 'Ponto recusado / negativa', text: `Olá, boa tarde!
+  { key: 'ready-message-refused', title: 'Ponto recusado / negativa', text: `Olá, boa tarde!
 
 A iMile não aprovou o ponto de coleta neste momento devido a critérios logísticos e de malha regional deles.
 
 Precisamos aguardar a aprovação ou o surgimento de novas rotas na sua área para tentarmos novamente. Mas não se preocupe, estaremos monitorando e, quando liberarem, entraremos em contato prioritariamente.
 
 Sucesso em seus negócios e obrigado pela compreensão!` },
-  { title: 'Dados necessários', text: `Caso queira prosseguir, basta enviar as seguintes informações:
+  { key: 'ready-message-data', title: 'Dados necessários', text: `Caso queira prosseguir, basta enviar as seguintes informações:
 
 CNPJ:
 Endereço com bairro e cidade/Estado:
@@ -62,19 +63,47 @@ Enviar:
 export default function ReadyMessages() {
   const [copied, setCopied] = useState('')
   const [draft, setDraft] = useState('')
+  const [messages, setMessages] = useState(defaultMessages)
+  const [editing, setEditing] = useState('')
+  const [editText, setEditText] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState('')
+  useEffect(() => {
+    if (!supabase) return
+    supabase.from('email_templates').select('key,subject,body').in('key', defaultMessages.map(message => message.key)).then(({ data }) => {
+      if (!data?.length) return
+      setMessages(defaultMessages.map(message => {
+        const saved = data.find(row => row.key === message.key)
+        return saved ? { ...message, title: saved.subject || message.title, text: saved.body || message.text } : message
+      }))
+    })
+  }, [])
   const copy = async (title: string, text: string) => {
     await navigator.clipboard.writeText(text)
     setCopied(title)
     setTimeout(() => setCopied(value => value === title ? '' : value), 1800)
+  }
+  const startEditing = (key: string, text: string) => { setEditing(key); setEditText(text); setNotice('') }
+  const save = async () => {
+    const current = messages.find(message => message.key === editing)
+    if (!supabase || !current || !editText.trim()) return
+    setSaving(true); setNotice('')
+    const { data: auth } = await supabase.auth.getUser()
+    const { error } = await supabase.from('email_templates').upsert({ key: current.key, subject: current.title, body: editText.trim(), updated_by: auth.user?.id ?? null })
+    setSaving(false)
+    if (error) { setNotice(error.message); return }
+    setMessages(items => items.map(message => message.key === current.key ? { ...message, text: editText.trim() } : message))
+    setEditing(''); setEditText(''); setNotice('Mensagem atualizada com sucesso.')
   }
   return <section className="ready-messages">
     <section className="card visual-heading"><div><p className="eyebrow">ATENDIMENTO</p><h2>Mensagens prontas</h2><p>Textos do cadastro-base antigo, prontos para copiar e enviar.</p></div></section>
     <div className="ready-message-grid"><article className="card ready-message ready-message-draft">
       <div className="ready-message-heading"><h3>Rascunho</h3><button className="secondary" disabled={!draft.trim()} onClick={() => void copy('Rascunho', draft)}>{copied === 'Rascunho' ? 'Copiado!' : 'Copiar rascunho'}</button></div>
       <textarea value={draft} onChange={event => setDraft(event.target.value)} placeholder="Escreva aqui uma mensagem livre…" aria-label="Rascunho de mensagem" />
-    </article>{messages.map(message => <article className="card ready-message" key={message.title}>
-      <div className="ready-message-heading"><h3>{message.title}</h3><button className="secondary" onClick={() => void copy(message.title, message.text)}>{copied === message.title ? 'Copiado!' : 'Copiar mensagem'}</button></div>
-      <pre>{message.text}</pre>
+    </article>{messages.map(message => <article className="card ready-message" key={message.key}>
+      <div className="ready-message-heading"><h3>{message.title}</h3><div className="ready-message-actions"><button className="secondary" onClick={() => startEditing(message.key, message.text)}>Editar</button><button className="secondary" onClick={() => void copy(message.title, message.text)}>{copied === message.title ? 'Copiado!' : 'Copiar mensagem'}</button></div></div>
+      {editing === message.key ? <div className="ready-message-edit"><textarea value={editText} onChange={event => setEditText(event.target.value)} aria-label={`Editar ${message.title}`} /><div><button type="button" onClick={() => { setEditing(''); setEditText('') }}>Cancelar</button><button type="button" className="primary compact" disabled={saving || !editText.trim()} onClick={() => void save()}>{saving ? 'Salvando…' : 'Salvar mensagem'}</button></div></div> : <pre>{message.text}</pre>}
     </article>)}</div>
+    {notice && <p className="form-message" role="status">{notice}</p>}
   </section>
 }

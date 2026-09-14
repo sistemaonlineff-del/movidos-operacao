@@ -12,5 +12,6 @@ import './operations.css'
 import './financial.css'
 import './legacy-features.css'
 import './documents.css'
+import './ready-messages-edit.css'
 
 createRoot(document.getElementById('root')!).render(<StrictMode><BrowserRouter><App /></BrowserRouter></StrictMode>)
