@@ -1,62 +1,1034 @@
-// @ts-nocheck
-import { useEffect, useMemo, useState } from 'react'
-import { supabase } from './lib/supabase'
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { supabase } from "./lib/supabase";
+import {
+  buildDetails,
+  buildTotals,
+  DataRow,
+  date,
+  key,
+  money,
+  notes,
+  number,
+  periodOrder,
+  round,
+  text,
+} from "./financialData";
+import { readFinancialRows as allRows } from "./financialStore";
+import CnabUpload from "./CnabUpload";
+import ClosingEmails from "./ClosingEmails";
 
-type Kind = 'total' | 'details' | 'losses'
-const money = (value: unknown) => Number(value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-const number = (value: unknown) => Number(value ?? 0) || 0
-const key = (value: unknown) => String(value ?? '').trim().toLocaleUpperCase('pt-BR')
-const periodOrder = (label: string) => Number(String(label).match(/^\s*(\d+)/)?.[1] ?? 0)
-const lossType = (status: unknown) => { const value = key(status); return value.includes('W2D') ? 'w2d' : value.includes('D2D') ? 'd2d' : 'other' }
-const date = (value: unknown) => { if (!value) return '—'; const text = String(value); const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text}T12:00:00` : text); return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleDateString('pt-BR') }
-async function allRows(table: string, columns = '*') { if (!supabase) return []; const rows: any[] = []; for (let from = 0; ; from += 1000) { const { data, error } = await supabase.from(table).select(columns).range(from, from + 999); if (error) throw error; rows.push(...(data ?? [])); if ((data ?? []).length < 1000) return rows } }
+type Kind = "total" | "details" | "losses" | "cnab";
+const options = (values: unknown[]) =>
+  [...new Set(values.map(text).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, "pt-BR", { numeric: true }),
+  );
+const sum = (rows: DataRow[], field: string) =>
+  round(rows.reduce((total, row) => total + number(row[field]), 0));
+const totalColumns = [
+  ["gross", "Valor bruto a receber"],
+  ["w2d", "Subtotal extravio W2D"],
+  ["d2d", "Subtotal extravio D2D"],
+  ["loss", "Total de extravios"],
+  ["reimbursement", "Reembolso erro iMile"],
+  ["net", "Total líquido a receber"],
+  ["payable", "Valor total que será pago para os DROPs"],
+  ["deducted", "Extravio efetivamente descontado dos DROPs"],
+  ["assumed", "Prejuízo que eu assumi e não descontei dos DROPs"],
+  ["companyPayment", "Pagamento para Talita e Jorge"],
+];
+const detailFields = [
+  ["period", "Período", "text"],
+  ["drop", "DROP", "text"],
+  ["partner", "Parceiro", "text"],
+  ["packageType", "Tipo pacote", "text"],
+  ["packages", "Total pacote", "number"],
+  ["unit", "Valor acordado", "number"],
+  ["subtotal", "Subtotal", "number"],
+  ["w2d", "Extravio W2D", "number"],
+  ["d2d", "Extravio D2D", "number"],
+  ["loss", "Total extravio", "number"],
+  ["reimbursement", "Reembolso iMile", "number"],
+  ["receivable", "Total a receber", "number"],
+  ["paymentDate", "Data pagamento", "date"],
+  ["pix", "PIX", "text"],
+];
+const cnabFields = [
+  ["drop", "DROP", "text"],
+  ["responsible", "RESPONSÁVEL", "text"],
+  ["receivable", "TOTAL DROP", "number"],
+  ["pix", "PIX", "text"],
+  ["paymentDate", "DATA PAGAMENTO", "date"],
+  ["document", "CPF/CNPJ", "text"],
+];
 
 export default function FinanceiroVisuais({ kind }: { kind: Kind }) {
-  const [periods, setPeriods] = useState<any[]>([]), [history, setHistory] = useState<any[]>([]), [items, setItems] = useState<any[]>([]), [losses, setLosses] = useState<any[]>([])
-  const [loading, setLoading] = useState(true), [error, setError] = useState(''), [periodFilter, setPeriodFilter] = useState(''), [partnerFilter, setPartnerFilter] = useState(''), [statusFilter, setStatusFilter] = useState('')
-  const load = async () => { setLoading(true); setError(''); try { const [periodRows, historyRows, itemRows, lossRows] = await Promise.all([allRows('financial_periods', 'id,label,partner,payment_date,net_amount,status'), allRows('financial_payment_history'), allRows('financial_drop_items', 'id,financial_period_id,drop_name_snapshot,quantity_packages,unit_value,reimbursement'), allRows('loss_events')]); setPeriods(periodRows); setHistory(historyRows); setItems(itemRows); setLosses(lossRows) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Não foi possível carregar os dados financeiros.') } finally { setLoading(false) } }
-  useEffect(() => { void load() }, [])
-  const periodById = useMemo(() => new Map(periods.map(row => [row.id, row])), [periods])
-  const lossByDetail = useMemo(() => { const result = new Map<string, any>(); losses.forEach(loss => { const identity = `${loss.financial_period_id ?? key(loss.period_label)}|${key(loss.drop_name_snapshot)}`, current = result.get(identity) ?? { w2d: 0, d2d: 0, other: 0 }; current[lossType(loss.status)] += number(loss.amount); result.set(identity, current) }); return result }, [losses])
-  const details = useMemo(() => {
-    const source = history.length ? history.map(row => { const period = periodById.get(row.financial_period_id), split = lossByDetail.get(`${row.financial_period_id ?? key(row.period_label)}|${key(row.drop_name_snapshot)}`) ?? { w2d: 0, d2d: 0, other: 0 }, totalLoss = number(row.loss_amount); return { id: row.id, period: row.period_label ?? period?.label ?? 'Sem período', partner: row.partner ?? period?.partner ?? '—', drop: row.drop_name_snapshot ?? '—', responsible: row.responsible, packages: number(row.package_quantity), unit: number(row.amount), subtotal: number(row.subtotal), w2d: split.w2d, d2d: split.d2d, other: Math.max(0, totalLoss - split.w2d - split.d2d), loss: totalLoss, reimbursement: number(row.reimbursement), receivable: number(row.total_receivable), paymentDate: row.paid_at ?? period?.payment_date, pix: row.pix_key } }) : items.map(row => { const period = periodById.get(row.financial_period_id), split = lossByDetail.get(`${row.financial_period_id}|${key(row.drop_name_snapshot)}`) ?? { w2d: 0, d2d: 0, other: 0 }, subtotal = number(row.quantity_packages) * number(row.unit_value), loss = split.w2d + split.d2d + split.other; return { id: row.id, period: period?.label ?? 'Sem período', partner: period?.partner ?? '—', drop: row.drop_name_snapshot, packages: number(row.quantity_packages), unit: number(row.unit_value), subtotal, ...split, loss, reimbursement: number(row.reimbursement), receivable: subtotal - loss + number(row.reimbursement), paymentDate: period?.payment_date } }); return source.sort((a, b) => periodOrder(a.period) - periodOrder(b.period) || a.partner.localeCompare(b.partner) || a.drop.localeCompare(b.drop))
-  }, [history, items, periodById, lossByDetail])
-  const periodOptions = useMemo(() => [...new Set([...periods.map(row => row.label), ...details.map(row => row.period)])].filter(Boolean).sort((a, b) => periodOrder(a) - periodOrder(b)), [periods, details])
-  const partnerOptions = useMemo(() => [...new Set(details.map(row => row.partner).filter(Boolean))].sort(), [details])
-  const filteredDetails = useMemo(() => details.filter(row => (!periodFilter || row.period === periodFilter) && (!partnerFilter || row.partner === partnerFilter)), [details, periodFilter, partnerFilter])
-  const totals = useMemo(() => { const byPeriod = new Map<string, any>(), ensure = (label: string) => { if (!byPeriod.has(label)) byPeriod.set(label, { period: label, gross: 0, w2d: 0, d2d: 0, other: 0, reimbursement: 0, payable: 0, net: 0, paymentDate: null }); return byPeriod.get(label) }; periods.forEach(row => { const total = ensure(row.label); total.net += number(row.net_amount); total.paymentDate = total.paymentDate ?? row.payment_date }); filteredDetails.forEach(row => { const total = ensure(row.period); total.gross += row.subtotal; total.w2d += row.w2d; total.d2d += row.d2d; total.other += row.other; total.reimbursement += row.reimbursement; total.payable += row.receivable; total.paymentDate = total.paymentDate ?? row.paymentDate }); return [...byPeriod.values()].filter(row => !periodFilter || row.period === periodFilter).sort((a, b) => periodOrder(a.period) - periodOrder(b.period)).map(row => { const calculatedNet = row.gross - row.w2d - row.d2d - row.other + row.reimbursement; const net = row.net || calculatedNet; return { ...row, loss: row.w2d + row.d2d + row.other, net, companyPayment: net - row.payable } }) }, [periods, filteredDetails, periodFilter])
-  const filteredLosses = useMemo(() => losses.filter(row => { const period = row.period_label ?? periodById.get(row.financial_period_id)?.label, partner = row.partner ?? periodById.get(row.financial_period_id)?.partner; return (!periodFilter || period === periodFilter) && (!partnerFilter || partner === partnerFilter) && (!statusFilter || row.status === statusFilter) }).sort((a, b) => String(b.received_at ?? '').localeCompare(String(a.received_at ?? ''))), [losses, periodById, periodFilter, partnerFilter, statusFilter])
-  const lossStatusOptions = useMemo(() => [...new Set(losses.map(row => row.status).filter(Boolean))].sort(), [losses])
-  useEffect(() => {
-    if (!supabase || (kind !== 'details' && kind !== 'losses')) return
-    const header = document.querySelector<HTMLTableRowElement>('.finance-visual-page table thead tr')
-    if (header && !header.dataset.editReady) { header.dataset.editReady = 'true'; const cell = document.createElement('th'); cell.textContent = 'Ação'; header.append(cell) }
-    const rows = [...document.querySelectorAll<HTMLTableRowElement>('.finance-visual-page table tbody tr')]
-    const source = kind === 'details' ? filteredDetails : filteredLosses
-    rows.forEach((row, index) => {
-      if (!source[index] || row.dataset.editReady) return
-      row.dataset.editReady = 'true'
-      const cell = document.createElement('td'), button = document.createElement('button')
-      button.className = 'table-action'; button.textContent = 'Editar'
-      button.onclick = async () => {
-        const item = source[index]
-        const current = kind === 'details' ? item.receivable : item.amount
-        const value = prompt(kind === 'details' ? 'Total a receber do Drop (R$):' : 'Valor do extravio (R$):', String(current))
-        if (value === null) return
-        const amount = Number(value.replace('.', '').replace(',', '.'))
-        if (!Number.isFinite(amount)) return alert('Informe um valor válido.')
-        const observation = kind === 'losses' ? prompt('Observação:', item.observation ?? '') : null
-        const result = kind === 'details'
-          ? await supabase.from('financial_payment_history').update({ total_receivable: amount }).eq('id', item.id)
-          : await supabase.from('loss_events').update({ amount, observation: observation ?? item.observation }).eq('id', item.id)
-        if (result.error) alert(result.error.message); else void load()
-      }
-      cell.append(button); row.append(cell)
-    })
-  }, [kind, filteredDetails, filteredLosses])
-  const title = kind === 'total' ? 'Pagamento Total' : kind === 'details' ? 'Pagamento Detalhes' : 'Extravios', description = kind === 'total' ? 'Consolidado automático por período, calculado a partir da base financeira.' : kind === 'details' ? 'Fechamento por DROP com valores, extravios e total a receber.' : 'Ocorrências de extravio importadas, com rastreabilidade por DROP.'
-  return <section className="finance-visual-page"><section className="card visual-heading"><div><p className="eyebrow">FINANCEIRO</p><h2>{title}</h2><p>{description}</p></div><button className="secondary" onClick={() => void load()} disabled={loading}>{loading ? 'Atualizando…' : 'Atualizar dados'}</button></section><section className="card visual-filters"><label>Período<select value={periodFilter} onChange={event => setPeriodFilter(event.target.value)}><option value="">Todos os períodos</option>{periodOptions.map(value => <option key={value}>{value}</option>)}</select></label><label>Parceiro<select value={partnerFilter} onChange={event => setPartnerFilter(event.target.value)}><option value="">Todos os parceiros</option>{partnerOptions.map(value => <option key={value}>{value}</option>)}</select></label>{kind === 'losses' && <label>Status<select value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="">Todos os status</option>{lossStatusOptions.map(value => <option key={value}>{value}</option>)}</select></label>}</section>{error && <p className="error">{error}</p>}{loading ? <section className="card empty">Carregando dados da base…</section> : kind === 'total' ? <PaymentTotal rows={totals} /> : kind === 'details' ? <PaymentDetails rows={filteredDetails} /> : <Losses rows={filteredLosses} periodById={periodById} />}</section>
+  return kind === "cnab" ? (
+    <CnabUpload />
+  ) : (
+    <FinanceiroVisualPage kind={kind} />
+  );
 }
-function PaymentTotal({ rows }: any) { return <section className="card"><div className="table-wrap"><table><thead><tr><th>Período</th><th>Valor bruto a receber</th><th>Extravio W2D</th><th>Extravio D2D</th><th>Total de extravios</th><th>Reembolso iMile</th><th>Total líquido a receber</th><th>Pagamento aos DROPs</th><th>Pagamento empresa</th><th>Data do pagamento</th></tr></thead><tbody>{rows.map((row: any) => <tr key={row.period}><td><strong>{row.period}</strong></td><td>{money(row.gross)}</td><td>{money(row.w2d)}</td><td>{money(row.d2d)}</td><td className="loss-value">{money(row.loss)}</td><td>{money(row.reimbursement)}</td><td><strong>{money(row.net)}</strong></td><td>{money(row.payable)}</td><td className={row.companyPayment < 0 ? 'loss-value' : 'positive-value'}>{money(row.companyPayment)}</td><td>{date(row.paymentDate)}</td></tr>)}{!rows.length && <tr><td colSpan={10} className="empty">Nenhum pagamento encontrado para os filtros selecionados.</td></tr>}</tbody></table></div></section> }
-function PaymentDetails({ rows }: any) { return <section className="card"><div className="table-wrap"><table><thead><tr><th>Período</th><th>DROP</th><th>Parceiro</th><th>Total pacote</th><th>Valor acordado</th><th>Subtotal</th><th>Extravio W2D</th><th>Extravio D2D</th><th>Total extravio</th><th>Reembolso</th><th>Total a receber</th><th>Data pagamento</th><th>PIX</th></tr></thead><tbody>{rows.map((row: any) => <tr key={row.id}><td>{row.period}</td><td><strong>{row.drop}</strong>{row.responsible && <small className="table-subtitle">{row.responsible}</small>}</td><td>{row.partner}</td><td>{row.packages.toLocaleString('pt-BR')}</td><td>{money(row.unit)}</td><td>{money(row.subtotal)}</td><td>{money(row.w2d)}</td><td>{money(row.d2d)}</td><td className="loss-value">{money(row.loss)}</td><td>{money(row.reimbursement)}</td><td className="positive-value">{money(row.receivable)}</td><td>{date(row.paymentDate)}</td><td>{row.pix ?? '—'}</td></tr>)}{!rows.length && <tr><td colSpan={13} className="empty">Nenhum DROP encontrado para os filtros selecionados.</td></tr>}</tbody></table></div></section> }
-function Losses({ rows, periodById }: any) { return <section className="card"><div className="table-wrap"><table><thead><tr><th>Período</th><th>Scan station / DROP</th><th>Waybill nº</th><th>Código da etiqueta</th><th>Saca</th><th>Status</th><th>Seller</th><th>Recebimento</th><th>Valor</th><th>Observações</th></tr></thead><tbody>{rows.map((row: any) => { const period = periodById.get(row.financial_period_id); return <tr key={row.id}><td>{row.period_label ?? period?.label ?? '—'}</td><td><strong>{row.drop_name_snapshot ?? '—'}</strong><small className="table-subtitle">{row.partner ?? period?.partner ?? ''}</small></td><td>{row.waybill ?? '—'}</td><td>{row.label_code ?? '—'}</td><td>{row.bag_code ?? '—'}</td><td><span className="pill">{row.status ?? '—'}</span></td><td>{row.seller ?? '—'}</td><td>{row.received_at ? new Date(row.received_at).toLocaleString('pt-BR') : '—'}</td><td className="loss-value">{money(row.amount)}</td><td>{row.observation ?? '—'}</td></tr> })}{!rows.length && <tr><td colSpan={10} className="empty">Nenhum extravio encontrado para os filtros selecionados.</td></tr>}</tbody></table></div></section> }
+
+function FinanceiroVisualPage({ kind }: { kind: Kind }) {
+  const [periods, setPeriods] = useState<DataRow[]>([]),
+    [views, setViews] = useState<DataRow[]>([]),
+    [history, setHistory] = useState<DataRow[]>([]),
+    [items, setItems] = useState<DataRow[]>([]),
+    [losses, setLosses] = useState<DataRow[]>([]),
+    [drops, setDrops] = useState<DataRow[]>([]);
+  const [loading, setLoading] = useState(true),
+    [error, setError] = useState(""),
+    [message, setMessage] = useState("");
+  const [periodFilter, setPeriodFilter] = useState(""),
+    [partnerFilter, setPartnerFilter] = useState(""),
+    [dropFilter, setDropFilter] = useState(""),
+    [statusFilter, setStatusFilter] = useState(""),
+    [observationFilter, setObservationFilter] = useState("");
+  const [editing, setEditing] = useState<DataRow | null>(null),
+    [editingLoss, setEditingLoss] = useState<DataRow | null>(null),
+    [saving, setSaving] = useState(false),
+    [editError, setEditError] = useState(""),
+    [generating, setGenerating] = useState(false),
+    [generatingCnab, setGeneratingCnab] = useState(false);
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [p, v, h, i, l, d] = await Promise.all(
+        [
+          "financial_periods",
+          "financial_views",
+          "financial_payment_history",
+          "financial_drop_items",
+          "loss_events",
+          "drops",
+        ].map(allRows),
+      );
+      setPeriods(p);
+      setViews(v);
+      setHistory(h);
+      setItems(i);
+      setLosses(l);
+      setDrops(d);
+    } catch (caught) {
+      setError(
+        text((caught as Error).message) ||
+          "Não foi possível carregar os dados financeiros.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+  useEffect(() => {
+    setEditing(null);
+    setEditingLoss(null);
+    setDropFilter("");
+    setStatusFilter("");
+    setObservationFilter("");
+  }, [kind]);
+  const periodById = useMemo(
+    () => new Map(periods.map((row) => [row.id, row])),
+    [periods],
+  );
+  const details = useMemo(
+    () => buildDetails(history, items, losses, periods, drops),
+    [history, items, losses, periods, drops],
+  );
+  const filteredDetails = useMemo(
+    () =>
+      details.filter(
+        (row) =>
+          (!periodFilter || row.period === periodFilter) &&
+          (!partnerFilter || row.partner === partnerFilter) &&
+          (!dropFilter || key(row.drop) === dropFilter),
+      ),
+    [details, periodFilter, partnerFilter, dropFilter],
+  );
+  const filteredLosses = useMemo(
+    () =>
+      losses
+        .filter((row) => {
+          const period = periodById.get(row.financial_period_id);
+          return (
+            (!periodFilter ||
+              (row.period_label ?? period?.label) === periodFilter) &&
+            (!partnerFilter ||
+              (row.partner ?? period?.partner) === partnerFilter) &&
+            (!dropFilter || key(row.drop_name_snapshot) === dropFilter) &&
+            (!statusFilter || row.status === statusFilter) &&
+            (!observationFilter ||
+              key(row.observation).includes(key(observationFilter)))
+          );
+        })
+        .sort((a, b) => text(b.received_at).localeCompare(text(a.received_at))),
+    [
+      losses,
+      periodById,
+      periodFilter,
+      partnerFilter,
+      dropFilter,
+      statusFilter,
+      observationFilter,
+    ],
+  );
+  const totals = useMemo(
+    () =>
+      buildTotals(details, losses, periods, views, periodFilter, partnerFilter),
+    [details, losses, periods, views, periodFilter, partnerFilter],
+  );
+  const periodOptions = options([
+    ...periods.map((row) => row.label),
+    ...details.map((row) => row.period),
+    ...losses.map((row) => row.period_label),
+  ]).sort((a, b) => periodOrder(a) - periodOrder(b));
+  const partnerOptions = options([
+    ...periods.map((row) => row.partner),
+    ...details.map((row) => row.partner),
+    ...losses.map((row) => row.partner),
+  ]);
+  const dropOptions = options([
+    ...details.map((row) => row.drop),
+    ...losses.map((row) => row.drop_name_snapshot),
+  ]).reduce(
+    (all, drop) => (all.has(key(drop)) ? all : all.set(key(drop), drop)),
+    new Map<string, string>(),
+  );
+  const report = async (rows: DataRow[]) => {
+    setGenerating(true);
+    setError("");
+    try {
+      await (
+        await import("./financialReport")
+      ).downloadClosingPdf(rows, losses, periods);
+      setMessage("Relatório de fechamento gerado.");
+    } catch (caught) {
+      setError(
+        (caught as Error).message || "Não foi possível gerar o relatório.",
+      );
+    } finally {
+      setGenerating(false);
+    }
+  };
+  const cnab = async () => {
+    setGeneratingCnab(true);
+    setError("");
+    setMessage("");
+    try {
+      if (!periodFilter || !partnerFilter)
+        throw new Error(
+          "Selecione um período e um parceiro antes de gerar o CNAB.",
+        );
+      const count = (await import("./cnabInter")).downloadCnabInter(
+        filteredDetails,
+      );
+      setMessage(`CNAB gerado com ${count} pagamento(s).`);
+    } catch (caught) {
+      setError((caught as Error).message || "Não foi possível gerar o CNAB.");
+    } finally {
+      setGeneratingCnab(false);
+    }
+  };
+  const saveDetail = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!editing || !supabase) return;
+    setSaving(true);
+    setEditError("");
+    try {
+      if (
+        ![editing.period, editing.partner, editing.drop].every((value) =>
+          text(value),
+        )
+      )
+        throw new Error("Informe período, parceiro e DROP.");
+      if (
+        !Number.isInteger(number(editing.packages)) ||
+        number(editing.packages) < 0
+      )
+        throw new Error(
+          "A quantidade de pacotes deve ser um inteiro positivo ou zero.",
+        );
+      const originalPeriod = periodById.get(editing.periodId);
+      let period = periods.find(
+        (row) =>
+          row.label === text(editing.period) &&
+          row.partner === text(editing.partner) &&
+          row.financial_view_id === originalPeriod?.financial_view_id,
+      );
+      if (!period) {
+        const result = await supabase
+          .from("financial_periods")
+          .insert({
+            label: text(editing.period),
+            partner: text(editing.partner),
+            financial_view_id: originalPeriod?.financial_view_id ?? null,
+            status: "aberto",
+          })
+          .select()
+          .single();
+        if (result.error) throw result.error;
+        period = result.data;
+      }
+      const previous = notes(editing.raw.observation);
+      const observation = JSON.stringify({
+        ...previous,
+        originalObservation:
+          previous.originalObservation ??
+          (Object.keys(previous).length ? undefined : editing.raw.observation),
+        movidosClosing: {
+          ...previous.movidosClosing,
+          sourceItemId: editing.sourceItemId,
+          packageType: text(editing.packageType),
+          w2d: number(editing.w2d),
+          d2d: number(editing.d2d),
+        },
+      });
+      const payload = {
+        financial_period_id: period!.id,
+        period_label: text(editing.period),
+        partner: text(editing.partner),
+        drop_name_snapshot: text(editing.drop),
+        responsible: text(editing.responsible) || null,
+        package_quantity: number(editing.packages),
+        amount: number(editing.unit),
+        subtotal: number(editing.subtotal),
+        loss_amount: number(editing.loss),
+        reimbursement: number(editing.reimbursement),
+        total_receivable: number(editing.receivable),
+        paid_at: editing.paymentDate
+          ? `${text(editing.paymentDate).slice(0, 10)}T12:00:00-03:00`
+          : null,
+        pix_key: text(editing.pix) || null,
+        observation,
+      };
+      const result =
+        editing.source === "history"
+          ? await supabase
+              .from("financial_payment_history")
+              .update(payload)
+              .eq("id", editing.id)
+              .select("id")
+              .single()
+          : await supabase
+              .from("financial_payment_history")
+              .insert(payload)
+              .select("id")
+              .single();
+      if (result.error) throw result.error;
+      setEditing(null);
+      setMessage("Fechamento atualizado.");
+      await load();
+    } catch (caught) {
+      setEditError(
+        (caught as Error).message || "Não foi possível salvar o fechamento.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+  const saveLoss = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!editingLoss || !supabase) return;
+    setSaving(true);
+    setEditError("");
+    try {
+      const { error } = await supabase
+        .from("loss_events")
+        .update({
+          amount: number(editingLoss.amount),
+          observation: editingLoss.observation || null,
+        })
+        .eq("id", editingLoss.id)
+        .select("id")
+        .single();
+      if (error) throw error;
+      setEditingLoss(null);
+      setMessage("Extravio atualizado.");
+      await load();
+    } catch (caught) {
+      setEditError(
+        (caught as Error).message || "Não foi possível salvar o extravio.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+  const changeDetail = (field: string, value: string) =>
+    setEditing((previous) => {
+      if (!previous) return previous;
+      const next = { ...previous, [field]: value };
+      if (field === "packages" || field === "unit")
+        next.subtotal = round(number(next.packages) * number(next.unit));
+      if (field === "w2d" || field === "d2d")
+        next.loss = round(
+          number(previous.loss) + number(value) - number(previous[field]),
+        );
+      if (
+        [
+          "packages",
+          "unit",
+          "subtotal",
+          "w2d",
+          "d2d",
+          "loss",
+          "reimbursement",
+        ].includes(field)
+      )
+        next.receivable = round(
+          number(next.subtotal) -
+            number(next.loss) +
+            number(next.reimbursement),
+        );
+      return next;
+    });
+  const title =
+    kind === "total"
+      ? "Pagamento Total"
+      : kind === "details"
+        ? "Pagamento Detalhes"
+        : kind === "cnab"
+          ? "Gerar CNAB"
+          : "Extravios";
+  return (
+    <section className="finance-visual-page">
+      <section className="card visual-heading">
+        <div>
+          <p className="eyebrow">FINANCEIRO</p>
+          <h2>{title}</h2>
+          <p>
+            {kind === "total"
+              ? "Consolidado por período e pagamento para Talita e Jorge."
+              : kind === "details"
+                ? "Fechamento por DROP com valores, extravios e total a receber."
+                : kind === "cnab"
+                  ? "Confira os pagamentos antes de gerar o arquivo. Selecione um período e um parceiro."
+                  : "Ocorrências de extravio e total dos filtros selecionados."}
+          </p>
+        </div>
+        <div className="financial-actions">
+          {kind === "details" && (
+            <button
+              className="secondary"
+              disabled={loading || generating || !filteredDetails.length}
+              onClick={() => void report(filteredDetails)}
+            >
+              {generating ? "Gerando PDF…" : "Gerar relatório de fechamento"}
+            </button>
+          )}
+          {kind === "cnab" && (
+            <button
+              className="secondary"
+              disabled={loading || generatingCnab || !filteredDetails.length}
+              onClick={() => void cnab()}
+            >
+              {generatingCnab ? "Gerando CNAB…" : "Gerar CNAB"}
+            </button>
+          )}
+          <button
+            className="secondary"
+            onClick={() => void load()}
+            disabled={loading}
+          >
+            {loading ? "Atualizando…" : "Atualizar dados"}
+          </button>
+        </div>
+      </section>
+      <section className="card visual-filters">
+        <Filter
+          label="Período"
+          value={periodFilter}
+          set={setPeriodFilter}
+          values={periodOptions}
+          all="Todos os períodos"
+        />
+        <Filter
+          label="Parceiro"
+          value={partnerFilter}
+          set={setPartnerFilter}
+          values={partnerOptions}
+          all="Todos os parceiros"
+        />
+        {kind !== "total" && (
+          <label>
+            DROP
+            <select
+              aria-label="DROP"
+              value={dropFilter}
+              onChange={(event) => setDropFilter(event.target.value)}
+            >
+              <option value="">Todos os drops</option>
+              {[...dropOptions].map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {kind === "losses" && (
+          <>
+            <Filter
+              label="Status"
+              value={statusFilter}
+              set={setStatusFilter}
+              values={options(losses.map((row) => row.status))}
+              all="Todos os status"
+            />
+            <label>
+              Observações
+              <input
+                value={observationFilter}
+                onChange={(event) => setObservationFilter(event.target.value)}
+                placeholder="Buscar nas observações"
+              />
+            </label>
+          </>
+        )}
+        {(periodFilter ||
+          partnerFilter ||
+          dropFilter ||
+          statusFilter ||
+          observationFilter) && (
+          <button
+            className="secondary"
+            onClick={() => {
+              setPeriodFilter("");
+              setPartnerFilter("");
+              setDropFilter("");
+              setStatusFilter("");
+              setObservationFilter("");
+            }}
+          >
+            Limpar filtros
+          </button>
+        )}
+      </section>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+      {message && (
+        <p role="status" className="form-message">
+          {message}
+        </p>
+      )}
+      {loading ? (
+        <section className="card empty">Carregando dados da base…</section>
+      ) : error && !periods.length ? null : kind === "total" ? (
+        <PaymentTotal rows={totals} />
+      ) : kind === "details" ? (
+        <PaymentDetails
+          rows={filteredDetails}
+          onEdit={(row) => {
+            setEditError("");
+            setEditing({
+              ...row,
+              paymentDate: text(row.paymentDate).slice(0, 10),
+            });
+          }}
+          onReport={(row) => void report([row])}
+          generating={generating}
+        />
+      ) : kind === "cnab" ? (
+        <CnabDetails rows={filteredDetails} />
+      ) : (
+        <Losses
+          rows={filteredLosses}
+          periodById={periodById}
+          onEdit={(row) => {
+            setEditError("");
+            setEditingLoss({ ...row });
+          }}
+        />
+      )}
+      {kind === "details" && (
+        <ClosingEmails
+          rows={filteredDetails}
+          losses={losses}
+          periods={periods}
+          period={periodFilter}
+          partner={partnerFilter}
+        />
+      )}
+      {editing && (
+        <Editor
+          title="Editar fechamento"
+          onClose={() => !saving && setEditing(null)}
+          onSubmit={saveDetail}
+          saving={saving}
+          error={editError}
+        >
+          <div className="form-grid">
+            {[...detailFields, ["responsible", "Responsável", "text"]].map(
+              ([field, label, type]) => (
+                <label key={field}>
+                  {label}
+                  <input
+                    autoFocus={field === "period"}
+                    required={
+                      ["period", "drop", "partner"].includes(field) ||
+                      type === "number"
+                    }
+                    type={type}
+                    step={field === "packages" ? "1" : "0.01"}
+                    min={field === "packages" ? 0 : undefined}
+                    value={editing[field] ?? ""}
+                    onChange={(event) =>
+                      changeDetail(field, event.target.value)
+                    }
+                  />
+                </label>
+              ),
+            )}
+          </div>
+          <p className="financial-hint">
+            Quantidade e valor acordado recalculam o subtotal. Extravios e
+            reembolso recalculam o total a receber. Você também pode ajustar os
+            totais manualmente.
+          </p>
+        </Editor>
+      )}
+      {editingLoss && (
+        <Editor
+          title="Editar extravio"
+          onClose={() => !saving && setEditingLoss(null)}
+          onSubmit={saveLoss}
+          saving={saving}
+          error={editError}
+        >
+          <div className="form-grid">
+            <label>
+              Valor do extravio
+              <input
+                autoFocus
+                type="number"
+                step="0.01"
+                required
+                value={editingLoss.amount}
+                onChange={(event) =>
+                  setEditingLoss({ ...editingLoss, amount: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              Observações
+              <textarea
+                value={editingLoss.observation ?? ""}
+                onChange={(event) =>
+                  setEditingLoss({
+                    ...editingLoss,
+                    observation: event.target.value,
+                  })
+                }
+              />
+            </label>
+          </div>
+        </Editor>
+      )}
+    </section>
+  );
+}
+function Filter({
+  label,
+  value,
+  set,
+  values,
+  all,
+}: {
+  label: string;
+  value: string;
+  set: (value: string) => void;
+  values: string[];
+  all: string;
+}) {
+  return (
+    <label>
+      {label}
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(event) => set(event.target.value)}
+      >
+        <option value="">{all}</option>
+        {values.map((option) => (
+          <option key={option}>{option}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+function Editor({
+  title,
+  children,
+  onClose,
+  onSubmit,
+  saving,
+  error,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+  onSubmit: (event: FormEvent) => void;
+  saving: boolean;
+  error: string;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="financial-editor"
+      aria-labelledby="financial-editor-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <form onSubmit={onSubmit}>
+        <div className="modal-title">
+          <h2 id="financial-editor-title">{title}</h2>
+          <button
+            type="button"
+            disabled={saving}
+            aria-label="Fechar edição"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <fieldset disabled={saving}>{children}</fieldset>
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
+        <div className="modal-actions">
+          <button type="button" disabled={saving} onClick={onClose}>
+            Cancelar
+          </button>
+          <button className="primary compact" disabled={saving}>
+            {saving ? "Salvando…" : "Salvar alterações"}
+          </button>
+        </div>
+      </form>
+    </dialog>
+  );
+}
+function PaymentTotal({ rows }: { rows: DataRow[] }) {
+  return (
+    <section className="card">
+      {rows.some((row) => row.estimated) && (
+        <p className="financial-hint">
+          Períodos sem valor de nota importado usam a estimativa de R$ 0,25 por
+          pacote, descontados os extravios. O filtro por parceiro mostra apenas
+          sua parcela estimada.
+        </p>
+      )}
+      <p className="financial-hint">
+        Pagamento para Talita e Jorge = total líquido a receber − pagamento aos
+        drops + reembolso erro iMile.
+      </p>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Período</th>
+              {totalColumns.map(([field, title]) => (
+                <th key={field}>{title}</th>
+              ))}
+              <th>Data do pagamento</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="financial-totals">
+              <th scope="row">Total filtrado</th>
+              {totalColumns.map(([field]) => (
+                <td key={field}>{money(sum(rows, field))}</td>
+              ))}
+              <td />
+            </tr>
+            {rows.map((row) => (
+              <tr key={row.period}>
+                <td>
+                  <strong>{row.period}</strong>
+                  {row.estimated && (
+                    <small className="table-subtitle">Receita estimada</small>
+                  )}
+                </td>
+                {totalColumns.map(([field]) => (
+                  <td
+                    key={field}
+                    className={
+                      ["loss", "assumed"].includes(field) ||
+                      number(row[field]) < 0
+                        ? "loss-value"
+                        : field === "companyPayment"
+                          ? "positive-value"
+                          : ""
+                    }
+                  >
+                    {money(row[field])}
+                  </td>
+                ))}
+                <td>
+                  {row.paymentDate
+                    ? row.paymentDate.split(", ").map(date).join(", ")
+                    : "—"}
+                </td>
+              </tr>
+            ))}
+            {!rows.length && <EmptyRow columns={12} />}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+function PaymentDetails({
+  rows,
+  onEdit,
+  onReport,
+  generating,
+}: {
+  rows: DataRow[];
+  onEdit: (row: DataRow) => void;
+  onReport: (row: DataRow) => void;
+  generating: boolean;
+}) {
+  return (
+    <section className="card">
+      {rows.some((row) => row.splitAllocated) && (
+        <p className="financial-hint">
+          Extravios W2D e D2D de um mesmo drop e período foram rateados entre
+          suas linhas. Os totais de fechamento permanecem os registrados; a
+          divisão pode ser ajustada em Editar.
+        </p>
+      )}
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              {detailFields.map(([field, title]) => (
+                <th key={field}>{title}</th>
+              ))}
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="financial-totals">
+              <th scope="row" colSpan={4}>
+                Total filtrado · {rows.length} registro(s)
+              </th>
+              <td>{sum(rows, "packages").toLocaleString("pt-BR")}</td>
+              <td aria-label="Valor unitário não totalizado">—</td>
+              {[
+                "subtotal",
+                "w2d",
+                "d2d",
+                "loss",
+                "reimbursement",
+                "receivable",
+              ].map((field) => (
+                <td key={field}>{money(sum(rows, field))}</td>
+              ))}
+              <td colSpan={3} />
+            </tr>
+            {rows.map((row) => (
+              <tr key={`${row.source}-${row.id}`}>
+                {detailFields.map(([field, , type]) => (
+                  <td
+                    key={field}
+                    className={
+                      field === "loss"
+                        ? "loss-value"
+                        : field === "receivable"
+                          ? "positive-value"
+                          : ""
+                    }
+                  >
+                    {field === "drop" ? (
+                      <>
+                        <strong>{row.drop}</strong>
+                        {row.responsible && (
+                          <small className="table-subtitle">
+                            {row.responsible}
+                          </small>
+                        )}
+                      </>
+                    ) : field === "packages" ? (
+                      row.packages.toLocaleString("pt-BR")
+                    ) : type === "number" ? (
+                      money(row[field])
+                    ) : type === "date" ? (
+                      date(row[field])
+                    ) : (
+                      row[field] || "—"
+                    )}
+                  </td>
+                ))}
+                <td>
+                  <div className="financial-actions">
+                    <button
+                      className="table-action"
+                      onClick={() => onEdit(row)}
+                    >
+                      Editar
+                    </button>
+                    <button
+                      className="table-action"
+                      disabled={generating}
+                      onClick={() => onReport(row)}
+                    >
+                      Gerar PDF
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!rows.length && <EmptyRow columns={15} />}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+function CnabDetails({ rows }: { rows: DataRow[] }) {
+  return (
+    <section className="card">
+      <div className="table-wrap">
+        <table className="cnab-table">
+          <thead>
+            <tr>
+              {cnabFields.map(([field, title]) => (
+                <th key={field}>{title}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={`${row.source}-${row.id}`}>
+                {cnabFields.map(([field, , type]) => (
+                  <td key={field}>
+                    {type === "number"
+                      ? money(row[field])
+                      : type === "date"
+                        ? date(row[field])
+                        : row[field] || "—"}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {!rows.length && <EmptyRow columns={6} />}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+function Losses({
+  rows,
+  periodById,
+  onEdit,
+}: {
+  rows: DataRow[];
+  periodById: Map<string, DataRow>;
+  onEdit: (row: DataRow) => void;
+}) {
+  return (
+    <section className="card">
+      <div className="financial-loss-total" role="status">
+        <span>{rows.length} extravio(s) nos filtros selecionados</span>
+        <strong>Total: {money(sum(rows, "amount"))}</strong>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              {[
+                "Período",
+                "Scan station / DROP",
+                "Waybill nº",
+                "Código da etiqueta",
+                "Saca",
+                "Status",
+                "Seller",
+                "Recebimento",
+                "Valor",
+                "Observações",
+                "Ação",
+              ].map((title) => (
+                <th key={title}>{title}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const period = periodById.get(row.financial_period_id);
+              return (
+                <tr key={row.id}>
+                  <td>{row.period_label ?? period?.label ?? "—"}</td>
+                  <td>
+                    <strong>{row.drop_name_snapshot ?? "—"}</strong>
+                    <small className="table-subtitle">
+                      {row.partner ?? period?.partner ?? ""}
+                    </small>
+                  </td>
+                  {[
+                    "waybill",
+                    "label_code",
+                    "bag_code",
+                    "status",
+                    "seller",
+                  ].map((field) => (
+                    <td key={field}>{row[field] || "—"}</td>
+                  ))}
+                  <td>
+                    {row.received_at
+                      ? new Date(row.received_at).toLocaleString("pt-BR")
+                      : "—"}
+                  </td>
+                  <td className="loss-value">{money(row.amount)}</td>
+                  <td>{row.observation || "—"}</td>
+                  <td>
+                    <button
+                      className="table-action"
+                      onClick={() => onEdit(row)}
+                    >
+                      Editar
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+            {!rows.length && <EmptyRow columns={11} />}
+          </tbody>
+          <tfoot>
+            <tr className="financial-totals">
+              <th scope="row" colSpan={8}>
+                Total filtrado
+              </th>
+              <td>{money(sum(rows, "amount"))}</td>
+              <td colSpan={2} />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+  );
+}
+function EmptyRow({ columns }: { columns: number }) {
+  return (
+    <tr>
+      <td colSpan={columns} className="empty">
+        Nenhum registro encontrado para os filtros selecionados.
+      </td>
+    </tr>
+  );
+}

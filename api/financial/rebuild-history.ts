@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
 
-type HistoryRow = { period: string; drop: string; partner: string; quantity: number; agreed: number; subtotal: number; lossAmount: number; reimbursement: number; receivable: number; paymentDate: string | null; pixKey: string }
+type HistoryRow = { period: string; drop: string; partner: string; packageType: string; w2d: number; d2d: number; quantity: number; agreed: number; subtotal: number; lossAmount: number; reimbursement: number; receivable: number; paymentDate: string | null; pixKey: string }
 type LossRow = { period: string; drop: string; waybill: string; labelCode: string; bagCode: string; status: string; seller: string; receivedAt: string | null; amount: number; observation: string }
 type DropRow = { name: string; partner: string; agreed: number; pixKey: string; email: string }
 type SummaryRow = { period:string; observation:string; gross:number; w2d:number; d2d:number; loss:number; reimbursement:number; invoice:number; paidDrops:number; deducted:number; assumed:number; talitaJorge:number; paymentDate:string|null }
@@ -32,10 +32,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     period: text(row.period),
     drop: text(row.drop),
     partner: text(row.partner) || 'SEM PARCEIRO',
+    packageType: text(row.packageType), w2d: number(row.w2d), d2d: number(row.d2d),
     quantity: Math.max(0, Math.trunc(number(row.quantity))),
     agreed: number(row.agreed),
-    subtotal: number(row.subtotal), lossAmount: number(row.lossAmount), reimbursement: number(row.reimbursement),
-    receivable: number(row.receivable), paymentDate: text(row.paymentDate) || null, pixKey: text(row.pixKey),
+    subtotal: row.subtotal == null ? number(row.quantity) * number(row.agreed) : number(row.subtotal), lossAmount: number(row.lossAmount), reimbursement: number(row.reimbursement),
+    receivable: row.receivable == null ? number(row.quantity) * number(row.agreed) - number(row.lossAmount) + number(row.reimbursement) : number(row.receivable), paymentDate: text(row.paymentDate) || null, pixKey: text(row.pixKey),
   })).filter(row => row.period && row.drop)
   if (!rows.length || rows.length > 10000) return res.status(400).json({ error: 'Arquivo histórico vazio ou fora do limite.' })
   const losses: LossRow[] = (Array.isArray(req.body?.losses) ? req.body.losses : []).map((row: any) => ({
@@ -47,18 +48,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   })).filter(row => row.name)
   const sourceFile = text(req.body?.sourceFile) || 'Pasta1.xlsx'
   const summaries:SummaryRow[]=(Array.isArray(req.body?.summaries)?req.body.summaries:[]).map((row:any)=>({period:text(row.period),observation:text(row.observation),gross:number(row.gross),w2d:number(row.w2d),d2d:number(row.d2d),loss:number(row.loss),reimbursement:number(row.reimbursement),invoice:number(row.invoice),paidDrops:number(row.paidDrops),deducted:number(row.deducted),assumed:number(row.assumed),talitaJorge:number(row.talitaJorge),paymentDate:text(row.paymentDate)||null})).filter(row=>row.period)
-  const summaryByPeriod=new Map(summaries.map(row=>[row.period,row]))
+  // A period may span multiple spreadsheet rows (e.g. reimbursements and pickup types).
+  // Sum them instead of overwriting the invoice with the last, often blank, row.
+  const summaryByPeriod=new Map<string,SummaryRow>()
+  for(const row of summaries){
+    const current=summaryByPeriod.get(row.period)
+    if(!current){summaryByPeriod.set(row.period,{...row});continue}
+    for(const field of ['gross','w2d','d2d','loss','reimbursement','invoice','paidDrops','deducted','assumed','talitaJorge'] as const)current[field]+=row[field]
+    current.paymentDate=current.paymentDate??row.paymentDate
+    current.observation=[current.observation,row.observation].filter(Boolean).join('; ')
+  }
 
   try {
-    await admin.from('loss_events').delete().not('id', 'is', null)
-    await admin.from('financial_payment_history').delete().not('id', 'is', null)
-    await admin.from('financial_drop_items').delete().not('id', 'is', null)
-    await admin.from('financial_periods').delete().not('id', 'is', null)
-    const { error: viewDeleteError } = await admin.from('financial_views').delete().not('id', 'is', null)
-    if (viewDeleteError) throw viewDeleteError
+    const deactivation = { is_active: false, deactivated_reason: `Histórico substituído pela importação ${sourceFile}`, deactivated_at: new Date().toISOString(), deactivated_by: auth.user.id }
+    for (const table of ['loss_events', 'financial_payment_history', 'financial_drop_items', 'financial_periods', 'financial_views']) {
+      const { error } = await admin.from(table).update(deactivation).eq('is_active', true)
+      if (error) throw error
+    }
 
     if (drops.length) {
-      const { data: existingDrops, error: dropsError } = await admin.from('drops').select('id,name')
+      const { data: existingDrops, error: dropsError } = await admin.from('drops').select('id,name').eq('is_active', true)
       if (dropsError) throw dropsError
       const byName = new Map((existingDrops ?? []).map(drop => [dropKey(drop.name), drop.id]))
       for (const item of drops) {
@@ -108,6 +117,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           amount: row.agreed, package_quantity: row.quantity, subtotal: row.subtotal,
           loss_amount: row.lossAmount, reimbursement: row.reimbursement, total_receivable: row.receivable,
           pix_key: row.pixKey || null, paid_at: row.paymentDate,
+          observation: JSON.stringify({ movidosClosing: { packageType: row.packageType, w2d: row.w2d, d2d: row.d2d } }),
         })))
         if (historyError) throw historyError
       }
@@ -120,7 +130,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }))
         if (error) throw error
       }
-      if(periodLosses.length){const {count,error}=await admin.from('loss_events').select('id',{count:'exact',head:true}).eq('period_label',label);if(error||!count)throw error??new Error(`Extravios do período ${label} não foram gravados.`)}
+      if(periodLosses.length){const {count,error}=await admin.from('loss_events').select('id',{count:'exact',head:true}).eq('period_label',label).eq('is_active',true);if(error||!count)throw error??new Error(`Extravios do período ${label} não foram gravados.`)}
       const { error: completeError } = await admin.from('financial_views').update({ import_status: 'importado' }).eq('id', view.id)
       if (completeError) throw completeError
     }

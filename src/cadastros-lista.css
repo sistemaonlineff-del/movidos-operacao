@@ -1,0 +1,22 @@
+.app:has(.cadastros-list-page) .content, .cadastros-list-page, .cadastros-list-page .card { min-width: 0; }
+.cadastros-list-page .table-wrap { overflow: auto; }
+.cadastro-phone { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cadastro-phone:hover { text-decoration: underline; }
+.cadastro-row { cursor: pointer; }
+.cadastro-row:hover { background: #f2fbfb; }
+.cadastros-list-page td:last-child, .cadastros-list-page th:last-child { position: sticky; right: 0; background: inherit; box-shadow: -8px 0 12px rgba(16, 24, 32, .06); }
+.inactive-record { background: #eef0f2 !important; color: #72777d; }
+.inactive-record strong, .inactive-record a { color: #72777d; }
+.inactive-record .pill { filter: grayscale(1); opacity: .75; }
+.inactive-record td { border-color: #d9dde1; }
+.app .cadastros-pagination { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .8rem; margin-top: 1rem; font-size: .85rem; }
+.cadastros-pagination > div { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; }
+.app .cadastros-pagination button { display: inline-block; background: #e8f6f5; color: #087e83; padding: .6rem .8rem; }
+.app .cadastros-pagination button:disabled { opacity: .45; cursor: default; }
+@media (max-width: 850px) {
+  .app:has(.cadastros-list-page) aside { min-width: 0; flex-wrap: wrap; gap: .5rem; }
+  .app:has(.cadastros-list-page) nav { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+  .app:has(.cadastros-list-page) .nav-submenu { display: flex; flex-wrap: wrap; width: 100%; }
+  .app:has(.cadastros-list-page) nav .nav-submenu button { display: block; }
+  .cadastros-list-page table { min-width: 900px; }
+}

@@ -15,6 +15,7 @@ const presets: Record<string, any> = {
   'Cadastros e Financeiro': { cadastros_view: true, cadastros_create: true, financeiro_view: true },
   'Somente Funcionários': { funcionarios_view: true },
   'Funcionários completos': { funcionarios_view: true, funcionarios_manage: true },
+  'Somente leitor de etiquetas': { label_reader_access: true },
   'Sem acesso': {}
 }
 export default function Configuracoes() {
@@ -39,7 +40,7 @@ export default function Configuracoes() {
   useEffect(() => { void load() }, [isAdmin])
   const shown = useMemo(() => { const term = query.toLowerCase(); return users.filter(user => [user.full_name, user.email, user.role].join(' ').toLowerCase().includes(term)) }, [users, query])
   const choose = (user: any) => { setSelected(user); setPermissions({ ...blank, ...user.permissions }); setOpen(true); setMessage('') }
-  const applyPreset = (name: string) => setPermissions({ ...blank, ...presets[name] })
+  const applyPreset = (name: string) => setPermissions({ ...blank, label_reader_access: name !== 'Sem acesso', ...presets[name] })
   const save = async () => {
     if (!selected || !supabase) return
     const { error } = await supabase.from('user_module_permissions').upsert({ user_id: selected.id, ...permissions }, { onConflict: 'user_id' })

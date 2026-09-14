@@ -1,7 +1,8 @@
 // @ts-nocheck
 import { ChangeEvent, useEffect, useState } from 'react'
 import * as XLSX from 'xlsx'
-import { jsPDF } from 'jspdf'
+import { buildDetails, buildTotals, notes } from './financialData'
+import { readFinancialRows } from './financialStore'
 import { supabase } from './lib/supabase'
 
 type Row = Record<string, unknown>
@@ -32,7 +33,7 @@ const excelDate=(value:unknown)=>{
 }
 const hasInvalidRows=(closing:Row[],losses:Row[])=>closing.some(row=>!required(row,['Periodo','Parceiro','Drop'])||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0)||losses.some(row=>!required(row,['Periodo','Parceiro','Drop'])||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento)))
 const money=(value:unknown)=>number(value).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})
-const reimbursementFromNotes=(notes:string|null|undefined)=>{try{const parsed=JSON.parse(notes??'{}');return number(parsed.reimbursement)}catch{return 0}}
+const reimbursementFromNotes=(notes:string|null|undefined)=>{try{const parsed=JSON.parse(notes??'{}');return number(parsed.reimbursement ?? parsed.summary?.reimbursement)}catch{return 0}}
 
 export default function Financeiro(){
   const [views,setViews]=useState<View[]>([])
@@ -46,31 +47,25 @@ export default function Financeiro(){
   const [busy,setBusy]=useState(false)
   const [details,setDetails]=useState<any[]>([])
   const [viewLosses,setViewLosses]=useState<any[]>([])
+  const [viewPeriods,setViewPeriods]=useState<any[]>([])
+  const [viewTotals,setViewTotals]=useState<any[]>([])
   const [reimbursement,setReimbursement]=useState('')
   const [general,setGeneral]=useState({items:0,packages:0,losses:0,lossAmount:0})
 
   const loadGeneral=async()=>{
     if(!supabase)return
-    const readAll=async(table:'financial_drop_items'|'loss_events',columns:string)=>{
-      let from=0, rows:Row[]=[]
-      while(true){
-        const {data,error}=await supabase.from(table).select(columns).range(from,from+999)
-        if(error)throw error
-        rows=rows.concat((data??[]) as Row[])
-        if((data??[]).length<1000)return rows
-        from+=1000
-      }
-    }
-    try{
-      const [items,lossRows]=await Promise.all([readAll('financial_drop_items','quantity_packages'),readAll('loss_events','amount')])
-      setGeneral({items:items.length,packages:items.reduce((sum,row)=>sum+number(row.quantity_packages),0),losses:lossRows.length,lossAmount:lossRows.reduce((sum,row)=>sum+number(row.amount),0)})
-    }catch(error){setMessage(error instanceof Error?error.message:'Não foi possível atualizar a base geral.')}
+    try {
+      const [items,history,lossRows,periods]=await Promise.all(['financial_drop_items','financial_payment_history','loss_events','financial_periods'].map(readFinancialRows))
+      const details=buildDetails(history,items,lossRows,periods)
+      setGeneral({items:details.length,packages:details.reduce((sum,row)=>sum+number(row.packages),0),losses:lossRows.length,lossAmount:lossRows.reduce((sum,row)=>sum+number(row.amount),0)})
+    } catch(error) { setMessage(error?.message??'Falha ao atualizar a base geral.') }
   }
+
   const latestAgreedValues=async()=>{
     if(!supabase)return new Map<string,number>()
     let from=0, rows:Row[]=[]
     while(true){
-      const {data,error}=await supabase.from('financial_drop_items').select('drop_name_snapshot,unit_value,created_at').gt('unit_value',0).order('created_at',{ascending:false}).range(from,from+999)
+      const {data,error}=await supabase.from('financial_drop_items').select('drop_name_snapshot,unit_value,created_at').eq('is_active',true).gt('unit_value',0).order('created_at',{ascending:false}).range(from,from+999)
       if(error)throw error
       rows=rows.concat((data??[]) as Row[])
       if((data??[]).length<1000)break
@@ -82,7 +77,7 @@ export default function Financeiro(){
   }
   const refresh=async()=>{
     if(!supabase)return
-    const {data,error}=await supabase.from('financial_views').select('*').order('created_at',{ascending:false})
+    const {data,error}=await supabase.from('financial_views').select('*').eq('is_active',true).order('created_at',{ascending:false})
     if(error){setMessage('Execute a migração financeira no Supabase antes de usar este módulo.');return}
     setViews(data??[])
     await loadGeneral()
@@ -91,17 +86,18 @@ export default function Financeiro(){
   useEffect(()=>{
     if(!selected||!supabase)return
     const load=async()=>{
-      const {data:periods}=await supabase.from('financial_periods').select('id,label,partner,net_amount,status').eq('financial_view_id',selected)
-      const ids=(periods??[]).map(item=>item.id)
-      if(!ids.length){setDetails([]);setViewLosses([]);return}
-      const [{data:items},{data:loss}]=await Promise.all([supabase.from('financial_drop_items').select('*').in('financial_period_id',ids).order('drop_name_snapshot'),supabase.from('loss_events').select('*').in('financial_period_id',ids).order('created_at')])
-      const lossByDropPeriod=new Map<string,number>()
-      ;(loss??[]).forEach(item=>{const key=`${text(item.period_label)}|${dropKey(item.drop_name_snapshot)}`;lossByDropPeriod.set(key,(lossByDropPeriod.get(key)??0)+number(item.amount))})
-      setDetails((items??[]).map(item=>{const period=(periods??[]).find(period=>period.id===item.financial_period_id);const quantity=number(item.quantity_packages);const agreed=number(item.unit_value);const lossAmount=lossByDropPeriod.get(`${text(period?.label)}|${dropKey(item.drop_name_snapshot)}`)??0;const gross=quantity*agreed;return {...item,period,standard_total:quantity*.25,agreed_value:agreed,gross_amount:gross,loss_amount:lossAmount,receivable_amount:gross-lossAmount}}))
-      setViewLosses(loss??[])
+      try {
+        const [allPeriods,allItems,allLosses,allHistory,allDrops]=await Promise.all(['financial_periods','financial_drop_items','loss_events','financial_payment_history','drops'].map(readFinancialRows))
+        const periods=allPeriods.filter(period=>period.financial_view_id===selected)
+        const ids=new Set(periods.map(period=>period.id))
+        const items=allItems.filter(item=>ids.has(item.financial_period_id)), loss=allLosses.filter(item=>ids.has(item.financial_period_id)), history=allHistory.filter(item=>ids.has(item.financial_period_id))
+        const rows=buildDetails(history,items,loss,periods,allDrops)
+        setDetails(rows.map(row=>({...row,closingRow:row,period:periods.find(period=>period.id===row.periodId),drop_name_snapshot:row.drop,quantity_packages:row.packages,standard_total:row.packages*.25,agreed_value:row.unit,gross_amount:row.subtotal,loss_amount:row.loss,receivable_amount:row.receivable})))
+        setViewPeriods(periods);setViewLosses(loss);setViewTotals(buildTotals(rows,loss,periods,views.filter(view=>view.id===selected)))
+      } catch(error) { setMessage(error?.message??'Não foi possível carregar o fechamento.');setDetails([]);setViewLosses([]);setViewTotals([]) }
     }
     void load()
-  },[selected])
+  },[selected,views])
   useEffect(()=>{setReimbursement(String(reimbursementFromNotes(views.find(view=>view.id===selected)?.notes)))},[selected,views])
 
   const choose=async(event:ChangeEvent<HTMLInputElement>)=>{
@@ -140,7 +136,7 @@ export default function Financeiro(){
         const lossRows=XLSX.utils.sheet_to_json<any[]>(workbook.Sheets['Extravios'],{header:1,defval:''})
         const registration=XLSX.utils.sheet_to_json<any[]>(workbook.Sheets['Cadastro'],{header:1,defval:''})
         const totalRows=workbook.Sheets['Pgto Total']?XLSX.utils.sheet_to_json<any[]>(workbook.Sheets['Pgto Total'],{header:1,defval:''}):[]
-        payload=details.slice(3).map(row=>({period:text(row[12]),drop:text(row[13]),partner:text(row[14]),quantity:number(row[16]),agreed:number(row[17]),subtotal:number(row[18]),lossAmount:number(row[21]),reimbursement:number(row[22]),receivable:number(row[23]),paymentDate:excelDate(row[24]),pixKey:text(row[25])})).filter(row=>row.period&&row.drop)
+        payload=details.slice(3).map(row=>({period:text(row[12]),drop:text(row[13]),partner:text(row[14]),packageType:text(row[15]),quantity:number(row[16]),agreed:number(row[17]),subtotal:number(row[18]),w2d:number(row[19]),d2d:number(row[20]),lossAmount:number(row[21]),reimbursement:number(row[22]),receivable:number(row[23]),paymentDate:excelDate(row[24]),pixKey:text(row[25])})).filter(row=>row.period&&row.drop)
         losses=lossRows.slice(3).map(row=>({period:text(row[0]),drop:text(row[1]),waybill:text(row[2]),labelCode:text(row[3]),bagCode:text(row[4]),status:text(row[5]),seller:text(row[6]),receivedAt:excelDate(row[7]),amount:number(row[8]),observation:text(row[9])})).filter(row=>row.period&&row.drop)
         drops=registration.slice(1).map(row=>({name:text(row[0]),partner:text(row[1]),agreed:number(row[2]),pixKey:text(row[3]),email:text(row[4])})).filter(row=>row.name&&row.partner)
         summaries=totalRows.slice(2).map(row=>({period:text(row[0]),observation:text(row[1]),gross:number(row[2]),w2d:number(row[3]),d2d:number(row[4]),loss:number(row[5]),reimbursement:number(row[6]),invoice:number(row[7]),paidDrops:number(row[8]),deducted:number(row[9]),assumed:number(row[10]),talitaJorge:number(row[11]),paymentDate:excelDate(row[12])})).filter(row=>row.period)
@@ -193,30 +189,14 @@ export default function Financeiro(){
   }
   const saveReimbursement=async()=>{
     if(!supabase||!selected)return
-    const amount=Math.max(0,number(reimbursement))
-    const {error}=await supabase.from('financial_views').update({notes:JSON.stringify({reimbursement:amount})}).eq('id',selected)
+    const amount=number(reimbursement)
+    const {error}=await supabase.from('financial_views').update({notes:JSON.stringify({...notes(views.find(view=>view.id===selected)?.notes),reimbursement:amount})}).eq('id',selected)
     setMessage(error?error.message:'Reembolso salvo neste período.')
     if(!error)await refresh()
   }
-  const reportFor=(item:any)=>{
-    const doc=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'})
-    const period=text(item.period?.label), drop=text(item.drop_name_snapshot)
-    const losses=viewLosses.filter(loss=>text(loss.period_label)===period&&dropKey(loss.drop_name_snapshot)===dropKey(drop))
-    const header=(title:string,y:number,color:[number,number,number])=>{doc.setFillColor(...color);doc.rect(10,y,277,8,'F');doc.setTextColor(255,255,255);doc.setFontSize(10);doc.text(title,13,y+5.3);doc.setTextColor(25,35,45)}
-    const cell=(label:string,value:string,x:number,y:number,width:number)=>{doc.setDrawColor(210,220,225);doc.rect(x,y,width,13);doc.setFontSize(6.5);doc.setTextColor(85,96,104);doc.text(label,x+2,y+3.5);doc.setFontSize(8);doc.setTextColor(25,35,45);doc.text(value||'—',x+2,y+9)}
-    doc.setFontSize(15);doc.setTextColor(16,79,111);doc.text('Fechamento por DROP - iMile',10,14)
-    header('FECHAMENTO',19,[42,92,126])
-    const values=[['PERÍODO',period],['DROP',drop],['PARCEIRO',text(item.period?.partner)],['TOTAL PACOTE',number(item.quantity_packages).toLocaleString('pt-BR')],['VALOR ACORDADO',money(item.agreed_value)],['SUBTOTAL',money(item.gross_amount)],['EXTRAVIO',money(item.loss_amount)],['TOTAL A RECEBER',money(item.receivable_amount)]]
-    values.forEach(([label,value],index)=>cell(label,value,10+(index%4)*69.25,29+Math.floor(index/4)*13,69.25))
-    let y=62
-    header('EXTRAVIOS POR DROP',y,[202,121,40]);y+=9
-    const columns=[['PERÍODO',32],['DROP',22],['CÓDIGO PACOTE',31],['ETIQUETA',35],['SACA',25],['STATUS',43],['SELLER',38],['RECEBIMENTO',27],['VALOR',22]]
-    const drawColumns=()=>{doc.setFillColor(238,242,245);doc.rect(10,y,277,7,'F');let x=10;doc.setFontSize(6.4);columns.forEach(([label,width])=>{doc.setTextColor(55,67,74);doc.text(label,x+1,y+4.5);x+=width as number});y+=7}
-    drawColumns()
-    if(!losses.length){doc.setFontSize(8);doc.text('Não há extravios registrados para este Drop neste período.',12,y+6);y+=10}
-    losses.forEach(loss=>{if(y>188){doc.addPage();y=12;header('EXTRAVIOS POR DROP',y,[202,121,40]);y+=9;drawColumns()}let x=10;const row=[period,drop,text(loss.waybill),text(loss.label_code),text(loss.bag_code),text(loss.status),text(loss.seller),loss.received_at?new Date(loss.received_at).toLocaleString('pt-BR'):'—',money(loss.amount)];doc.setFontSize(6.2);row.forEach((value,index)=>{const width=columns[index][1] as number;const clipped=value.length>26?`${value.slice(0,25)}…`:value;doc.text(clipped,x+1,y+4.5);x+=width});doc.setDrawColor(225,230,233);doc.line(10,y+6,287,y+6);y+=6})
-    const file=`${drop}_${period}`.replace(/[^a-z0-9]+/gi,'_')
-    doc.save(`${file}.pdf`)
+  const reportFor=async(item:any)=>{
+    try { await (await import('./financialReport')).downloadClosingPdf([item.closingRow],viewLosses,viewPeriods) }
+    catch(error) { setMessage(error?.message??'Não foi possível gerar o relatório.') }
   }
   return <section className="finance-page">
     <section className="card finance-upload"><div><p className="eyebrow">FECHAMENTOS</p><h2>Novo fechamento quinzenal</h2><p>1. Informe o período. 2. Anexe a planilha. O sistema cria a View, registra o histórico e atualiza a base geral.</p></div><label className="finance-period">Período do fechamento<input value={uploadPeriod} onChange={event=>setUploadPeriod(event.target.value)} placeholder="Ex.: 33. 1Q DE AGOSTO" disabled={busy}/></label><a className="secondary" href="/templates/modelo-fechamento-financeiro.xlsx" download>Baixar modelo</a><label className={`upload-button ${!uploadPeriod.trim()||busy?'disabled':''}`}>Anexar planilha<input type="file" accept=".xlsx" onChange={choose} disabled={!uploadPeriod.trim()||busy}/></label></section>
@@ -224,6 +204,6 @@ export default function Financeiro(){
     {message&&<p className="form-message">{message}</p>}
     <section className="finance-summary"><article className="metric"><span>Views salvas</span><strong>{views.length}</strong></article><article className="metric"><span>Itens na base geral</span><strong>{general.items}</strong></article><article className="metric"><span>Pacotes na base geral</span><strong>{general.packages.toLocaleString('pt-BR')}</strong></article><article className="metric red"><span>Extravios na base geral</span><strong>{general.losses} · R$ {general.lossAmount.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></article></section>
     <section className="card"><div className="finance-head"><div><p className="eyebrow">VIEWS SALVAS</p><h2>Consultar fechamento</h2></div><button className="secondary" onClick={()=>void refresh()}>Atualizar</button></div><select className="view-select" value={selected} onChange={event=>setSelected(event.target.value)}><option value="">Selecione uma View</option>{views.map(view=><option key={view.id} value={view.id}>{view.title} · {new Date(view.created_at).toLocaleString('pt-BR')}</option>)}</select></section>
-    {selected&&<>{(()=>{const totalImile=details.reduce((sum,item)=>sum+number(item.standard_total),0),totalLoss=details.reduce((sum,item)=>sum+number(item.loss_amount),0),totalDrops=details.reduce((sum,item)=>sum+number(item.receivable_amount),0),reimbursementValue=number(reimbursement),talitaJorge=totalImile-totalLoss+reimbursementValue-totalDrops;return <><section className="card finance-preview"><label>Reembolso iMile deste período<input type="number" min="0" step="0.01" value={reimbursement} onChange={event=>setReimbursement(event.target.value)}/></label><button className="secondary" onClick={()=>void saveReimbursement()}>Salvar reembolso</button><strong>Pagamento Talita e Jorge: {money(talitaJorge)}</strong></section><section className="finance-summary"><article className="metric"><span>Linhas em Fechamento</span><strong>{details.length}</strong></article><article className="metric red"><span>Linhas em Extravios</span><strong>{viewLosses.length}</strong></article><article className="metric"><span>Total líquido iMile</span><strong>{money(totalImile-totalLoss+reimbursementValue)}</strong></article><article className="metric"><span>Pagamento aos Drops</span><strong>{money(totalDrops)}</strong></article></section></>})()}<section className="card"><h2>Fechamento</h2><div className="table-wrap"><table><thead><tr><th>Período</th><th>Parceiro</th><th>Drop</th><th>Quantidade de pacotes</th><th>Total padrão</th><th>Valor acordado</th><th>Valor pago AGU bruto</th><th>Extravio</th><th>Total a receber do AGU</th><th>Relatório</th></tr></thead><tbody>{details.map(item=><tr key={item.id}><td>{item.period?.label}</td><td>{item.period?.partner}</td><td>{item.drop_name_snapshot}</td><td>{item.quantity_packages}</td><td>{money(item.standard_total)}</td><td>{money(item.agreed_value)}</td><td>{money(item.gross_amount)}</td><td>{money(item.loss_amount)}</td><td>{money(item.receivable_amount)}</td><td><button className="table-action" onClick={()=>reportFor(item)}>Gerar PDF</button></td></tr>)}</tbody></table></div></section><section className="card"><h2>Extravios</h2><div className="table-wrap"><table><thead><tr><th>Período</th><th>Parceiro</th><th>Drop</th><th>Waybill</th><th>Status</th><th>Valor</th><th>Observação</th><th>Ação</th></tr></thead><tbody>{viewLosses.map(item=><tr key={item.id}><td>{item.period_label}</td><td>{item.partner}</td><td>{item.drop_name_snapshot}</td><td>{item.waybill}</td><td>{item.status}</td><td>{money(item.amount)}</td><td>{item.observation}</td><td><button className="table-action" onClick={()=>void editLoss(item)}>Editar</button></td></tr>)}</tbody></table></div></section></>}
+    {selected&&<>{(()=>{const totalImile=viewTotals.reduce((sum,item)=>sum+number(item.net),0),totalDrops=details.reduce((sum,item)=>sum+number(item.receivable_amount),0),reimbursementValue=number(reimbursement),talitaJorge=totalImile-totalDrops+reimbursementValue;return <><section className="card finance-preview"><label>Reembolso iMile deste período<input type="number" step="0.01" value={reimbursement} onChange={event=>setReimbursement(event.target.value)}/></label><button className="secondary" onClick={()=>void saveReimbursement()}>Salvar reembolso</button><strong>Pagamento Talita e Jorge: {money(talitaJorge)}</strong></section><section className="finance-summary"><article className="metric"><span>Linhas em Fechamento</span><strong>{details.length}</strong></article><article className="metric red"><span>Linhas em Extravios</span><strong>{viewLosses.length}</strong></article><article className="metric"><span>Total líquido iMile</span><strong>{money(totalImile)}</strong></article><article className="metric"><span>Pagamento aos Drops</span><strong>{money(totalDrops)}</strong></article></section></>})()}<section className="card"><h2>Fechamento</h2><div className="table-wrap"><table><thead><tr><th>Período</th><th>Parceiro</th><th>Drop</th><th>Quantidade de pacotes</th><th>Total padrão</th><th>Valor acordado</th><th>Valor pago AGU bruto</th><th>Extravio</th><th>Total a receber do AGU</th><th>Relatório</th></tr></thead><tbody>{details.map(item=><tr key={item.id}><td>{item.period?.label}</td><td>{item.period?.partner}</td><td>{item.drop_name_snapshot}</td><td>{item.quantity_packages}</td><td>{money(item.standard_total)}</td><td>{money(item.agreed_value)}</td><td>{money(item.gross_amount)}</td><td>{money(item.loss_amount)}</td><td>{money(item.receivable_amount)}</td><td><button className="table-action" onClick={()=>reportFor(item)}>Gerar PDF</button></td></tr>)}</tbody></table></div></section><section className="card"><h2>Extravios</h2><div className="table-wrap"><table><thead><tr><th>Período</th><th>Parceiro</th><th>Drop</th><th>Waybill</th><th>Status</th><th>Valor</th><th>Observação</th><th>Ação</th></tr></thead><tbody>{viewLosses.map(item=><tr key={item.id}><td>{item.period_label}</td><td>{item.partner}</td><td>{item.drop_name_snapshot}</td><td>{item.waybill}</td><td>{item.status}</td><td>{money(item.amount)}</td><td>{item.observation}</td><td><button className="table-action" onClick={()=>void editLoss(item)}>Editar</button></td></tr>)}</tbody></table></div></section></>}
   </section>
 }

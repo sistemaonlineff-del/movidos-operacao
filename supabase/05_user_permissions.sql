@@ -12,8 +12,11 @@ create table if not exists public.user_module_permissions (
   funcionarios_view boolean not null default false,
   funcionarios_manage boolean not null default false,
   configuracoes_manage boolean not null default false,
+  label_reader_access boolean not null default true,
   updated_at timestamptz not null default timezone('utc', now())
 );
+
+alter table public.user_module_permissions add column if not exists label_reader_access boolean not null default true;
 
 create or replace function public.set_permissions_updated_at() returns trigger language plpgsql as $$
 begin new.updated_at = timezone('utc', now()); return new; end;
@@ -24,8 +27,8 @@ for each row execute function public.set_permissions_updated_at();
 
 -- Mantém o uso atual para contas existentes: operador administra cadastros;
 -- financeiro também acessa o Financeiro. Administradores têm acesso total pela função is_admin().
-insert into public.user_module_permissions (user_id, cadastros_view, cadastros_create, cadastros_edit, cadastros_delete, financeiro_view, financeiro_manage)
-select id, true, true, true, true, role = 'financeiro', role = 'financeiro'
+insert into public.user_module_permissions (user_id, cadastros_view, cadastros_create, cadastros_edit, cadastros_delete, financeiro_view, financeiro_manage, label_reader_access)
+select id, true, true, true, true, role = 'financeiro', role = 'financeiro', true
 from public.user_profiles
 on conflict (user_id) do nothing;
 

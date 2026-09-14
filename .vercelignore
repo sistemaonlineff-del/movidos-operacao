@@ -1,0 +1,12 @@
+tmp/
+.tmp-contract-test/
+tests/
+supabase/
+.env*
+*.accdb
+*.xlsm
+/*.xlsx
+/*.pdf
+/*.docx
+/*.png
+*.tsbuildinfo

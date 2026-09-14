@@ -66,6 +66,10 @@ create table if not exists public.employee_dependents (
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
+alter table public.employee_dependents add column if not exists is_active boolean not null default true;
+alter table public.employee_dependents add column if not exists deactivated_reason text;
+alter table public.employee_dependents add column if not exists deactivated_at timestamptz;
+alter table public.employee_dependents add column if not exists deactivated_by uuid references public.user_profiles(id) on delete set null;
 
 create index if not exists idx_employees_name on public.employees (full_name);
 create index if not exists idx_employees_department on public.employees (department);

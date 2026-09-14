@@ -31,7 +31,7 @@ create table if not exists public.drops (
   pix_key text, pix_holder_name text,
   weekday_opening_time text, weekday_closing_time text, saturday_opening_time text, saturday_closing_time text,
   weekday_scan_time text, saturday_scan_time text,
-  monthly_value numeric(14,2), start_period text, end_period text,
+  monthly_value numeric(14,2), size_sqm numeric(10,2), start_period text, end_period text,
   notes text, termination_reason text, signed_at date, terminated_at date,
   created_by uuid references public.user_profiles(id),
   created_at timestamptz not null default timezone('utc', now()),
@@ -88,6 +88,13 @@ create table if not exists public.drop_documents (
   created_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.app_notes (
+  key text primary key check (key in ('general', 'financial')),
+  content text not null default '',
+  updated_by uuid references public.user_profiles(id) on delete set null,
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
 create table if not exists public.email_logs (
   id uuid primary key default gen_random_uuid(),
   legacy_id bigint unique,
@@ -141,6 +148,7 @@ drop trigger if exists financial_periods_updated_at on public.financial_periods;
 drop trigger if exists financial_drop_items_updated_at on public.financial_drop_items; create trigger financial_drop_items_updated_at before update on public.financial_drop_items for each row execute function public.set_updated_at();
 drop trigger if exists loss_events_updated_at on public.loss_events; create trigger loss_events_updated_at before update on public.loss_events for each row execute function public.set_updated_at();
 drop trigger if exists lookup_values_updated_at on public.lookup_values; create trigger lookup_values_updated_at before update on public.lookup_values for each row execute function public.set_updated_at();
+drop trigger if exists app_notes_updated_at on public.app_notes; create trigger app_notes_updated_at before update on public.app_notes for each row execute function public.set_updated_at();
 
 create or replace function public.is_active_user() returns boolean language sql stable security definer set search_path = public as $$ select exists(select 1 from public.user_profiles where id=auth.uid() and is_active); $$;
 create or replace function public.is_admin() returns boolean language sql stable security definer set search_path = public as $$ select exists(select 1 from public.user_profiles where id=auth.uid() and is_active and role='admin'); $$;
@@ -167,6 +175,7 @@ alter table public.email_logs enable row level security;
 alter table public.financial_payment_history enable row level security;
 alter table public.audit_logs enable row level security;
 alter table public.lookup_values enable row level security;
+alter table public.app_notes enable row level security;
 
 create policy "profiles_read" on public.user_profiles for select to authenticated using (public.is_active_user());
 create policy "profiles_admin" on public.user_profiles for all to authenticated using (public.is_admin()) with check (public.is_admin());
@@ -186,6 +195,13 @@ create policy "audit_read" on public.audit_logs for select to authenticated usin
 create policy "audit_insert" on public.audit_logs for insert to authenticated with check (user_id=auth.uid());
 create policy "lookup_read" on public.lookup_values for select to authenticated using (public.is_active_user());
 create policy "lookup_write" on public.lookup_values for all to authenticated using (public.is_admin()) with check (public.is_admin());
+create policy "app_notes_read" on public.app_notes for select to authenticated using (public.is_active_user());
+create policy "app_notes_write" on public.app_notes for all to authenticated using (public.is_active_user()) with check (public.is_active_user());
+
+insert into public.app_notes (key, content) values
+  ('general', 'RDJ 17 VAI ATENDER ATÉ 24/05. PROCURAR OUTRO PARA O LUGAR DO RDJ 17'),
+  ('financial', E'CDM ATÉ 19/03\n\nTESTE\n\nTESTE2')
+on conflict (key) do nothing;
 
 insert into storage.buckets (id,name,public) values ('movidos-documents','movidos-documents',false) on conflict (id) do nothing;
 create policy "documents_storage_read" on storage.objects for select to authenticated using (bucket_id='movidos-documents' and public.is_active_user());
@@ -199,3 +215,21 @@ insert into public.lookup_values (category, value, sort_order) values
   ('zona', 'NORTE', 1), ('zona', 'SUL', 2), ('zona', 'LESTE', 3), ('zona', 'OESTE', 4), ('zona', 'CENTRO', 5),
   ('tipo_chave_pix', 'CPF', 1), ('tipo_chave_pix', 'CNPJ', 2), ('tipo_chave_pix', 'E-mail', 3), ('tipo_chave_pix', 'Telefone', 4), ('tipo_chave_pix', 'Aleatória', 5)
 on conflict (category, value) do nothing;
+
+-- Modelo de e-mail financeiro e desativação sem exclusão física.
+create table if not exists public.email_templates (
+  key text primary key, subject text not null default '', body text not null default '',
+  updated_by uuid references public.user_profiles(id) on delete set null,
+  updated_at timestamptz not null default timezone('utc', now())
+);
+alter table public.email_templates enable row level security;
+create policy "email_templates_read" on public.email_templates for select to authenticated using (public.is_active_user());
+create policy "email_templates_write" on public.email_templates for all to authenticated using (public.is_admin() or exists(select 1 from public.user_profiles where id=auth.uid() and role='financeiro' and is_active)) with check (public.is_admin() or exists(select 1 from public.user_profiles where id=auth.uid() and role='financeiro' and is_active));
+alter table public.drops add column if not exists is_active boolean not null default true;
+alter table public.drops add column if not exists deactivated_reason text;
+alter table public.drops add column if not exists deactivated_at timestamptz;
+alter table public.drops add column if not exists deactivated_by uuid references public.user_profiles(id) on delete set null;
+alter table public.drop_documents add column if not exists is_active boolean not null default true;
+alter table public.drop_documents add column if not exists deactivated_reason text;
+alter table public.drop_documents add column if not exists deactivated_at timestamptz;
+alter table public.drop_documents add column if not exists deactivated_by uuid references public.user_profiles(id) on delete set null;

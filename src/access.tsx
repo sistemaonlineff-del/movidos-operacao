@@ -1,12 +1,14 @@
 // @ts-nocheck
 import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from './lib/supabase'
+import { canManageDeliveryRoutes } from './routeAccess'
 
 const AccessContext = createContext<any>({ loading: true, isAdmin: false, can: () => false, refresh: async () => {} })
 export const permissionLabels: Record<string, string> = {
   cadastros_view: 'Ver cadastros', cadastros_create: 'Criar cadastros', cadastros_edit: 'Editar cadastros', cadastros_delete: 'Excluir cadastros',
   financeiro_view: 'Ver Financeiro', financeiro_manage: 'Gerenciar Financeiro',
-  funcionarios_view: 'Ver Funcionários', funcionarios_manage: 'Gerenciar Funcionários', configuracoes_manage: 'Configurações'
+  funcionarios_view: 'Ver Funcionários', funcionarios_manage: 'Gerenciar Funcionários', configuracoes_manage: 'Configurações',
+  label_reader_access: 'Leitor de etiquetas'
 }
 export function AccessProvider({ children }: any) {
   const [state, setState] = useState<any>({ loading: true, profile: null, permissions: {} })
@@ -22,7 +24,7 @@ export function AccessProvider({ children }: any) {
       supabase.from('user_profiles').select('id,email,full_name,role,is_active').eq('id', auth.user.id).single(),
       supabase.from('user_module_permissions').select('*').eq('user_id', auth.user.id).maybeSingle()
     ])
-    setState({ loading: false, profile, permissions: permissions ?? {} })
+    setState({ loading: false, profile, permissions: permissions ?? {}, canReadLabels: Boolean(profile?.is_active && (profile?.role === 'admin' || permissions?.label_reader_access)), canManageDeliveryRoutes: Boolean(profile?.is_active && (profile?.role === 'admin' || canManageDeliveryRoutes(auth.user.email))) })
   }
   useEffect(() => { void refresh() }, [])
   const isAdmin = state.profile?.role === 'admin' && state.profile?.is_active

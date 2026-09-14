@@ -1,0 +1,2 @@
+export const DROP_STATUSES = ['INTERESSADO', 'PICKUP - INTERESSADO', 'AG. ASSINATURA', 'CONTRATO ASSINADO', 'ENVIADO - AG. APROVAÇÃO', 'ATIVO', 'ATIVO - AG. LOGIN', 'ATIVO - AG. INSUMOS', 'CONGELADO', 'PROBLEMA', 'EXCLUÍDO']
+export const statusTone = (status: string) => status.startsWith('ATIVO') ? 'active' : /PROBLEMA|EXCLU/.test(status) ? 'problem' : status.includes('CONGELADO') ? 'frozen' : 'progress'

@@ -1,0 +1,26 @@
+.financial-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.financial-totals { background: #e5f3e0; color: #213d22; font-weight: 800; }
+.financial-totals td { white-space: nowrap; }
+.financial-totals th { color: inherit; letter-spacing: 0; }
+.financial-loss-total { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; padding: .7rem 0 1.2rem; }
+.financial-loss-total strong { color: #a33b2f; font-size: 1.1rem; }
+.financial-hint { color: #637278; font-size: .82rem; line-height: 1.5; }
+.financial-editor { width: min(900px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 1px solid #c8dadc; border-radius: 16px; padding: 1.5rem; color: #172f35; background: white; }
+.financial-editor::backdrop { background: #101820b8; }
+.financial-editor fieldset { padding: 0; border: 0; margin: 0; min-width: 0; }
+.financial-editor input, .financial-editor textarea { width: 100%; min-width: 0; }
+.financial-editor textarea { min-height: 100px; padding: .75rem; font: inherit; border: 1px solid #d5e4e5; border-radius: 8px; }
+.financial-editor .modal-actions { position: sticky; bottom: -1.5rem; padding: 1rem 0; background: white; }
+.app:has(.finance-visual-page) .content, .finance-visual-page, .finance-visual-page > .card { min-width: 0; }
+.finance-visual-page .table-wrap { max-height: 70vh; }
+.finance-visual-page table thead { position: sticky; top: 0; background: white; z-index: 1; }
+.finance-visual-page table { min-width: 1500px; }
+.finance-visual-page td { vertical-align: top; }
+.visual-filters input { padding: .68rem; }
+@media (max-width: 640px) { .visual-filters label { width: 100%; min-width: 0; } .financial-editor { padding: 1rem; } }
+@media (max-width: 850px) {
+  .app:has(.finance-visual-page) aside { min-width: 0; flex-wrap: wrap; gap: .5rem; }
+  .app:has(.finance-visual-page) nav { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+  .app:has(.finance-visual-page) .nav-submenu { display: flex; flex-wrap: wrap; width: 100%; }
+  .app:has(.finance-visual-page) nav .nav-submenu button { display: block; }
+}
