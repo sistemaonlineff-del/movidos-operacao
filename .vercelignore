@@ -1,6 +1,7 @@
 tmp/
 .tmp-contract-test/
 tests/
+outputs/
 supabase/
 .env*
 *.accdb

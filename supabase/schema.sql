@@ -42,6 +42,7 @@ create table if not exists public.financial_periods (
   id uuid primary key default gen_random_uuid(),
   label text not null,
   partner text not null,
+  reference_cnpj text check (reference_cnpj is null or reference_cnpj in ('JOTA EXPRESS', 'MOVIDOS', 'BELLY')),
   payment_date date,
   net_amount numeric(14,2),
   status text not null default 'aberto' check (status in ('aberto','congelado','pago')),

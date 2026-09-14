@@ -22,6 +22,7 @@ const options = (values: unknown[]) =>
   [...new Set(values.map(text).filter(Boolean))].sort((a, b) =>
     a.localeCompare(b, "pt-BR", { numeric: true }),
   );
+const referenceCnpjs = ["JOTA EXPRESS", "MOVIDOS", "BELLY"];
 const sum = (rows: DataRow[], field: string) =>
   round(rows.reduce((total, row) => total + number(row[field]), 0));
 const totalColumns = [
@@ -37,6 +38,7 @@ const totalColumns = [
   ["companyPayment", "Pagamento para Talita e Jorge"],
 ];
 const detailFields = [
+  ["referenceCnpj", "CNPJ de referÃªncia", "select"],
   ["period", "Período", "text"],
   ["drop", "DROP", "text"],
   ["partner", "Parceiro", "text"],
@@ -238,7 +240,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     setEditError("");
     try {
       if (
-        ![editing.period, editing.partner, editing.drop].every((value) =>
+        ![editing.period, editing.partner, editing.referenceCnpj, editing.drop].every((value) =>
           text(value),
         )
       )
@@ -263,6 +265,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           .insert({
             label: text(editing.period),
             partner: text(editing.partner),
+            reference_cnpj: text(editing.referenceCnpj),
             financial_view_id: originalPeriod?.financial_view_id ?? null,
             status: "aberto",
           })
@@ -270,6 +273,16 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           .single();
         if (result.error) throw result.error;
         period = result.data;
+      }
+      if (period && period.reference_cnpj !== text(editing.referenceCnpj)) {
+        const { data, error } = await supabase
+          .from("financial_periods")
+          .update({ reference_cnpj: text(editing.referenceCnpj) })
+          .eq("id", period.id)
+          .select()
+          .single();
+        if (error) throw error;
+        period = data;
       }
       const previous = notes(editing.raw.observation);
       const observation = JSON.stringify({
@@ -566,7 +579,17 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
               ([field, label, type]) => (
                 <label key={field}>
                   {label}
-                  <input
+                  {type === "select" ? (
+                    <select
+                      required
+                      value={editing[field] ?? ""}
+                      onChange={(event) => changeDetail(field, event.target.value)}
+                    >
+                      <option value="">Selecionar</option>
+                      {referenceCnpjs.map((value) => <option key={value}>{value}</option>)}
+                    </select>
+                  ) : (
+                    <input
                     autoFocus={field === "period"}
                     required={
                       ["period", "drop", "partner"].includes(field) ||
@@ -579,7 +602,8 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
                     onChange={(event) =>
                       changeDetail(field, event.target.value)
                     }
-                  />
+                    />
+                  )}
                 </label>
               ),
             )}
@@ -823,7 +847,7 @@ function PaymentDetails({
           </thead>
           <tbody>
             <tr className="financial-totals">
-              <th scope="row" colSpan={4}>
+              <th scope="row" colSpan={5}>
                 Total filtrado · {rows.length} registro(s)
               </th>
               <td>{sum(rows, "packages").toLocaleString("pt-BR")}</td>
@@ -892,7 +916,7 @@ function PaymentDetails({
                 </td>
               </tr>
             ))}
-            {!rows.length && <EmptyRow columns={15} />}
+            {!rows.length && <EmptyRow columns={16} />}
           </tbody>
         </table>
       </div>

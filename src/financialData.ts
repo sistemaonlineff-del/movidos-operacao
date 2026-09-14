@@ -168,6 +168,7 @@ export function buildDetails(
         periodId: row.financial_period_id,
         period: row.period_label ?? period?.label ?? "Sem período",
         partner: row.partner ?? period?.partner ?? "",
+        referenceCnpj: period?.reference_cnpj ?? "",
         drop: row.drop_name_snapshot ?? "",
       };
       const exact = registrations.get(

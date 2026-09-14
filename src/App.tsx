@@ -24,6 +24,7 @@ const ReadyMessages = lazy(() => import("./ReadyMessages"));
 const Documents = lazy(() => import("./Documents"));
 import { AccessProvider, Guard, useAccess } from "./access";
 import LabelReaderGate from "./LabelReaderGate";
+import { PARTNERS, ZONES, normalizePartner, normalizeZone } from "./dropOptions";
 
 const Lista = lazy(() => import("./CadastrosLista"));
 const DropMap = lazy(() => import("./DropMap"));
@@ -88,11 +89,11 @@ const ufs = [
   "TO",
 ];
 const times = Array.from(
-  { length: 29 },
+  { length: 48 },
   (_, i) =>
-    `${String(Math.floor((480 + i * 30) / 60)).padStart(2, "0")}:${String((480 + i * 30) % 60).padStart(2, "0")}`,
+    `${String(Math.floor((i * 30) / 60)).padStart(2, "0")}:${String((i * 30) % 60).padStart(2, "0")}`,
 );
-const partners = ["iMile", "J&T"];
+const partners = PARTNERS;
 const fields = [
   "status",
   "name",
@@ -139,6 +140,19 @@ const blank = (): Values =>
   Object.fromEntries(
     fields.map((k) => [k, k === "status" ? "INTERESSADO" : ""]),
   );
+// O cadastro legado (VBA/Access) gravava horários como "08h00".  Normalizamos
+// na leitura para que sejam selecionados corretamente e, ao salvar, permaneçam
+// no formato único "08:00".
+const normalizeTime = (value: unknown) => {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "--") return "";
+  const match = raw.match(/^(\d{1,2})\s*(?:h|:)\s*(\d{2})$/i);
+  if (!match) return raw;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return raw;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+};
 const digits = (v: string) => v.replace(/\D/g, "");
 const formatCep = (v: string) =>
   digits(v)
@@ -177,11 +191,13 @@ function Input({
   value,
   onChange,
   kind = "text",
+  items,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   kind?: string;
+  items?: string[];
 }) {
   const change = (raw: string) => {
     if (kind === "number") onChange(digits(raw));
@@ -199,11 +215,18 @@ function Input({
   return (
     <label>
       {label}
-      <input
-        type={kind === "email" ? "email" : "text"}
-        value={value}
-        onChange={(e) => change(e.target.value)}
-      />
+      {items ? (
+        <select value={value} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Selecionar</option>
+          {items.map((item) => <option key={item}>{item}</option>)}
+        </select>
+      ) : (
+        <input
+          type={kind === "email" ? "email" : "text"}
+          value={value}
+          onChange={(e) => change(e.target.value)}
+        />
+      )}
     </label>
   );
 }
@@ -609,10 +632,12 @@ function Cadastro() {
                         style: "currency",
                         currency: "BRL",
                       })
-                    : String(data[k])),
+                    : k.endsWith("_time")
+                      ? normalizeTime(data[k])
+                      : String(data[k])),
           );
-          if (/IMILE/i.test(next.partner)) next.partner = "iMile";
-          if (/J&T/i.test(next.partner)) next.partner = "J&T";
+          next.partner = normalizePartner(next.partner);
+          next.zone = normalizeZone(next.zone);
           setValues(next);
         }
         setLoading(false);
@@ -827,6 +852,7 @@ function Cadastro() {
               label="Zona / RegiÃ£o"
               value={values.zone}
               onChange={(v) => put("zone", v)}
+              items={ZONES}
             />
           </div>
         </section>
@@ -1185,6 +1211,12 @@ function SecureLayoutInner({
               {financeOpen && (
                 <div className="nav-submenu">
                   <button
+                    className={loc.pathname === "/financeiro/extravios" ? "sub-active" : ""}
+                    onClick={() => nav("/financeiro/extravios")}
+                  >
+                    Extravios
+                  </button>
+                  <button
                     className={
                       loc.pathname === "/financeiro" ? "sub-active" : ""
                     }
@@ -1218,16 +1250,6 @@ function SecureLayoutInner({
                   >
                     Gerar CNAB
                   </button>
-                  <button
-                    className={
-                      loc.pathname === "/financeiro/extravios"
-                        ? "sub-active"
-                        : ""
-                    }
-                    onClick={() => nav("/financeiro/extravios")}
-                  >
-                    Extravios
-                  </button>
                 </div>
               )}
             </>
@@ -1242,7 +1264,7 @@ function SecureLayoutInner({
           )}
           {(isAdmin || can("configuracoes_manage")) && (
             <button
-              className={loc.pathname === "/configuracoes" ? "active" : ""}
+              className={`${loc.pathname === "/configuracoes" ? "active" : ""} nav-settings`}
               onClick={() => nav("/configuracoes")}
             >
               Configurações
@@ -1250,7 +1272,7 @@ function SecureLayoutInner({
           )}
           {canReadLabels && (
             <button
-              className={loc.pathname === "/leitor-etiquetas" ? "active" : ""}
+              className={`${loc.pathname === "/leitor-etiquetas" ? "active" : ""} nav-label-reader`}
               onClick={() => nav("/leitor-etiquetas")}
             >
               Leitor de etiquetas
@@ -1258,19 +1280,19 @@ function SecureLayoutInner({
           )}
           {canManageDeliveryRoutes && (
             <button
-              className={loc.pathname === "/rotas-entrega" ? "active" : ""}
+              className={`${loc.pathname === "/rotas-entrega" ? "active" : ""} nav-routes`}
               onClick={() => nav("/rotas-entrega")}
             >
               Rotas de entrega
             </button>
           )}
           <button
-            className={loc.pathname === "/mensagens" ? "active" : ""}
+            className={`${loc.pathname === "/mensagens" ? "active" : ""} nav-messages`}
             onClick={() => nav("/mensagens")}
           >
             Mensagens prontas
           </button>
-          <button onClick={() => nav("/documentos")}>Documentos</button>
+          <button className={`nav-documents ${loc.pathname === "/documentos" ? "active" : ""}`} onClick={() => nav("/documentos")}>Documentos</button>
         </nav>
         <div className="side-bottom">
           <button className="link-button" onClick={onExit}>

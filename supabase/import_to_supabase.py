@@ -105,6 +105,40 @@ def coordinate(value: Any, limit: float) -> float | None:
     return converted if converted is not None and -limit <= converted <= limit else None
 
 
+def time(value: Any) -> str | None:
+    """Converte os horários do Access (por exemplo, 08h00) para HH:MM."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw or raw == "--":
+        return None
+    match = re.fullmatch(r"(\d{1,2})\s*(?:h|:)\s*(\d{2})", raw, re.IGNORECASE)
+    if not match:
+        return raw
+    hours, minutes = map(int, match.groups())
+    return f"{hours:02d}:{minutes:02d}" if hours < 24 and minutes < 60 else raw
+
+
+def partner(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    normalized = re.sub(r"\s+", " ", raw).upper()
+    if "IMILE" in normalized:
+        return "IMILE DELIVERY BRAZIL LTDA"
+    if re.search(r"\bJ\s*&\s*T\b", normalized):
+        return "J&T EXPRESS LTDA"
+    return raw
+
+
+def zone(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    normalized = raw.upper()
+    return "FORA DE SP" if normalized == "FORA SP" else normalized
+
+
 def post(table: str, rows: list[dict[str, Any]], conflict: str) -> None:
     for start in range(0, len(rows), 250):
         batch = rows[start:start + 250]
@@ -140,11 +174,11 @@ def main() -> None:
         status = (row.get("Status") or "INTERESSADO").strip()
         drops.append(clean({
             "legacy_id": row["ID"], "name": legacy_drop_name(row), "status": status if status in VALID_STATUSES else "INTERESSADO",
-            "partner": row.get("Parceiro"), "responsible": row.get("Responsavel"), "cpf": row.get("CPF"),
-            "phone": row.get("Tel"), "alternate_phone": row.get("Tel1"), "email": row.get("Email"), "zone": row.get("Zona"),
-            "weekday_opening_time": row.get("HASem"), "weekday_closing_time": row.get("HFSem"),
-            "saturday_opening_time": row.get("HASab"), "saturday_closing_time": row.get("HFSab"),
-            "weekday_scan_time": row.get("HorarioBipagemSem"), "saturday_scan_time": row.get("HorarioBipagemSab"),
+            "partner": partner(row.get("Parceiro")), "responsible": row.get("Responsavel"), "cpf": row.get("CPF"),
+            "phone": row.get("Tel"), "alternate_phone": row.get("Tel1"), "email": row.get("Email"), "zone": zone(row.get("Zona")),
+            "weekday_opening_time": time(row.get("HASem")), "weekday_closing_time": time(row.get("HFSem")),
+            "saturday_opening_time": time(row.get("HASab")), "saturday_closing_time": time(row.get("HFSab")),
+            "weekday_scan_time": time(row.get("HorarioBipagemSem")), "saturday_scan_time": time(row.get("HorarioBipagemSab")),
             "address": row.get("Logradouro"), "address_number": row.get("Numero"), "complement": row.get("Complemento"),
             "neighborhood": row.get("Bairro"), "postal_code": row.get("CEP"), "municipality": row.get("Municipio"), "state": row.get("UF"),
             "monthly_value": number(row.get("Valor")), "pix_key": row.get("Pix"), "pix_holder_name": row.get("NomePix"), "notes": (row.get("Anotações") or "") + (f"\n[Valor legado não numérico: {row['Valor']}]" if row.get("Valor") and number(row.get("Valor")) is None else "") + (f"\n[Coordenadas legadas inválidas: {row.get('Latitude')}, {row.get('Longitude')}]" if (row.get("Latitude") and coordinate(row.get("Latitude"), 90) is None) or (row.get("Longitude") and coordinate(row.get("Longitude"), 180) is None) else ""),

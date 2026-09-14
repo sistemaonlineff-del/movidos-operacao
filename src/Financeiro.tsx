@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx'
 import { buildDetails, buildTotals, notes } from './financialData'
 import { readFinancialRows } from './financialStore'
 import { supabase } from './lib/supabase'
+import { normalizePartner } from './dropOptions'
 
 type Row = Record<string, unknown>
 type View = { id:string; title:string; source_file_name:string; source_rows:number; import_status:string; created_at:string; notes?:string|null }
@@ -17,6 +18,9 @@ const number=(value:unknown)=>{
 }
 const required=(row:Row, columns:string[])=>columns.every(column=>text(row[column]))
 const hasColumns=(headers:unknown[],columns:string[])=>columns.every(column=>headers.includes(column))
+const referenceCnpjs=['JOTA EXPRESS','MOVIDOS','BELLY'] as const
+const referenceCnpj=(value:unknown)=>text(value).toLocaleUpperCase('pt-BR')
+const validReferenceCnpj=(value:unknown)=>referenceCnpjs.includes(referenceCnpj(value) as typeof referenceCnpjs[number])
 const excelDate=(value:unknown)=>{
   if(value instanceof Date&&!Number.isNaN(value.getTime()))return `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}T${String(value.getHours()).padStart(2,'0')}:${String(value.getMinutes()).padStart(2,'0')}:00`
   const raw=text(value)
@@ -31,7 +35,7 @@ const excelDate=(value:unknown)=>{
   const parsed=new Date(raw)
   return Number.isNaN(parsed.getTime())?null:parsed.toISOString()
 }
-const hasInvalidRows=(closing:Row[],losses:Row[])=>closing.some(row=>!required(row,['Periodo','Parceiro','Drop'])||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0)||losses.some(row=>!required(row,['Periodo','Parceiro','Drop'])||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento)))
+const hasInvalidRows=(closing:Row[],losses:Row[])=>closing.some(row=>!required(row,['Periodo','Parceiro','Drop','CNPJReferencia'])||!validReferenceCnpj(row.CNPJReferencia)||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0)||losses.some(row=>!required(row,['Periodo','Parceiro','Drop','CNPJReferencia'])||!validReferenceCnpj(row.CNPJReferencia)||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento)))
 const money=(value:unknown)=>number(value).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})
 const reimbursementFromNotes=(notes:string|null|undefined)=>{try{const parsed=JSON.parse(notes??'{}');return number(parsed.reimbursement ?? parsed.summary?.reimbursement)}catch{return 0}}
 
@@ -113,11 +117,14 @@ export default function Financeiro(){
       const close=XLSX.utils.sheet_to_json<Row>(closeSheet,{defval:''}), loss=XLSX.utils.sheet_to_json<Row>(lossSheet,{defval:''})
       const closeHeaders=(XLSX.utils.sheet_to_json(closeSheet,{header:1,defval:''})[0]??[]) as unknown[]
       const lossHeaders=(XLSX.utils.sheet_to_json(lossSheet,{header:1,defval:''})[0]??[]) as unknown[]
+      if(!hasColumns(closeHeaders,['CNPJReferencia'])||!hasColumns(lossHeaders,['CNPJReferencia']))throw new Error('Baixe o modelo atualizado: a coluna CNPJReferencia Ã© obrigatÃ³ria nas duas abas.')
       if(!hasColumns(closeHeaders,['Periodo','Parceiro','Drop','QuantidadePacote'])||!hasColumns(lossHeaders,['Periodo','Parceiro','Drop','Waybill','CodigoEtiqueta','Saca','Status','Seller','DataRecebimento','ValorExtravio','Obs']))throw new Error('As colunas do modelo foram alteradas. Baixe o modelo atualizado e mantenha os cabeçalhos.')
       if(!close.length)throw new Error('A aba Fechamento não possui linhas para importar.')
-      const closingForPeriod=close.map(row=>({...row,Periodo:period}) as Row)
-      const lossesForPeriod=loss.map(row=>({...row,Periodo:period}) as Row)
-      const invalid=closingForPeriod.filter(row=>!required(row,['Periodo','Parceiro','Drop'])||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0).length+lossesForPeriod.filter(row=>!required(row,['Periodo','Parceiro','Drop'])||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento))).length
+      const closingForPeriod=close.map(row=>({...row,Periodo:period,Parceiro:normalizePartner(text(row.Parceiro)),CNPJReferencia:referenceCnpj(row.CNPJReferencia)}) as Row)
+      const lossesForPeriod=loss.map(row=>({...row,Periodo:period,Parceiro:normalizePartner(text(row.Parceiro)),CNPJReferencia:referenceCnpj(row.CNPJReferencia)}) as Row)
+      const invalid=closingForPeriod.filter(row=>!required(row,['Periodo','Parceiro','Drop','CNPJReferencia'])||!validReferenceCnpj(row.CNPJReferencia)||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0).length+lossesForPeriod.filter(row=>!required(row,['Periodo','Parceiro','Drop','CNPJReferencia'])||!validReferenceCnpj(row.CNPJReferencia)||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento))).length
+      const references=new Map<string,string>()
+      for(const row of [...closingForPeriod,...lossesForPeriod]){const key=`${text(row.Periodo)}|${text(row.Parceiro)}`,value=referenceCnpj(row.CNPJReferencia),existing=references.get(key);if(existing&&existing!==value)throw new Error(`O parceiro ${text(row.Parceiro)} possui mais de um CNPJ de referÃªncia no mesmo fechamento.`);references.set(key,value)}
       setClosing(closingForPeriod);setLosses(lossesForPeriod);setTitle(period);setSourceFile(file.name)
       if(invalid){setMessage(`${invalid} linha(s) precisam ser corrigidas antes da importação.`);return}
       await importView(closingForPeriod,lossesForPeriod,period,file.name)
@@ -165,7 +172,7 @@ export default function Financeiro(){
     try{
       const {data:view,error:viewError}=await supabase.from('financial_views').insert({title:sourceTitle,source_file_name:sourceFileName||`${sourceTitle}.xlsx`,source_rows:sourceClosing.length+sourceLosses.length,import_status:'rascunho'}).select().single()
       if(viewError)throw viewError
-      const groups=[...new Map([...sourceClosing,...sourceLosses].map(row=>[`${text(row.Periodo)}|${text(row.Parceiro)}`,{label:text(row.Periodo),partner:text(row.Parceiro)}])).values()]
+      const groups=[...new Map([...sourceClosing,...sourceLosses].map(row=>[`${text(row.Periodo)}|${text(row.Parceiro)}`,{label:text(row.Periodo),partner:text(row.Parceiro),reference_cnpj:referenceCnpj(row.CNPJReferencia)}])).values()]
       const {data:periods,error:periodError}=await supabase.from('financial_periods').insert(groups.map(group=>({...group,financial_view_id:view.id,status:'aberto'}))).select()
       if(periodError)throw periodError
       const periodIndex=new Map((periods??[]).map(period=>[`${period.label}|${period.partner}`,period.id]))

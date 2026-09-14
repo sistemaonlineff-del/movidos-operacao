@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "./lib/supabase";
-import { DROP_STATUSES, statusTone } from "./dropOptions";
+import { DROP_STATUSES, normalizePartner, normalizeZone, statusTone } from "./dropOptions";
 import { useAccess } from "./access";
 import "./cadastros-lista.css";
 
@@ -127,8 +127,8 @@ function readOptions() {
         .range(from, from + 999);
       if (error) throw error;
       for (const row of data ?? []) {
-        if (row.partner) partners.add(row.partner);
-        if (row.zone) zones.add(row.zone);
+        if (row.partner) partners.add(normalizePartner(row.partner));
+        if (row.zone) zones.add(normalizeZone(row.zone));
       }
       if ((data ?? []).length < 1000) break;
     }
