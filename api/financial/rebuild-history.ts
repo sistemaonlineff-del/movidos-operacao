@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 
 type HistoryRow = { period: string; drop: string; partner: string; packageType: string; w2d: number; d2d: number; quantity: number; agreed: number; subtotal: number; lossAmount: number; reimbursement: number; receivable: number; paymentDate: string | null; pixKey: string }
 type LossRow = { period: string; drop: string; waybill: string; labelCode: string; bagCode: string; status: string; seller: string; receivedAt: string | null; amount: number; observation: string }
-type DropRow = { name: string; partner: string; agreed: number; pixKey: string; email: string }
+type DropRow = { name: string; agreed: number; pixKey: string; email: string }
 type SummaryRow = { period:string; observation:string; gross:number; w2d:number; d2d:number; loss:number; reimbursement:number; invoice:number; paidDrops:number; deducted:number; assumed:number; talitaJorge:number; paymentDate:string|null }
 const text = (value: unknown) => String(value ?? '').trim()
 const number = (value: unknown) => {
@@ -44,7 +44,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     status: text(row.status), seller: text(row.seller), receivedAt: text(row.receivedAt) || null, amount: number(row.amount), observation: text(row.observation),
   })).filter(row => row.period && row.drop)
   const drops: DropRow[] = (Array.isArray(req.body?.drops) ? req.body.drops : []).map((row: any) => ({
-    name: text(row.name), partner: text(row.partner), agreed: number(row.agreed), pixKey: text(row.pixKey), email: text(row.email),
+    name: text(row.name), agreed: number(row.agreed), pixKey: text(row.pixKey), email: text(row.email),
   })).filter(row => row.name)
   const sourceFile = text(req.body?.sourceFile) || 'Pasta1.xlsx'
   const summaries:SummaryRow[]=(Array.isArray(req.body?.summaries)?req.body.summaries:[]).map((row:any)=>({period:text(row.period),observation:text(row.observation),gross:number(row.gross),w2d:number(row.w2d),d2d:number(row.d2d),loss:number(row.loss),reimbursement:number(row.reimbursement),invoice:number(row.invoice),paidDrops:number(row.paidDrops),deducted:number(row.deducted),assumed:number(row.assumed),talitaJorge:number(row.talitaJorge),paymentDate:text(row.paymentDate)||null})).filter(row=>row.period)
@@ -71,7 +71,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (dropsError) throw dropsError
       const byName = new Map((existingDrops ?? []).map(drop => [dropKey(drop.name), drop.id]))
       for (const item of drops) {
-        const payload = { partner: item.partner || null, monthly_value: item.agreed || null, pix_key: item.pixKey || null, email: item.email || null }
+        // O arquivo financeiro antigo usa a coluna "PARCEIRO" para nomes de
+        // pessoas. Preserve o parceiro operacional já cadastrado.
+        const payload = { monthly_value: item.agreed || null, pix_key: item.pixKey || null, email: item.email || null }
         const id = byName.get(dropKey(item.name))
         const result = id ? await admin.from('drops').update(payload).eq('id', id) : await admin.from('drops').insert({ ...payload, name: item.name, status: 'ATIVO' })
         if (result.error) throw result.error

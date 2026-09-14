@@ -145,7 +145,9 @@ export default function Financeiro(){
         const totalRows=workbook.Sheets['Pgto Total']?XLSX.utils.sheet_to_json<any[]>(workbook.Sheets['Pgto Total'],{header:1,defval:''}):[]
         payload=details.slice(3).map(row=>({period:text(row[12]),drop:text(row[13]),partner:text(row[14]),packageType:text(row[15]),quantity:number(row[16]),agreed:number(row[17]),subtotal:number(row[18]),w2d:number(row[19]),d2d:number(row[20]),lossAmount:number(row[21]),reimbursement:number(row[22]),receivable:number(row[23]),paymentDate:excelDate(row[24]),pixKey:text(row[25])})).filter(row=>row.period&&row.drop)
         losses=lossRows.slice(3).map(row=>({period:text(row[0]),drop:text(row[1]),waybill:text(row[2]),labelCode:text(row[3]),bagCode:text(row[4]),status:text(row[5]),seller:text(row[6]),receivedAt:excelDate(row[7]),amount:number(row[8]),observation:text(row[9])})).filter(row=>row.period&&row.drop)
-        drops=registration.slice(1).map(row=>({name:text(row[0]),partner:text(row[1]),agreed:number(row[2]),pixKey:text(row[3]),email:text(row[4])})).filter(row=>row.name&&row.partner)
+        // A coluna B do cadastro financeiro tem nomes de pessoas apesar do
+        // cabeçalho "PARCEIRO". Ela nunca deve sobrescrever o parceiro do DROP.
+        drops=registration.slice(1).map(row=>({name:text(row[0]),agreed:number(row[2]),pixKey:text(row[3]),email:text(row[4])})).filter(row=>row.name)
         summaries=totalRows.slice(2).map(row=>({period:text(row[0]),observation:text(row[1]),gross:number(row[2]),w2d:number(row[3]),d2d:number(row[4]),loss:number(row[5]),reimbursement:number(row[6]),invoice:number(row[7]),paidDrops:number(row[8]),deducted:number(row[9]),assumed:number(row[10]),talitaJorge:number(row[11]),paymentDate:excelDate(row[12])})).filter(row=>row.period)
       }else{
         const sheet=workbook.Sheets.Planilha1
