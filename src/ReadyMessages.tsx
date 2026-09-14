@@ -69,12 +69,12 @@ export default function ReadyMessages() {
   }
   return <section className="ready-messages">
     <section className="card visual-heading"><div><p className="eyebrow">ATENDIMENTO</p><h2>Mensagens prontas</h2><p>Textos do cadastro-base antigo, prontos para copiar e enviar.</p></div></section>
-    <div className="ready-message-grid">{messages.map(message => <article className="card ready-message" key={message.title}>
-      <div className="ready-message-heading"><h3>{message.title}</h3><button className="secondary" onClick={() => void copy(message.title, message.text)}>{copied === message.title ? 'Copiado!' : 'Copiar mensagem'}</button></div>
-      <pre>{message.text}</pre>
-    </article>)}<article className="card ready-message ready-message-draft">
+    <div className="ready-message-grid"><article className="card ready-message ready-message-draft">
       <div className="ready-message-heading"><h3>Rascunho</h3><button className="secondary" disabled={!draft.trim()} onClick={() => void copy('Rascunho', draft)}>{copied === 'Rascunho' ? 'Copiado!' : 'Copiar rascunho'}</button></div>
       <textarea value={draft} onChange={event => setDraft(event.target.value)} placeholder="Escreva aqui uma mensagem livre…" aria-label="Rascunho de mensagem" />
-    </article></div>
+    </article>{messages.map(message => <article className="card ready-message" key={message.title}>
+      <div className="ready-message-heading"><h3>{message.title}</h3><button className="secondary" onClick={() => void copy(message.title, message.text)}>{copied === message.title ? 'Copiado!' : 'Copiar mensagem'}</button></div>
+      <pre>{message.text}</pre>
+    </article>)}</div>
   </section>
 }
