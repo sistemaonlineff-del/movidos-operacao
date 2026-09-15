@@ -50,3 +50,13 @@ As duas novas migrações foram testadas em PostgreSQL local em memória, **não
 - `npm run build`: TypeScript e bundle de produção.
 - Com `npm run dev -- --host 127.0.0.1` na porta 5173 e Microsoft Edge instalado, executar `npm run test:browser`. O teste usa sessão fictícia, câmera simulada e intercepta todas as chamadas externas; não grava dados reais. Capturas e PDFs ficam em `tmp/browser-tests`, fora do Git.
 - A aplicação interativa local continua apontando para o Supabase configurado em `src/lib/supabase.ts`. Não usar registros reais como dados de teste. As APIs Vercel `/api/label-*` não são servidas pelo Vite; o OCR e a pré-rota reais exigem o backend configurado. Os testes de câmera validam a fila e os resultados com respostas simuladas, não a precisão do OCR real.
+
+### Leitor na prévia local
+
+O Vite não executa as funções Vercel. Sem backend, as rotas do leitor retornam JSON com status 503 e uma mensagem de configuração, sem tentar carregar o código da API como frontend.
+
+Para usar um backend publicado autorizado, definir `MOVIDOS_BACKEND_URL` em `.env.local` com a origem HTTPS oficial (sem `/api`, parâmetros ou credenciais) e reiniciar o Vite. Somente `/api/label-routes`, `/api/label-read` e `/api/label-volume` são encaminhadas. A autenticação existente é mantida e o TLS é validado; não colocar chaves Gemini ou service_role em variáveis `VITE_*`.
+
+A sessão será encaminhada ao backend escolhido. Capturar etiquetas pode consumir a API de OCR e gravar pré-rotas nesse ambiente. Não apontar para produção sem autorização. Nenhum endereço remoto foi configurado automaticamente.
+
+As funções do leitor dependem de `server/label-auth.ts`, incluído no projeto e resolvido pelos imports `.js` durante a compilação. O módulo valida o token no Supabase, o perfil ativo e a permissão `label_reader_access`; administradores ativos têm acesso. O backend requer `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY`, e o OCR requer `GEMINI_API_KEY`, somente no servidor. `npm test` também compila e carrega as três APIs e valida a autorização com chamadas simuladas, sem consumir OCR nem gravar volumes. O build do frontend sozinho não valida essas funções.
