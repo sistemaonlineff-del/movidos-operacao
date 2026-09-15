@@ -1142,7 +1142,7 @@ function SecureLayoutInner({
     loc.pathname.startsWith("/financeiro"),
   );
   const labels: Record<string, string> = {
-    "/": "Visão geral",
+    "/": "Visão Geral - Detalhada",
     "/cadastros": "Cadastros",
     "/cadastros/novo": "Novo cadastro",
     "/cadastros/last-mile": "Cadastros Last Mile",
