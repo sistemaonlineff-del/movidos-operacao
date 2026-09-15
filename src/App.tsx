@@ -1223,7 +1223,7 @@ function SecureLayoutInner({
                     }
                     onClick={() => nav("/financeiro")}
                   >
-                    Importar fechamento
+                    Importar base
                   </button>
                   <button
                     className={

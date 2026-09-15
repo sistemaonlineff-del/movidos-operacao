@@ -25,3 +25,8 @@
   .app:has(.finance-visual-page) nav .nav-submenu button { display: block; }
 }
 .finance-history{display:none}
+/* Os rótulos AGU eram somente exemplo. Mantemos os dados e exibimos a
+   nomenclatura do fechamento real. */
+.finance-page .table-wrap th:nth-child(7),.finance-page .table-wrap th:nth-child(9){font-size:0}
+.finance-page .table-wrap th:nth-child(7)::after{content:'Valor bruto a receber';font-size:.75rem}
+.finance-page .table-wrap th:nth-child(9)::after{content:'Total a receber';font-size:.75rem}
