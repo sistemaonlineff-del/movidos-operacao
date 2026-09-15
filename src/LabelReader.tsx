@@ -11,6 +11,20 @@ import LabelBatchReader from './LabelBatchReader'
 const READ_MAX_EDGE = 1600
 const READ_JPEG_QUALITY = 0.75
 
+type CameraBatchItem = {
+  id: string
+  num: number
+  image: string
+  status: 'na_fila' | 'lendo' | 'concluido' | 'erro'
+  address?: string
+  primaryZone?: string
+  primaryRoute?: string
+  primarySeq?: number | null
+  matchCount?: number
+  routeSaveMsg?: string
+  error?: string
+}
+
 export default function LabelReader() {
   const [base, setBase] = useState<LabelBase | null>(null)
   const [baseError, setBaseError] = useState('')
@@ -28,6 +42,9 @@ export default function LabelReader() {
   const [cameraStarting, setCameraStarting] = useState(false)
   const [extraction, setExtraction] = useState<LabelExtraction | null>(null)
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
+  const [cameraItems, setCameraItems] = useState<CameraBatchItem[]>([])
+  const [captureToast, setCaptureToast] = useState('')
+
   const requestRef = useRef<AbortController | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -35,6 +52,8 @@ export default function LabelReader() {
   const runId = useRef(0)
   const operation = useRef(false)
   const scanKey = useRef('')
+  const processingRef = useRef(new Set<string>())
+
   const matches = useMemo(() => findLabelMatches(query, base?.records ?? []), [query, base])
   const primaryMatch = matches.length === 1 ? matches[0] : null
   const ceps = postalCodes(query)
@@ -47,6 +66,7 @@ export default function LabelReader() {
       requestRef.current?.abort()
     }
   }, [])
+
   useEffect(() => {
     const controller = new AbortController()
     setBaseError(''); setBase(null)
@@ -69,12 +89,99 @@ export default function LabelReader() {
     })()
     return () => controller.abort()
   }, [retry])
+
   useEffect(() => {
     if (camera && videoRef.current && streamRef.current) {
       videoRef.current.srcObject = streamRef.current
       void videoRef.current.play().catch(() => setError('Não foi possível exibir a câmera. Envie uma foto para continuar.'))
     }
   }, [camera])
+
+  // Queue runner for continuous camera captures
+  useEffect(() => {
+    if (!base || !cameraItems.length) return
+    const pending = cameraItems.filter(item => item.status === 'na_fila' && !processingRef.current.has(item.id))
+    const inProgress = cameraItems.filter(item => item.status === 'lendo').length
+    const maxConcurrent = 3
+    const canStartCount = Math.max(0, maxConcurrent - inProgress)
+
+    if (pending.length === 0 || canStartCount === 0) return
+
+    const toStart = pending.slice(0, canStartCount)
+    toStart.forEach(item => {
+      processingRef.current.add(item.id)
+      setCameraItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'lendo' } : i))
+
+      void (async () => {
+        try {
+          const { data } = await supabase!.auth.getSession()
+          const response = await fetch('/api/label-read', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: item.image }),
+            cache: 'no-store'
+          })
+          const result = await response.json()
+          if (!response.ok) throw new Error(result.error || 'Não foi possível ler a etiqueta.')
+          const reading = parseLabelExtraction(result.extraction)
+          const address = extractionQuery(reading)
+          const foundMatches = findLabelMatches(address, base.records)
+
+          let primaryZone = ''
+          let primaryRoute = ''
+          let primarySeq: number | null = null
+          let saveMsg = ''
+
+          if (foundMatches.length === 1) {
+            const m = foundMatches[0]
+            primaryZone = String(m.record.zone || m.record.region || 'Não informada')
+            primaryRoute = String(m.record.route || 'A definir')
+            primarySeq = m.record.deliverySequence ?? null
+
+            if (canStoreAutomatically(foundMatches)) {
+              try {
+                const itemScanKey = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+                const volRes = await fetch('/api/label-volume', {
+                  method: 'POST',
+                  headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ baseId: String(m.record.id), scanKey: itemScanKey }),
+                  cache: 'no-store'
+                })
+                const volData = await volRes.json()
+                if (volRes.ok) {
+                  saveMsg = `${volData.duplicate ? 'Já na pré-rota' : 'Adicionado na pré-rota'} (Lote ${volData.batch})`
+                }
+              } catch {
+                // Ignore volume save error in queue item background
+              }
+            }
+          }
+
+          if (!alive.current) return
+          setCameraItems(prev => prev.map(i => i.id === item.id ? {
+            ...i,
+            status: 'concluido',
+            address,
+            matchCount: foundMatches.length,
+            primaryZone,
+            primaryRoute,
+            primarySeq,
+            routeSaveMsg: saveMsg,
+            error: foundMatches.length === 0 ? (address ? 'Fora da cobertura da base' : 'Endereço não identificado na foto') : undefined
+          } : i))
+        } catch (err) {
+          if (!alive.current) return
+          setCameraItems(prev => prev.map(i => i.id === item.id ? {
+            ...i,
+            status: 'erro',
+            error: err instanceof Error ? err.message : 'Falha na leitura.'
+          } : i))
+        } finally {
+          processingRef.current.delete(item.id)
+        }
+      })()
+    })
+  }, [cameraItems, base])
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach(track => track.stop())
@@ -96,6 +203,7 @@ export default function LabelReader() {
   const clearReading = () => { setQuery(''); setDetected(false); setReadDone(false); setError(''); setRouteSave(''); setExtraction(null) }
   const newScanKey = () => { scanKey.current = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}` }
   const canStoreAutomatically = (found: LabelMatch[]) => found.length === 1 && found[0].streetMatch && !found[0].warnings.some(warning => /nome aproximado|bairro divergente|rua não confirmada|cep lido é diferente/i.test(warning))
+  
   const saveInRoute = async (match: LabelMatch, id: number) => {
     if (!scanKey.current) return
     setRouteSave('Adicionando à pré-rota...')
@@ -109,6 +217,7 @@ export default function LabelReader() {
       if (alive.current && id === runId.current) setRouteSave(err instanceof Error ? err.message : 'Não foi possível adicionar o volume à pré-rota.')
     }
   }
+
   const recognize = async (image: string, id: number, prepared = false) => {
     const controller = new AbortController(); requestRef.current = controller
     const timeout = setTimeout(() => controller.abort(), 38000)
@@ -150,6 +259,7 @@ export default function LabelReader() {
       if (alive.current && id === runId.current) { setBusy(false); setProgress(''); operation.current = false }
     }
   }
+
   const loadPhoto = async (file?: File) => {
     if (!file || operation.current) return
     clearReading()
@@ -172,17 +282,30 @@ export default function LabelReader() {
       if (alive.current && id === runId.current) { setError('Não foi possível abrir essa imagem. Tente um JPG ou PNG.'); setBusy(false); operation.current = false }
     } finally { URL.revokeObjectURL(url) }
   }
-  const capture = () => {
+
+  // Non-blocking rapid capture for Camera Mode
+  const captureCameraBatch = () => {
     const video = videoRef.current
-    if (!video?.videoWidth || operation.current) return
+    if (!video?.videoWidth) return
     const canvas = document.createElement('canvas')
     const scale = Math.min(1, READ_MAX_EDGE / Math.max(video.videoWidth, video.videoHeight))
     canvas.width = Math.round(video.videoWidth * scale); canvas.height = Math.round(video.videoHeight * scale)
     canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height)
     const data = canvas.toDataURL('image/jpeg', READ_JPEG_QUALITY)
-    clearReading(); newScanKey(); operation.current = true; setBusy(true)
-    void recognize(data, ++runId.current, true)
+
+    const num = cameraItems.length + 1
+    const newItem: CameraBatchItem = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      num,
+      image: data,
+      status: 'na_fila'
+    }
+
+    setCameraItems(prev => [newItem, ...prev])
+    setCaptureToast(`Pacote #${num} fotografado! Lendo em segundo plano...`)
+    setTimeout(() => setCaptureToast(t => t.includes(`#${num}`) ? '' : t), 2500)
   }
+
   const rotate = async () => {
     if (!photo || operation.current) return
     operation.current = true; setBusy(true); clearReading()
@@ -198,17 +321,38 @@ export default function LabelReader() {
     runId.current++; requestRef.current?.abort(); requestRef.current = null; operation.current = false; setBusy(false); setProgress(''); setError('Leitura cancelada. Você pode enviar outra foto.')
   }
 
+  const selectCameraItemDetails = (item: CameraBatchItem) => {
+    if (!item.address) return
+    setQuery(item.address)
+    setPhoto(item.image)
+    setReadDone(true)
+  }
+
   if (!base) return <section className="card label-reader">{baseError ? <><p role="alert">{baseError}</p><button onClick={() => setRetry(value => value + 1)}>Tentar novamente</button></> : <p role="status">Carregando base e conferindo acesso...</p>}</section>
+
+  const completedCount = cameraItems.filter(i => i.status === 'concluido' || i.status === 'erro').length
+  const pendingCount = cameraItems.filter(i => i.status === 'na_fila' || i.status === 'lendo').length
+
   return <div className="label-reader">
-    <section className="card label-intro"><span className="label-badge">TESTE PRIVADO</span><h2>Leia a etiqueta e consulte a base</h2><p>Fotografe de perto, com o endereço inteiro e boa iluminação. A leitura traz rua, bairro, cidade e CEP para localizar a rota.</p><p className="label-muted">Base: {base.records.length} registros · {[...new Set(base.records.map(record => record.city))].join(' · ')}.</p></section>
+    <section className="card label-intro"><span className="label-badge">OPERAÇÃO RÁPIDA</span><h2>Leia a etiqueta e consulte a base</h2><p>Fotografe de perto, com o endereço inteiro e boa iluminação. Na câmera contínua, você pode disparar foto por foto sem parar; a leitura roda em segundo plano.</p><p className="label-muted">Base: {base.records.length} registros · {[...new Set(base.records.map(record => record.city))].join(' · ')}.</p></section>
     {aiConfigured !== true && <section className="card" role="status"><h3>{aiConfigured === null ? 'Preparando leitura...' : 'Leitura automática indisponível'}</h3><p>{baseError || 'A consulta digitada à base continua disponível.'}</p><button onClick={() => { setAiConfigured(null); setRetry(value => value + 1) }}>Tentar novamente</button></section>}
     <LabelBatchReader base={base} />
     <div className="label-grid">
       <section className="card"><h3>1. Foto da etiqueta</h3>{!camera && <div className="label-actions">
-        <button className="primary" onClick={() => void startCamera()} disabled={busy || cameraStarting || aiConfigured !== true}>{cameraStarting ? 'Abrindo...' : 'Abrir leitura contínua'}</button>
+        <button className="primary" onClick={() => void startCamera()} disabled={busy || cameraStarting || aiConfigured !== true}>{cameraStarting ? 'Abrindo...' : 'Abrir leitura contínua sem pausa'}</button>
         <label className={`label-file ${busy ? 'disabled' : ''}`}>Enviar foto<input aria-label="Enviar foto" type="file" accept="image/jpeg,image/png,image/webp,image/bmp" disabled={busy || aiConfigured !== true} onChange={event => { void loadPhoto(event.target.files?.[0]); event.target.value = '' }} /></label>
       </div>}
-      {camera && <div><div className="label-camera-frame"><video ref={videoRef} autoPlay muted playsInline onLoadedData={() => setCameraReady(true)} aria-label="Câmera da etiqueta" /><span>Use o celular deitado e enquadre somente a etiqueta</span></div><div className="label-actions"><button className="primary" onClick={capture} disabled={!cameraReady || busy}>{busy ? 'Lendo...' : 'Capturar e ler'}</button><button onClick={stopCamera}>Fechar câmera</button></div>{readDone && !busy && <p className="camera-ready">Câmera pronta para a próxima etiqueta.</p>}</div>}
+      {camera && <div>
+        <div className="label-camera-frame">
+          <video ref={videoRef} autoPlay muted playsInline onLoadedData={() => setCameraReady(true)} aria-label="Câmera da etiqueta" />
+          <span>Modo disparo sem pausa: tire a foto e passe para o próximo pacote!</span>
+        </div>
+        {captureToast && <p className="camera-toast">{captureToast}</p>}
+        <div className="label-actions">
+          <button className="primary" onClick={captureCameraBatch} disabled={!cameraReady}>📸 CAPTURAR PACOTE #{cameraItems.length + 1}</button>
+          <button onClick={stopCamera}>Fechar câmera</button>
+        </div>
+      </div>}
       {!camera && (photo ? <img className="label-photo" src={photo} alt="Etiqueta selecionada para leitura" /> : <div className="label-placeholder">A foto da etiqueta aparecerá aqui.</div>)}
       {photo && !camera && <div className="label-actions"><button disabled={busy} onClick={() => void rotate()}>Girar 90° e reler</button><button disabled={busy} onClick={() => { if (operation.current) return; operation.current = true; setBusy(true); clearReading(); void recognize(photo, ++runId.current) }}>Ler novamente</button><button disabled={busy} onClick={() => { clearReading(); setPhoto('') }}>Limpar etiqueta</button></div>}
       {busy && <div className="label-progress" role="status"><p>{progress}</p><button onClick={cancel}>Cancelar leitura</button></div>}
@@ -225,9 +369,49 @@ export default function LabelReader() {
         {ceps.length > 0 && <p>CEPs no texto da consulta: <strong>{ceps.join(', ')}</strong></p>}</div>
       </section>
     </div>
+
+    {cameraItems.length > 0 && (
+      <section className="card camera-batch-section">
+        <div className="camera-batch-header">
+          <div>
+            <h3>Fila de Leitura da Câmera (Sem Pausa)</h3>
+            <p className="label-muted">Total: {cameraItems.length} pacotes · {completedCount} concluídos · {pendingCount} em andamento</p>
+          </div>
+          <button onClick={() => setCameraItems([])}>Limpar fila da câmera</button>
+        </div>
+        <div className="camera-batch-grid">
+          {cameraItems.map(item => (
+            <div key={item.id} className={`camera-batch-item batch-item-${item.status}`} onClick={() => selectCameraItemDetails(item)}>
+              <div className="item-num">#{item.num}</div>
+              <img src={item.image} alt={`Pacote #${item.num}`} className="item-thumb" />
+              <div className="item-details">
+                {item.status === 'na_fila' && <span className="batch-status-tag tag-queue">Na fila de envio...</span>}
+                {item.status === 'lendo' && <span className="batch-status-tag tag-reading">Lendo com IA...</span>}
+                {item.status === 'concluido' && (
+                  item.primaryZone ? (
+                    <div className="item-route-result">
+                      <strong>{item.primaryZone} · Rota {item.primaryRoute}</strong>
+                      {item.primarySeq && <span>Seq {item.primarySeq}</span>}
+                      {item.routeSaveMsg && <small>{item.routeSaveMsg}</small>}
+                    </div>
+                  ) : (
+                    <div className="item-route-warning">
+                      <span>{item.error || (item.matchCount && item.matchCount > 1 ? `${item.matchCount} possibilidades — conferir` : 'Destino não encontrado')}</span>
+                    </div>
+                  )
+                )}
+                {item.status === 'erro' && <span className="batch-status-tag tag-error">{item.error || 'Erro ao ler'}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    )}
+
     <section className={`card label-route-details ${primaryMatch ? 'single-result' : ''}`}><h3>3. Zona e rota encontradas</h3>
       {!query.trim() ? <p>Leia uma etiqueta ou informe o endereço para consultar.</p> : matches.length === 0 ? <p className="label-warning" role="status">Nenhum registro encontrado nesta base. Confira a leitura e se o endereço pertence às cidades e aos bairros cadastrados. A etiqueta pode ter sido lida corretamente e estar fora da base.</p> : <><p role="status">{matches.length} registro(s) encontrado(s). Confira o destino antes de separar o pacote.</p>{matches.length > 1 && <p className="label-warning">Há mais de uma possibilidade. Compare rua, bairro, CEP e cidade; o primeiro resultado não é uma confirmação automática.</p>}<div className="label-results">{matches.map(({ record, reasons, warnings }) => <article className="label-result" key={record.id}><h4>{record.zone || record.region || 'Zona não informada'} · Rota {record.route || 'A definir'}</h4><p className="label-muted">Zona, rota e sequência conforme a planilha recebida.</p><dl><dt>Zona</dt><dd>{record.zone || record.region || 'Não informada na base'}</dd><dt>Rota</dt><dd>{record.route || 'A definir'}</dd><dt>Sequência</dt><dd>{record.deliverySequence || 'Não informada'}</dd><dt>Rua / Logradouro</dt><dd>{record.street}</dd><dt>Bairro</dt><dd>{record.neighborhood}</dd><dt>CEP</dt><dd>{record.postalCode}</dd><dt>Cidade</dt><dd>{record.city}</dd></dl><p className="label-reasons">{reasons.join(' · ')}</p>{warnings.map(warning => <p className="label-warning" key={warning}>{warning}</p>)}</article>)}</div></>}
     </section>
     <details className="card"><summary>Ver base completa ({base.records.length} registros)</summary><p className="label-muted">Arquivos: {base.source}. Dados importados como recebidos, sem validação cadastral externa.</p><div className="label-table-wrap"><table><thead><tr><th>Região / ROTA</th><th>Rua / Logradouro</th><th>Bairro</th><th>CEP</th><th>Cidade</th><th>Localização no Maps</th><th>Rota no Maps</th><th>Arquivo de origem</th></tr></thead><tbody>{base.records.map(record => <tr key={record.id}><td>{record.region || 'Não informada'}</td><td>{record.street}</td><td>{record.neighborhood}</td><td>{record.postalCode}</td><td>{record.city}</td><td>{record.mapsUrl ? <a href={record.mapsUrl} target="_blank" rel="noreferrer">Abrir no Maps</a> : 'Não informado'}</td><td>{record.routeUrl ? <a href={record.routeUrl} target="_blank" rel="noreferrer">Traçar rota</a> : 'Não informado'}</td><td>{record.sourceFile}</td></tr>)}</tbody></table></div><h4>Resumos dos arquivos originais</h4>{base.summary.map((row, index) => <p key={index}>{Object.entries(row).map(([key, value]) => `${key}: ${value}`).join(' · ')}</p>)}</details>
   </div>
 }
+
