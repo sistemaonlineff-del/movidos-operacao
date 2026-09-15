@@ -44,3 +44,14 @@ export async function readCnabSpreadsheet(file: File): Promise<CnabSpreadsheetRe
   }
   throw new Error('Não encontrei as colunas obrigatórias: DROP, RESPONSÁVEL, TOTAL DROP, PIX, DATA PAGAMENTO e CPF/CNPJ.')
 }
+
+export async function downloadCnabTemplate() {
+  const XLSX = await import('xlsx')
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['DROP', 'RESPONSÁVEL', 'TOTAL DROP', 'PIX', 'DATA PAGAMENTO', 'CPF/CNPJ'],
+    ['Exemplo de DROP', 'Nome do responsável', 0, 'Chave PIX', 'dd/mm/aaaa', 'CPF ou CNPJ'],
+  ])
+  sheet['!cols'] = [22, 28, 16, 30, 18, 20].map(wch => ({ wch }))
+  const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, sheet, 'Pagamentos')
+  XLSX.writeFile(workbook, 'modelo-cnab-pagamentos.xlsx')
+}
