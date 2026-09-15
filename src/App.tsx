@@ -135,6 +135,9 @@ const fields = [
   "saturday_closing_time",
   "weekday_scan_time",
   "saturday_scan_time",
+  "signed_at",
+  "terminated_at",
+  "termination_reason",
   "notes",
 ];
 const blank = (): Values =>
@@ -518,6 +521,10 @@ function ContractButtons({ drop }: { drop: Drop | null }) {
           : "/templates/modelo-distrato-sociedade.docx";
       const address = String(drop.address ?? "");
       const business = String(drop.legal_name || drop.trade_name || drop.name);
+      const documentDate = (value: unknown) => {
+        const raw = String(value ?? "").slice(0, 10);
+        return raw ? new Intl.DateTimeFormat("pt-BR").format(new Date(`${raw}T12:00:00`)) : "";
+      };
       const data = {
         nomeEmpresarial: business,
         cnpj: String(drop.cnpj ?? ""),
@@ -544,6 +551,9 @@ function ContractButtons({ drop }: { drop: Drop | null }) {
         dataHoje: new Intl.DateTimeFormat("pt-BR", {
           dateStyle: "long",
         }).format(new Date()),
+        dataContrato: documentDate(drop.signed_at),
+        dataDistrato: documentDate(drop.terminated_at),
+        motivoDistrato: String(drop.termination_reason ?? ""),
       };
       const safe = drop.name
         .replace(/[^a-z0-9]+/gi, "-")
@@ -941,6 +951,14 @@ function Cadastro() {
                 onChange={(e) => put("notes", e.target.value.toUpperCase())}
               />
             </label>
+          </div>
+        </section>
+        <section className="form-section">
+          <h3>Contrato e distrato</h3>
+          <div className="form-grid">
+            <label>Data do contrato<input type="date" value={values.signed_at} onChange={(e) => put("signed_at", e.target.value)} /></label>
+            <label>Data do distrato<input type="date" value={values.terminated_at} onChange={(e) => put("terminated_at", e.target.value)} /></label>
+            <label className="full">Motivo do distrato<textarea value={values.termination_reason} onChange={(e) => put("termination_reason", e.target.value)} placeholder="Informe o motivo, se houver distrato." /></label>
           </div>
         </section>
         <DropPhotos dropId={editId || record?.id || null} />

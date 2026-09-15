@@ -82,6 +82,7 @@ export default function ReadyMessages() {
       })
       setMessages([...defaults, ...data.filter(row => !defaultMessages.some(message => message.key === row.key)).map(row => ({ key: row.key, title: row.subject, text: row.body }))])
     })
+    supabase.from('app_notes').select('content').eq('key', 'ready_messages_draft').maybeSingle().then(({ data }) => { if (data?.content) setDraft(data.content) })
   }, [])
   const copy = async (title: string, text: string) => {
     await navigator.clipboard.writeText(text)
@@ -116,11 +117,18 @@ export default function ReadyMessages() {
     if (error) { setNotice(error.message); return }
     setMessages(items => items.filter(message => message.key !== key)); setNotice('Modelo excluído.')
   }
+  const saveDraft = async () => {
+    if (!supabase) return
+    setSaving(true); setNotice('')
+    const { data: auth } = await supabase.auth.getUser()
+    const { error } = await supabase.from('app_notes').upsert({ key: 'ready_messages_draft', content: draft, updated_by: auth.user?.id ?? null })
+    setSaving(false); setNotice(error ? error.message : 'Rascunho salvo com sucesso.')
+  }
   return <section className="ready-messages">
     <section className="card visual-heading"><div><p className="eyebrow">ATENDIMENTO</p><h2>Mensagens prontas</h2><p>Textos do cadastro-base antigo, prontos para copiar e enviar.</p></div></section>
     {isAdmin && <section className="card ready-message-create"><h3>Novo modelo</h3><div className="form-grid"><label className="full">Título<input value={newTitle} onChange={event => setNewTitle(event.target.value)} placeholder="Ex.: Cobrança de documentos" /></label><label className="full">Mensagem<textarea value={newText} onChange={event => setNewText(event.target.value)} placeholder="Escreva o novo texto pronto…" /></label></div><button className="primary compact" disabled={saving || !newTitle.trim() || !newText.trim()} onClick={() => void create()}>{saving ? 'Salvando…' : 'Salvar novo modelo'}</button></section>}
     <div className="ready-message-grid"><article className="card ready-message ready-message-draft">
-      <div className="ready-message-heading"><h3>Rascunho</h3><button className="secondary" disabled={!draft.trim()} onClick={() => void copy('Rascunho', draft)}>{copied === 'Rascunho' ? 'Copiado!' : 'Copiar rascunho'}</button></div>
+      <div className="ready-message-heading"><h3>Rascunho</h3><div className="ready-message-actions"><button className="secondary" disabled={saving} onClick={() => void saveDraft()}>{saving ? 'Salvando…' : 'Salvar rascunho'}</button><button className="secondary" disabled={!draft.trim()} onClick={() => void copy('Rascunho', draft)}>{copied === 'Rascunho' ? 'Copiado!' : 'Copiar rascunho'}</button></div></div>
       <textarea value={draft} onChange={event => setDraft(event.target.value)} placeholder="Escreva aqui uma mensagem livre…" aria-label="Rascunho de mensagem" />
     </article>{messages.map(message => <article className="card ready-message" key={message.key}>
       <div className="ready-message-heading"><h3>{message.title}</h3><div className="ready-message-actions">{isAdmin && <button className="secondary" onClick={() => startEditing(message.key, message.text)}>Editar</button>}<button className="secondary" onClick={() => void copy(message.title, message.text)}>{copied === message.title ? 'Copiado!' : 'Copiar mensagem'}</button>{isAdmin && <button className="secondary" onClick={() => void remove(message.key)}>Excluir</button>}</div></div>
