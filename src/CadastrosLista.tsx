@@ -439,7 +439,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
                   "Parceiro",
                   "Responsável",
                   "Telefone",
-                  "Logradouro",
+                  "Zona",
                   "Ações",
                 ].map((title) => (
                   <th key={title}>{title}</th>
@@ -464,7 +464,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
                   <td>
                     <Phone value={drop.phone} />
                   </td>
-                  <td>{drop.address || "—"}</td>
+                  <td>{drop.zone || "—"}</td>
                   <td>
                     <button
                       className="table-action"
