@@ -74,7 +74,7 @@ export default function ReadyMessages() {
   const [newText, setNewText] = useState('')
   useEffect(() => {
     if (!supabase) return
-    supabase.from('email_templates').select('key,subject,body').then(({ data }) => {
+    supabase.from('email_templates').select('key,subject,body').like('key', 'ready-message-%').then(({ data }) => {
       if (!data?.length) return
       const defaults = defaultMessages.map(message => {
         const saved = data.find(row => row.key === message.key)

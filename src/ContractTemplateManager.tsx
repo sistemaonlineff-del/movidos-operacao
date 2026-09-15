@@ -14,7 +14,7 @@ export default function ContractTemplateManager() {
   const load = async () => {
     const accessToken = await token()
     const response = await fetch('/api/contract-templates', { headers: { Authorization: `Bearer ${accessToken}` } })
-    if (!response.ok) return
+    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) return
     const data = await response.json()
     setPath(data.serviceTemplatePath ?? '')
   }

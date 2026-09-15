@@ -10,15 +10,18 @@ const value = (input: unknown) => {
 const date = (input: unknown) => {
   const source = String(input ?? '').trim()
   const match = source.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
-  if (match) return `${match[3].length === 2 ? `20${match[3]}` : match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`
   const iso = source.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
-  return iso ? `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}` : ''
+  const normalized = match ? `${match[3].length === 2 ? `20${match[3]}` : match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}` : iso ? `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}` : ''
+  const parsed = new Date(`${normalized}T00:00:00Z`)
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === normalized ? normalized : ''
 }
 
 export type CnabSpreadsheetResult = { payments: CnabPayment[]; rowsFound: number; errors: string[] }
+export { date as parsePaymentDate }
 
 export async function readCnabSpreadsheet(file: File): Promise<CnabSpreadsheetResult> {
-  const XLSX = await import('xlsx')
+  const module = await import('xlsx')
+  const XLSX = module.default ?? module
   const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false })
   for (const sheetName of workbook.SheetNames) {
     const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false })
@@ -31,7 +34,9 @@ export async function readCnabSpreadsheet(file: File): Promise<CnabSpreadsheetRe
       const get = (label: typeof labels[number]) => row[indexes.get(label) ?? -1]
       if (![...labels].some(label => String(get(label)).trim())) return
       const amount = value(get('TOTAL DROP'))
-      const paymentDate = date(get('DATA PAGAMENTO'))
+      const dateCell = workbook.Sheets[sheetName][XLSX.utils.encode_cell({ r: line - 1, c: indexes.get('DATA PAGAMENTO')! })]
+      const excelDate = typeof dateCell?.v === 'number' ? XLSX.SSF.parse_date_code(dateCell.v, { date1904: workbook.Workbook?.WBProps?.date1904 }) : null
+      const paymentDate = excelDate ? date(`${excelDate.y}-${excelDate.m}-${excelDate.d}`) : date(get('DATA PAGAMENTO'))
       const pix = String(get('PIX') ?? '').trim()
       const document = String(get('CPF CNPJ') ?? '').trim()
       if (!String(get('DROP') ?? '').trim() || !Number.isFinite(amount) || amount <= 0 || !pix || !paymentDate || !document) {

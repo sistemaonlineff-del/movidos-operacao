@@ -3,6 +3,7 @@ import { supabase } from "./lib/supabase";
 import {
   buildDetails,
   buildTotals,
+  financialPartner,
   DataRow,
   date,
   key,
@@ -36,12 +37,13 @@ const totalColumns = [
   ["payable", "Valor total que será pago para os DROPs"],
   ["deducted", "Extravio efetivamente descontado dos DROPs"],
   ["assumed", "Prejuízo que eu assumi e não descontei dos DROPs"],
-  ["companyPayment", "Pagamento total e por DROP"],
+  ["companyPayment", "Pagamento para Talita e Jorge"],
 ];
 const detailFields = [
-  ["referenceCnpj", "CNPJ de referÃªncia", "select"],
+  ["referenceCnpj", "CNPJ de referência", "select"],
   ["period", "Período", "text"],
   ["drop", "DROP", "text"],
+  ["responsible", "Responsável", "text"],
   ["partner", "Parceiro", "text"],
   ["packages", "Total pacote", "number"],
   ["unit", "Valor acordado", "number"],
@@ -158,7 +160,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
             (!periodFilter ||
               (row.period_label ?? period?.label) === periodFilter) &&
             (!partnerFilter ||
-              (row.partner ?? period?.partner) === partnerFilter) &&
+              financialPartner({ ...period, ...row }) === partnerFilter) &&
             (!dropFilter || key(row.drop_name_snapshot) === dropFilter) &&
             (!statusFilter || row.status === statusFilter) &&
             (!observationFilter ||
@@ -249,7 +251,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           "A quantidade de pacotes deve ser um inteiro positivo ou zero.",
         );
       const originalPeriod = periodById.get(editing.periodId);
-      let period = periods.find(
+      let period = originalPeriod && originalPeriod.label === text(editing.period) && financialPartner(originalPeriod) === text(editing.partner) ? originalPeriod : periods.find(
         (row) =>
           row.label === text(editing.period) &&
           row.partner === text(editing.partner) &&
@@ -261,6 +263,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           .insert({
             label: text(editing.period),
             partner: text(editing.partner),
+            logistics_partner: text(editing.partner),
             reference_cnpj: text(editing.referenceCnpj),
             financial_view_id: originalPeriod?.financial_view_id ?? null,
             status: "aberto",
@@ -298,6 +301,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         financial_period_id: period!.id,
         period_label: text(editing.period),
         partner: text(editing.partner),
+        logistics_partner: text(editing.partner),
         drop_name_snapshot: text(editing.drop),
         responsible: text(editing.responsible) || null,
         package_quantity: number(editing.packages),
@@ -571,7 +575,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           error={editError}
         >
           <div className="form-grid">
-            {[...detailFields, ["responsible", "Responsável", "text"]].map(
+            {detailFields.map(
               ([field, label, type]) => (
                 <label key={field}>
                   {label}
@@ -744,17 +748,7 @@ function Editor({
 function PaymentTotal({ rows }: { rows: DataRow[] }) {
   return (
     <section className="card">
-      {rows.some((row) => row.estimated) && (
-        <p className="financial-hint">
-          Períodos sem valor de nota importado usam a estimativa de R$ 0,25 por
-          pacote, descontados os extravios. O filtro por parceiro mostra apenas
-          sua parcela estimada.
-        </p>
-      )}
-      <p className="financial-hint">
-        Pagamento para Talita e Jorge = total líquido a receber − pagamento aos
-        drops.
-      </p>
+      {rows.some((row) => row.missingNet) && <p role="status" className="financial-hint">Total líquido pendente em um ou mais períodos.</p>}
       <div className="table-wrap">
         <table>
           <thead>
@@ -770,7 +764,7 @@ function PaymentTotal({ rows }: { rows: DataRow[] }) {
             <tr className="financial-totals">
               <th scope="row">Total filtrado</th>
               {totalColumns.map(([field]) => (
-                <td key={field}>{money(sum(rows, field))}</td>
+                <td key={field}>{rows.some(row => row[field] == null) ? "—" : money(sum(rows, field))}</td>
               ))}
               <td />
             </tr>
@@ -778,8 +772,8 @@ function PaymentTotal({ rows }: { rows: DataRow[] }) {
               <tr key={row.period}>
                 <td>
                   <strong>{row.period}</strong>
-                  {row.estimated && (
-                    <small className="table-subtitle">Receita estimada</small>
+                  {row.missingNet && (
+                    <small className="table-subtitle">Líquido não informado</small>
                   )}
                 </td>
                 {totalColumns.map(([field]) => (
@@ -794,7 +788,7 @@ function PaymentTotal({ rows }: { rows: DataRow[] }) {
                           : ""
                     }
                   >
-                    {money(row[field])}
+                    {row[field] == null ? "—" : money(row[field])}
                   </td>
                 ))}
                 <td>
@@ -876,11 +870,6 @@ function PaymentDetails({
                     {field === "drop" ? (
                       <>
                         <strong>{row.drop}</strong>
-                        {row.responsible && (
-                          <small className="table-subtitle">
-                            {row.responsible}
-                          </small>
-                        )}
                       </>
                     ) : field === "packages" ? (
                       row.packages.toLocaleString("pt-BR")

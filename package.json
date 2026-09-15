@@ -7,8 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "tsc --noEmit",
-    "test": "node --test tests/financial.test.mjs",
-    "test:browser": "node tests/financial-browser.mjs",
+    "test": "node --test tests/financial.test.mjs tests/database.test.mjs",
+    "test:browser": "node tests/document-browser.mjs",
     "test:cadastros": "node tests/cadastros-browser.mjs"
   },
   "dependencies": {
@@ -26,6 +26,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

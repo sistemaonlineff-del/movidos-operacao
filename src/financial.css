@@ -1,4 +1,8 @@
 .financial-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+@media (min-width: 851px) {
+  .app > aside { position: sticky; top: 0; height: 100dvh; max-height: 100dvh; min-height: 0; box-sizing: border-box; overflow-y: auto; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: #0cb9bb #10202a; }
+  .app > aside > nav { flex-shrink: 0; }
+}
 .financial-totals { background: #e5f3e0; color: #213d22; font-weight: 800; }
 .financial-totals td { white-space: nowrap; }
 .financial-totals th { color: inherit; letter-spacing: 0; }
@@ -17,6 +21,14 @@
 .finance-visual-page table { min-width: 1500px; }
 .finance-visual-page td { vertical-align: top; }
 .visual-filters input { padding: .68rem; }
+.closing-email-heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.closing-email-heading > div { min-width: 0; }
+.closing-email-heading > div:last-child { display: flex; flex-wrap: wrap; gap: .5rem; }
+.closing-email-heading button { white-space: normal; }
+.email-template-grid { display: grid; gap: 1rem; margin-top: 1rem; }
+.email-template-grid label { display: grid; gap: .5rem; min-width: 0; }
+.email-template-grid input, .email-template-grid textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: .75rem; font: inherit; color: inherit; background: var(--surface, #fff); border: 1px solid #c8dadc; border-radius: 8px; }
+.email-template-grid textarea { min-height: 320px; resize: vertical; line-height: 1.6; }
 @media (max-width: 640px) { .visual-filters label { width: 100%; min-width: 0; } .financial-editor { padding: 1rem; } }
 @media (max-width: 850px) {
   .app:has(.finance-visual-page) aside { min-width: 0; flex-wrap: wrap; gap: .5rem; }

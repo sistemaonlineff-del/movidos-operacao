@@ -7,7 +7,7 @@ async function activeTemplate(template: string) {
   if (!supabase || template !== '/templates/modelo-contrato-prestacao-servico.docx') return template
   const { data: session } = await supabase.auth.getSession()
   const response = await fetch('/api/contract-templates', { headers: { Authorization: `Bearer ${session.session?.access_token ?? ''}` } })
-  if (!response.ok) return template
+  if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) return template
   const config = await response.json()
   if (!config.serviceTemplatePath) return template
   const { data, error } = await supabase.storage.from('movidos-documents').createSignedUrl(config.serviceTemplatePath, 120)
@@ -24,6 +24,12 @@ export async function downloadContractPdf(template: string, data: Record<string,
   const paragraphs = [...parsed.getElementsByTagNameNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'p')]
     .map(paragraph => [...paragraph.getElementsByTagNameNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', 't')].map(node => node.textContent ?? '').join('').trim())
     .filter(Boolean)
+  const contractFields = [data.dataContrato ? `Data do contrato: ${data.dataContrato}` : '']
+  if (template.includes('distrato')) contractFields.push(
+    data.dataDistrato ? `Data do distrato: ${data.dataDistrato}` : '',
+    data.motivoDistrato ? `Motivo do distrato: ${data.motivoDistrato}` : '',
+  )
+  paragraphs.splice(1, 0, ...contractFields.filter(Boolean))
   const pdf = new jsPDF({ unit: 'mm', format: 'a4' })
   const margin = 18, width = 174, height = 279
   let y = margin
