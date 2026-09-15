@@ -753,7 +753,7 @@ function PaymentTotal({ rows }: { rows: DataRow[] }) {
       )}
       <p className="financial-hint">
         Pagamento para Talita e Jorge = total líquido a receber − pagamento aos
-        drops + reembolso erro iMile.
+        drops.
       </p>
       <div className="table-wrap">
         <table>

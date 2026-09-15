@@ -1218,12 +1218,6 @@ function SecureLayoutInner({
               {financeOpen && (
                 <div className="nav-submenu">
                   <button
-                    className={loc.pathname === "/financeiro/extravios" ? "sub-active" : ""}
-                    onClick={() => nav("/financeiro/extravios")}
-                  >
-                    Extravios
-                  </button>
-                  <button
                     className={
                       loc.pathname === "/financeiro" ? "sub-active" : ""
                     }
@@ -1250,6 +1244,12 @@ function SecureLayoutInner({
                     onClick={() => nav("/financeiro/pagamento-detalhes")}
                   >
                     Pagamento Detalhes
+                  </button>
+                  <button
+                    className={loc.pathname === "/financeiro/extravios" ? "sub-active" : ""}
+                    onClick={() => nav("/financeiro/extravios")}
+                  >
+                    Extravios
                   </button>
                   <button
                     className={loc.pathname === "/financeiro/cnab" ? "sub-active" : ""}
