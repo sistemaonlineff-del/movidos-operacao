@@ -336,7 +336,7 @@ export function buildTotals(
       const summaries = metadata.map((meta) => meta.summary).filter(Boolean);
       const sum = (rows: DataRow[], field: string) =>
         round(rows.reduce((total, row) => total + number(row[field]), 0));
-      const gross = summaries.length
+      const importedGross = summaries.length
         ? sum(summaries, "gross")
         : round(sum(matchingDetails, "packages") * 0.25);
       const reimbursement = metadata.some((meta) => meta.reimbursement != null)
@@ -356,7 +356,15 @@ export function buildTotals(
         ? sum(summaries, "invoice")
         : hasNet
           ? sum(matchingPeriods, "net_amount")
-          : round(gross - split.loss);
+          : round(importedGross - split.loss);
+      // Regra do fechamento: bruto é o líquido informado no modelo somado aos
+      // extravios do período, nunca uma estimativa independente.
+      const totalLoss = matchingLosses.length
+        ? split.loss
+        : summaries.length
+          ? sum(summaries, "loss")
+          : sum(matchingDetails, "loss");
+      const gross = round(net + totalLoss);
       const payable = sum(matchingDetails, "receivable");
       const dates = [
         ...new Set(
@@ -375,17 +383,13 @@ export function buildTotals(
           gross,
           w2d: summaries.length ? sum(summaries, "w2d") : split.w2d,
           d2d: summaries.length ? sum(summaries, "d2d") : split.d2d,
-          loss: matchingLosses.length
-            ? split.loss
-            : summaries.length
-              ? sum(summaries, "loss")
-              : sum(matchingDetails, "loss"),
+          loss: totalLoss,
           reimbursement,
           net,
           payable,
           deducted: split.deducted,
           assumed: split.assumed,
-          companyPayment: round(net - payable + reimbursement),
+          companyPayment: round(net - payable),
           paymentDate: dates.join(", "),
           estimated: !summaries.length && !hasNet,
         },

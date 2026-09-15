@@ -24,3 +24,4 @@
   .app:has(.finance-visual-page) .nav-submenu { display: flex; flex-wrap: wrap; width: 100%; }
   .app:has(.finance-visual-page) nav .nav-submenu button { display: block; }
 }
+.finance-history{display:none}

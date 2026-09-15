@@ -6,6 +6,7 @@ import type { LabelMatch } from './labelMatching'
 import './label-reader.css'
 import { addressFields, addressLabels, extractionQuery, parseLabelExtraction } from './labelExtraction'
 import type { LabelExtraction } from './labelExtraction'
+import LabelBatchReader from './LabelBatchReader'
 
 const READ_MAX_EDGE = 1600
 const READ_JPEG_QUALITY = 0.75
@@ -201,6 +202,7 @@ export default function LabelReader() {
   return <div className="label-reader">
     <section className="card label-intro"><span className="label-badge">TESTE PRIVADO</span><h2>Leia a etiqueta e consulte a base</h2><p>Fotografe de perto, com o endereço inteiro e boa iluminação. A leitura traz rua, bairro, cidade e CEP para localizar a rota.</p><p className="label-muted">Base: {base.records.length} registros · {[...new Set(base.records.map(record => record.city))].join(' · ')}.</p></section>
     {aiConfigured !== true && <section className="card" role="status"><h3>{aiConfigured === null ? 'Preparando leitura...' : 'Leitura automática indisponível'}</h3><p>{baseError || 'A consulta digitada à base continua disponível.'}</p><button onClick={() => { setAiConfigured(null); setRetry(value => value + 1) }}>Tentar novamente</button></section>}
+    <LabelBatchReader base={base} />
     <div className="label-grid">
       <section className="card"><h3>1. Foto da etiqueta</h3>{!camera && <div className="label-actions">
         <button className="primary" onClick={() => void startCamera()} disabled={busy || cameraStarting || aiConfigured !== true}>{cameraStarting ? 'Abrindo...' : 'Abrir leitura contínua'}</button>

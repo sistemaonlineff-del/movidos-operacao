@@ -16,6 +16,7 @@ import {
 import { readFinancialRows as allRows } from "./financialStore";
 import CnabUpload from "./CnabUpload";
 import ClosingEmails from "./ClosingEmails";
+import { PARTNERS } from "./dropOptions";
 
 type Kind = "total" | "details" | "losses" | "cnab";
 const options = (values: unknown[]) =>
@@ -35,14 +36,13 @@ const totalColumns = [
   ["payable", "Valor total que será pago para os DROPs"],
   ["deducted", "Extravio efetivamente descontado dos DROPs"],
   ["assumed", "Prejuízo que eu assumi e não descontei dos DROPs"],
-  ["companyPayment", "Pagamento para Talita e Jorge"],
+  ["companyPayment", "Pagamento total e por DROP"],
 ];
 const detailFields = [
   ["referenceCnpj", "CNPJ de referÃªncia", "select"],
   ["period", "Período", "text"],
   ["drop", "DROP", "text"],
   ["partner", "Parceiro", "text"],
-  ["packageType", "Tipo pacote", "text"],
   ["packages", "Total pacote", "number"],
   ["unit", "Valor acordado", "number"],
   ["subtotal", "Subtotal", "number"],
@@ -186,11 +186,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     ...details.map((row) => row.period),
     ...losses.map((row) => row.period_label),
   ]).sort((a, b) => periodOrder(a) - periodOrder(b));
-  const partnerOptions = options([
-    ...periods.map((row) => row.partner),
-    ...details.map((row) => row.partner),
-    ...losses.map((row) => row.partner),
-  ]);
+  const partnerOptions = PARTNERS;
   const dropOptions = options([
     ...details.map((row) => row.drop),
     ...losses.map((row) => row.drop_name_snapshot),

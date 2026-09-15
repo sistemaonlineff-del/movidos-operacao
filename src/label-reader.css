@@ -7,3 +7,4 @@
 .label-zone-missing{margin:0;background:#fff1b8;color:#765400;border:2px solid #e3bd35;border-radius:12px;padding:20px;text-align:center;font-size:22px;font-weight:800}
 @media(max-width:1100px),(pointer:coarse){.label-route-now p,.label-address-review,.label-desktop-detail,.label-route-details{display:none}}
 .label-route-now .label-route-sequence{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;padding:10px 14px}.label-route-now .label-route-sequence strong{font-size:24px;margin:0}
+.label-batch-list{display:grid;gap:8px;padding:0;margin:16px 0 0;list-style:none}.label-batch-list li{display:flex;justify-content:space-between;gap:16px;padding:10px 12px;border:1px solid #d1e1da;border-radius:8px}.label-batch-list span{font-weight:600}.batch-lendo{color:#8a6500}.batch-concluido{color:#176b50}.batch-erro{color:#a72b2b}

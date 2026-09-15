@@ -29,13 +29,14 @@ type Filters = {
 };
 const requests = new Map<string, Promise<{ rows: DropRow[]; count: number }>>();
 
-function readPage(filters: Filters) {
+function readPage(filters: Filters, kind = "drop_off") {
   const identity = JSON.stringify(filters);
   const pending = requests.get(identity);
   if (pending) return pending;
   const request = (async () => {
     if (!supabase) throw new Error("Não foi possível conectar ao sistema.");
     let query = supabase.from("drops").select(columns, { count: "exact" });
+    query = kind === "last_mile" ? query.eq("registration_type", "last_mile") : query.or("registration_type.is.null,registration_type.eq.drop_off");
     if (filters.status) query = query.eq("status", filters.status);
     if (filters.partner) query = query.eq("partner", filters.partner);
     if (filters.zone) query = query.eq("zone", filters.zone);
@@ -143,7 +144,7 @@ function readOptions() {
   return request;
 }
 
-export default function CadastrosLista() {
+export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off" | "last_mile" }) {
   const navigate = useNavigate();
   const { can } = useAccess();
   const [filters, setFilters] = useState<Filters>({
@@ -182,7 +183,7 @@ export default function CadastrosLista() {
     setLoading(true);
     setError("");
     setRows([]);
-    readPage(filters)
+    readPage(filters, kind)
       .then((result) => {
         if (!current) return;
         const lastPage = Math.max(0, Math.ceil(result.count / PAGE_SIZE) - 1);
@@ -203,7 +204,7 @@ export default function CadastrosLista() {
     return () => {
       current = false;
     };
-  }, [filters, refresh]);
+  }, [filters, refresh, kind]);
   useEffect(() => {
     let current = true;
     setOptionsError("");

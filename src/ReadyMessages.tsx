@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabase'
+import { useAccess } from './access'
 
 const defaultMessages = [
   { key: 'ready-message-initial', title: 'Mensagem inicial', text: `Quer aumentar o fluxo de clientes da sua loja e ainda ter uma renda extra? Torne-se um ponto de coleta para grandes transportadoras e você vai conseguir isto.
@@ -61,6 +62,7 @@ Enviar:
 ]
 
 export default function ReadyMessages() {
+  const { isAdmin } = useAccess()
   const [copied, setCopied] = useState('')
   const [draft, setDraft] = useState('')
   const [messages, setMessages] = useState(defaultMessages)
@@ -68,14 +70,17 @@ export default function ReadyMessages() {
   const [editText, setEditText] = useState('')
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
+  const [newTitle, setNewTitle] = useState('')
+  const [newText, setNewText] = useState('')
   useEffect(() => {
     if (!supabase) return
-    supabase.from('email_templates').select('key,subject,body').in('key', defaultMessages.map(message => message.key)).then(({ data }) => {
+    supabase.from('email_templates').select('key,subject,body').then(({ data }) => {
       if (!data?.length) return
-      setMessages(defaultMessages.map(message => {
+      const defaults = defaultMessages.map(message => {
         const saved = data.find(row => row.key === message.key)
         return saved ? { ...message, title: saved.subject || message.title, text: saved.body || message.text } : message
-      }))
+      })
+      setMessages([...defaults, ...data.filter(row => !defaultMessages.some(message => message.key === row.key)).map(row => ({ key: row.key, title: row.subject, text: row.body }))])
     })
   }, [])
   const copy = async (title: string, text: string) => {
@@ -95,13 +100,30 @@ export default function ReadyMessages() {
     setMessages(items => items.map(message => message.key === current.key ? { ...message, text: editText.trim() } : message))
     setEditing(''); setEditText(''); setNotice('Mensagem atualizada com sucesso.')
   }
+  const create = async () => {
+    if (!supabase || !isAdmin || !newTitle.trim() || !newText.trim()) return
+    setSaving(true); setNotice('')
+    const key = `ready-message-${Date.now()}-${newTitle.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`
+    const { data: auth } = await supabase.auth.getUser()
+    const { error } = await supabase.from('email_templates').insert({ key, subject: newTitle.trim(), body: newText.trim(), updated_by: auth.user?.id ?? null })
+    setSaving(false)
+    if (error) { setNotice(error.message); return }
+    setMessages(items => [...items, { key, title: newTitle.trim(), text: newText.trim() }]); setNewTitle(''); setNewText(''); setNotice('Novo modelo salvo.')
+  }
+  const remove = async (key: string) => {
+    if (!supabase || !isAdmin || !confirm('Excluir este modelo de mensagem?')) return
+    const { error } = await supabase.from('email_templates').delete().eq('key', key)
+    if (error) { setNotice(error.message); return }
+    setMessages(items => items.filter(message => message.key !== key)); setNotice('Modelo excluído.')
+  }
   return <section className="ready-messages">
     <section className="card visual-heading"><div><p className="eyebrow">ATENDIMENTO</p><h2>Mensagens prontas</h2><p>Textos do cadastro-base antigo, prontos para copiar e enviar.</p></div></section>
+    {isAdmin && <section className="card ready-message-create"><h3>Novo modelo</h3><div className="form-grid"><label className="full">Título<input value={newTitle} onChange={event => setNewTitle(event.target.value)} placeholder="Ex.: Cobrança de documentos" /></label><label className="full">Mensagem<textarea value={newText} onChange={event => setNewText(event.target.value)} placeholder="Escreva o novo texto pronto…" /></label></div><button className="primary compact" disabled={saving || !newTitle.trim() || !newText.trim()} onClick={() => void create()}>{saving ? 'Salvando…' : 'Salvar novo modelo'}</button></section>}
     <div className="ready-message-grid"><article className="card ready-message ready-message-draft">
       <div className="ready-message-heading"><h3>Rascunho</h3><button className="secondary" disabled={!draft.trim()} onClick={() => void copy('Rascunho', draft)}>{copied === 'Rascunho' ? 'Copiado!' : 'Copiar rascunho'}</button></div>
       <textarea value={draft} onChange={event => setDraft(event.target.value)} placeholder="Escreva aqui uma mensagem livre…" aria-label="Rascunho de mensagem" />
     </article>{messages.map(message => <article className="card ready-message" key={message.key}>
-      <div className="ready-message-heading"><h3>{message.title}</h3><div className="ready-message-actions"><button className="secondary" onClick={() => startEditing(message.key, message.text)}>Editar</button><button className="secondary" onClick={() => void copy(message.title, message.text)}>{copied === message.title ? 'Copiado!' : 'Copiar mensagem'}</button></div></div>
+      <div className="ready-message-heading"><h3>{message.title}</h3><div className="ready-message-actions">{isAdmin && <button className="secondary" onClick={() => startEditing(message.key, message.text)}>Editar</button>}<button className="secondary" onClick={() => void copy(message.title, message.text)}>{copied === message.title ? 'Copiado!' : 'Copiar mensagem'}</button>{isAdmin && <button className="secondary" onClick={() => void remove(message.key)}>Excluir</button>}</div></div>
       {editing === message.key ? <div className="ready-message-edit"><textarea value={editText} onChange={event => setEditText(event.target.value)} aria-label={`Editar ${message.title}`} /><div><button type="button" onClick={() => { setEditing(''); setEditText('') }}>Cancelar</button><button type="button" className="primary compact" disabled={saving || !editText.trim()} onClick={() => void save()}>{saving ? 'Salvando…' : 'Salvar mensagem'}</button></div></div> : <pre>{message.text}</pre>}
     </article>)}</div>
     {notice && <p className="form-message" role="status">{notice}</p>}

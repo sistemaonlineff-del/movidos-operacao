@@ -28,6 +28,7 @@ import { PARTNERS, ZONES, normalizePartner, normalizeZone } from "./dropOptions"
 
 const Lista = lazy(() => import("./CadastrosLista"));
 const DropMap = lazy(() => import("./DropMap"));
+const LastMileCadastro = lazy(() => import("./LastMileCadastro"));
 
 type Drop = {
   id: string;
@@ -1020,6 +1021,8 @@ function App() {
             </Guard>
           }
         />
+        <Route path="/cadastros/last-mile" element={<Guard permission="cadastros_view"><Lista kind="last_mile" /></Guard>} />
+        <Route path="/cadastros/last-mile/novo" element={<Guard permission="cadastros_create"><LastMileCadastro /></Guard>} />
         <Route
           path="/financeiro"
           element={
@@ -1124,6 +1127,8 @@ function SecureLayoutInner({
     "/": "Visão geral",
     "/cadastros": "Cadastros",
     "/cadastros/novo": "Novo cadastro",
+    "/cadastros/last-mile": "Cadastros Last Mile",
+    "/cadastros/last-mile/novo": "Novo cadastro Last Mile",
     "/financeiro": "Financeiro",
     "/financeiro/pagamento-total": "Pagamento Total",
     "/financeiro/pagamento-detalhes": "Pagamento Detalhes",
@@ -1179,7 +1184,7 @@ function SecureLayoutInner({
                       }
                       onClick={() => nav("/cadastros")}
                     >
-                      Ver cadastros
+                      Ver cadastros Drop off
                     </button>
                   )}
                   {can("cadastros_create") && (
@@ -1189,9 +1194,11 @@ function SecureLayoutInner({
                       }
                       onClick={() => nav("/cadastros/novo")}
                     >
-                      + Novo cadastro
+                      + Novo cadastro Drop off
                     </button>
                   )}
+                  {can("cadastros_view") && <button className={loc.pathname === "/cadastros/last-mile" ? "sub-active" : ""} onClick={() => nav("/cadastros/last-mile")}>Ver cadastros Last Mile</button>}
+                  {can("cadastros_create") && <button className={loc.pathname === "/cadastros/last-mile/novo" ? "sub-active" : ""} onClick={() => nav("/cadastros/last-mile/novo")}>+ Novo cadastro Last Mile</button>}
                 </div>
               )}
             </>
@@ -1222,7 +1229,7 @@ function SecureLayoutInner({
                     }
                     onClick={() => nav("/financeiro")}
                   >
-                    Importar base
+                    Importar fechamento
                   </button>
                   <button
                     className={

@@ -1,0 +1,16 @@
+import { ChangeEvent, useState } from "react";
+import { supabase } from "./lib/supabase";
+import { extractionQuery, parseLabelExtraction } from "./labelExtraction";
+import { findLabelMatches } from "./labelMatching";
+import type { LabelBase } from "./labelMatching";
+
+type Result = { name:string; state:"aguardando"|"lendo"|"concluido"|"erro"; result?:string; error?:string };
+const MAX_EDGE=1600;
+async function imageData(file:File){ const url=URL.createObjectURL(file); try { const image=new Image(); image.src=url; await image.decode(); const scale=Math.min(1,MAX_EDGE/Math.max(image.width,image.height)); const canvas=document.createElement("canvas"); canvas.width=Math.round(image.width*scale); canvas.height=Math.round(image.height*scale); canvas.getContext("2d")!.drawImage(image,0,0,canvas.width,canvas.height); return canvas.toDataURL("image/jpeg",.75) } finally { URL.revokeObjectURL(url) } }
+
+export default function LabelBatchReader({base}:{base:LabelBase}) {
+ const [rows,setRows]=useState<Result[]>([]); const [running,setRunning]=useState(false);
+ const choose=async(event:ChangeEvent<HTMLInputElement>)=>{const files=Array.from(event.target.files??[]).slice(0,20); event.target.value=""; if(!files.length||running)return; const next=files.map(file=>({name:file.name,state:"aguardando" as const})); setRows(next);setRunning(true);
+  let index=0; const worker=async()=>{while(index<files.length){const current=index++; const file=files[current];setRows(items=>items.map((row,i)=>i===current?{...row,state:"lendo"}:row));try{const {data}=await supabase!.auth.getSession();const image=await imageData(file);const response=await fetch("/api/label-read",{method:"POST",headers:{Authorization:`Bearer ${data.session?.access_token??""}`,"Content-Type":"application/json"},body:JSON.stringify({image})});const payload=await response.json();if(!response.ok)throw new Error(payload.error||"Falha na leitura.");const extraction=parseLabelExtraction(payload.extraction);const address=extractionQuery(extraction);const matches=findLabelMatches(address,base.records);const result=matches.length===1?`${matches[0].record.zone||"Zona não informada"} · Rota ${matches[0].record.route||"A definir"}`:matches.length?`${matches.length} destinos possíveis — conferir`:"Destino não encontrado";setRows(items=>items.map((row,i)=>i===current?{...row,state:"concluido",result}:row))}catch(error){setRows(items=>items.map((row,i)=>i===current?{...row,state:"erro",error:error instanceof Error?error.message:"Falha na leitura"}:row))}}}; await Promise.all(Array.from({length:Math.min(3,files.length)},worker));setRunning(false)};
+ return <section className="card label-batch"><h3>Leitura em massa</h3><p>Selecione até 20 fotos. O sistema começa a processar cada etiqueta assim que ela entra na fila, em até 3 leituras simultâneas.</p><label className={`label-file ${running?"disabled":""}`}>Selecionar fotos<input type="file" accept="image/jpeg,image/png,image/webp,image/bmp" multiple disabled={running} onChange={event=>void choose(event)} /></label>{rows.length>0&&<ol className="label-batch-list">{rows.map((row,index)=><li key={`${row.name}-${index}`}><strong>{row.name}</strong><span className={`batch-${row.state}`}>{row.state==="aguardando"?"Na fila":row.state==="lendo"?"Lendo…":row.state==="concluido"?row.result:row.error}</span></li>)}</ol>}</section>
+}
