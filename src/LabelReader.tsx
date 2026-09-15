@@ -53,6 +53,7 @@ export default function LabelReader() {
   const operation = useRef(false)
   const scanKey = useRef('')
   const processingRef = useRef(new Set<string>())
+  const captureNumber = useRef(0)
 
   const matches = useMemo(() => findLabelMatches(query, base?.records ?? []), [query, base])
   const primaryMatch = matches.length === 1 ? matches[0] : null
@@ -100,8 +101,8 @@ export default function LabelReader() {
   // Queue runner for continuous camera captures
   useEffect(() => {
     if (!base || !cameraItems.length) return
-    const pending = cameraItems.filter(item => item.status === 'na_fila' && !processingRef.current.has(item.id))
-    const inProgress = cameraItems.filter(item => item.status === 'lendo').length
+    const pending = cameraItems.filter(item => item.status === 'na_fila' && !processingRef.current.has(item.id)).sort((first, second) => first.num - second.num)
+    const inProgress = processingRef.current.size
     const maxConcurrent = 3
     const canStartCount = Math.max(0, maxConcurrent - inProgress)
 
@@ -140,19 +141,18 @@ export default function LabelReader() {
 
             if (canStoreAutomatically(foundMatches)) {
               try {
-                const itemScanKey = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
                 const volRes = await fetch('/api/label-volume', {
                   method: 'POST',
                   headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ baseId: String(m.record.id), scanKey: itemScanKey }),
+                  body: JSON.stringify({ baseId: String(m.record.id), scanKey: item.id }),
                   cache: 'no-store'
                 })
                 const volData = await volRes.json()
                 if (volRes.ok) {
                   saveMsg = `${volData.duplicate ? 'Já na pré-rota' : 'Adicionado na pré-rota'} (Lote ${volData.batch})`
-                }
-              } catch {
-                // Ignore volume save error in queue item background
+                } else throw new Error(volData.error || 'Falha ao salvar a pré-rota.')
+              } catch (saveError) {
+                saveMsg = `Não salvo na pré-rota: ${saveError instanceof Error ? saveError.message : 'falha de conexão'}`
               }
             }
           }
@@ -286,16 +286,16 @@ export default function LabelReader() {
   // Non-blocking rapid capture for Camera Mode
   const captureCameraBatch = () => {
     const video = videoRef.current
-    if (!video?.videoWidth) return
+    if (!video?.videoWidth || cameraItems.filter(item => item.status === 'na_fila' || item.status === 'lendo').length >= 20) return
     const canvas = document.createElement('canvas')
     const scale = Math.min(1, READ_MAX_EDGE / Math.max(video.videoWidth, video.videoHeight))
     canvas.width = Math.round(video.videoWidth * scale); canvas.height = Math.round(video.videoHeight * scale)
     canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height)
     const data = canvas.toDataURL('image/jpeg', READ_JPEG_QUALITY)
 
-    const num = cameraItems.length + 1
+    const num = ++captureNumber.current
     const newItem: CameraBatchItem = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id: crypto.randomUUID(),
       num,
       image: data,
       status: 'na_fila'
@@ -349,7 +349,7 @@ export default function LabelReader() {
         </div>
         {captureToast && <p className="camera-toast">{captureToast}</p>}
         <div className="label-actions">
-          <button className="primary" onClick={captureCameraBatch} disabled={!cameraReady}>📸 CAPTURAR PACOTE #{cameraItems.length + 1}</button>
+          <button className="primary" onClick={captureCameraBatch} disabled={!cameraReady || pendingCount >= 20}>{pendingCount >= 20 ? 'Fila cheia (20 fotos)' : `Capturar pacote #${captureNumber.current + 1}`}</button>
           <button onClick={stopCamera}>Fechar câmera</button>
         </div>
       </div>}
@@ -377,7 +377,7 @@ export default function LabelReader() {
             <h3>Fila de Leitura da Câmera (Sem Pausa)</h3>
             <p className="label-muted">Total: {cameraItems.length} pacotes · {completedCount} concluídos · {pendingCount} em andamento</p>
           </div>
-          <button onClick={() => setCameraItems([])}>Limpar fila da câmera</button>
+          <button disabled={pendingCount > 0} onClick={() => setCameraItems([])}>Limpar fila da câmera</button>
         </div>
         <div className="camera-batch-grid">
           {cameraItems.map(item => (

@@ -1,4 +1,7 @@
+import { normalizePartner, PARTNERS } from './dropOptions';
+
 export type DataRow = Record<string, any>;
+export const financialPartner = (row: DataRow) => row.logistics_partner || (PARTNERS.includes(normalizePartner(row.partner)) ? normalizePartner(row.partner) : PARTNERS[0]);
 export const text = (value: unknown) => String(value ?? "").trim();
 export const key = (value: unknown) =>
   text(value)
@@ -167,8 +170,8 @@ export function buildDetails(
       const identity = {
         periodId: row.financial_period_id,
         period: row.period_label ?? period?.label ?? "Sem período",
-        partner: row.partner ?? period?.partner ?? "",
-        referenceCnpj: period?.reference_cnpj ?? "",
+        partner: financialPartner({ ...period, ...row }),
+        referenceCnpj: period?.reference_cnpj || "MOVIDOS",
         drop: row.drop_name_snapshot ?? "",
       };
       const exact = registrations.get(
@@ -179,7 +182,7 @@ export function buildDetails(
         exact && (!fallback || exact.index < fallback.index)
           ? exact.row
           : fallback?.row;
-      const labelIdentity = `${key(identity.period)}|${key(identity.partner)}|${key(identity.drop)}`;
+      const labelIdentity = `${key(identity.period)}|${key(row.partner ?? period?.partner)}|${key(identity.drop)}`;
       const related = identity.periodId
         ? [
             ...(lossGroups.get(`${identity.periodId}|${key(identity.drop)}`) ??
@@ -264,7 +267,7 @@ export function buildDetails(
             ? number(row.total_receivable)
             : round(subtotal - loss + reimbursement),
         packageType: text(meta.packageType),
-        responsible: row.responsible ?? registration?.responsible ?? "",
+        responsible: row.responsible || period?.responsible || (!PARTNERS.includes(normalizePartner(row.partner ?? period?.partner)) ? text(row.partner ?? period?.partner) : "") || registration?.responsible || "",
         email: row.email ?? registration?.email ?? "",
         dropId: row.drop_id ?? registration?.id ?? null,
         paymentDate: row.paid_at ?? period?.payment_date ?? "",
@@ -305,7 +308,7 @@ export function buildTotals(
       const matchingPeriods = periods.filter(
         (period) =>
           period.label === label &&
-          (!partnerFilter || period.partner === partnerFilter),
+          (!partnerFilter || financialPartner(period) === partnerFilter),
       );
       const matchingDetails = details.filter(
         (row) =>
@@ -317,7 +320,7 @@ export function buildTotals(
         loss.financial_period_id
           ? ids.has(loss.financial_period_id)
           : loss.period_label === label &&
-            (!partnerFilter || loss.partner === partnerFilter),
+            (!partnerFilter || financialPartner(loss) === partnerFilter),
       );
       if (
         !matchingPeriods.length &&
@@ -325,20 +328,19 @@ export function buildTotals(
         !matchingLosses.length
       )
         return [];
-      const split = splitLosses(matchingLosses);
+      const split = splitLosses(matchingLosses.filter(loss => {
+        const category = lossClass(loss.status);
+        return category.deducted || category.assumed;
+      }));
       const selectedViews = views.filter((view) =>
         matchingPeriods.some((period) => period.financial_view_id === view.id),
       );
-      // The imported invoice belongs to the entire period; never mix it with a single partner's payables.
-      const metadata = !partnerFilter
-        ? selectedViews.map((view) => notes(view.notes))
-        : [];
+      const metadata = selectedViews
+        .filter(view => !partnerFilter || periods.filter(period => period.financial_view_id === view.id).every(period => financialPartner(period) === partnerFilter))
+        .map(view => notes(view.notes));
       const summaries = metadata.map((meta) => meta.summary).filter(Boolean);
       const sum = (rows: DataRow[], field: string) =>
         round(rows.reduce((total, row) => total + number(row[field]), 0));
-      const importedGross = summaries.length
-        ? sum(summaries, "gross")
-        : round(sum(matchingDetails, "packages") * 0.25);
       const reimbursement = metadata.some((meta) => meta.reimbursement != null)
         ? sum(
             metadata.map((meta) => ({
@@ -352,19 +354,10 @@ export function buildTotals(
       const hasNet =
         matchingPeriods.length > 0 &&
         matchingPeriods.every((period) => period.net_amount != null);
-      const net = summaries.length
-        ? sum(summaries, "invoice")
-        : hasNet
-          ? sum(matchingPeriods, "net_amount")
-          : round(importedGross - split.loss);
-      // Regra do fechamento: bruto é o líquido informado no modelo somado aos
-      // extravios do período, nunca uma estimativa independente.
-      const totalLoss = matchingLosses.length
-        ? split.loss
-        : summaries.length
-          ? sum(summaries, "loss")
-          : sum(matchingDetails, "loss");
-      const gross = round(net + totalLoss);
+      const hasSummaryNet = summaries.length > 0 && summaries.every(summary => summary.invoice != null);
+      const net = hasNet ? sum(matchingPeriods, "net_amount") : hasSummaryNet ? sum(summaries, "invoice") : null;
+      const totalLoss = round(split.w2d + split.d2d);
+      const gross = net === null ? null : round(net + totalLoss);
       const payable = sum(matchingDetails, "receivable");
       const dates = [
         ...new Set(
@@ -381,17 +374,17 @@ export function buildTotals(
         {
           period: label,
           gross,
-          w2d: summaries.length ? sum(summaries, "w2d") : split.w2d,
-          d2d: summaries.length ? sum(summaries, "d2d") : split.d2d,
+          w2d: split.w2d,
+          d2d: split.d2d,
           loss: totalLoss,
           reimbursement,
           net,
           payable,
           deducted: split.deducted,
           assumed: split.assumed,
-          companyPayment: round(net - payable),
+          companyPayment: net === null ? null : round(net - payable),
           paymentDate: dates.join(", "),
-          estimated: !summaries.length && !hasNet,
+          missingNet: net === null,
         },
       ];
     });

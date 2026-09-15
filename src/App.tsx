@@ -514,6 +514,10 @@ function ContractButtons({ drop }: { drop: Drop | null }) {
   if (!drop) return null;
   const generate = async (kind: "service" | "termination") => {
     try {
+      if (!(kind === "service" ? drop.signed_at : drop.terminated_at)) {
+        setState(kind === "service" ? "Informe a data do contrato." : "Informe a data do distrato.");
+        return;
+      }
       setState("Gerando PDF...");
       const template =
         kind === "service"
@@ -548,9 +552,7 @@ function ContractButtons({ drop }: { drop: Drop | null }) {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
               }),
-        dataHoje: new Intl.DateTimeFormat("pt-BR", {
-          dateStyle: "long",
-        }).format(new Date()),
+        dataHoje: documentDate(kind === "service" ? drop.signed_at : drop.terminated_at),
         dataContrato: documentDate(drop.signed_at),
         dataDistrato: documentDate(drop.terminated_at),
         motivoDistrato: String(drop.termination_reason ?? ""),
@@ -983,7 +985,7 @@ function Cadastro() {
           </button>
         </div>
       </form>
-      <ContractButtons drop={record} />
+      <ContractButtons drop={record ? { ...record, signed_at: values.signed_at || null, terminated_at: values.terminated_at || null, termination_reason: values.termination_reason || null } : null} />
     </>
   );
 }
