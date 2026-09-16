@@ -80,6 +80,11 @@ await context.route('**/*', async route => {
       if (request.method() === 'GET') return json({ configured: true, from: 'sender@example.com' })
       const payload = request.postDataJSON()
       assert.ok(request.headers().authorization.startsWith('Bearer '))
+      if (payload.mode === 'test') {
+        assert.deepEqual(payload, { mode: 'test' })
+        mailRequests.push(payload)
+        return json({ status: 'aceito', duplicate: false })
+      }
       assert.ok(Buffer.from(payload.pdf, 'base64').toString('latin1').startsWith('%PDF-'))
       assert.equal(payload.period, 'SETEMBRO')
       assert.equal(payload.partner, partner)
@@ -158,6 +163,18 @@ try {
   await page.getByRole('button', { name: 'Enviar e-mails', exact: true }).click()
   await page.getByRole('status').filter({ hasText: 'Conta remetente não configurada no teste.' }).waitFor()
   assert.equal(mailRequests.length, 2)
+  assert.equal(mailDownloads, 0)
+  mailConfigured = true
+  await page.getByLabel('Período', { exact: true }).selectOption('')
+  await page.getByLabel('Parceiro', { exact: true }).selectOption('')
+  page.once('dialog', async dialog => {
+    assert.match(dialog.message(), /fabioaf9@gmail.com/)
+    await dialog.accept()
+  })
+  await page.getByRole('button', { name: 'Enviar teste', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Teste aceito pelo provedor para fabioaf9@gmail.com.' }).waitFor()
+  assert.equal(mailRequests.length, 3)
+  assert.deepEqual(mailRequests[2], { mode: 'test' })
   assert.equal(mailDownloads, 0)
   page.off('download', countMailDownload)
   console.log('PASS: direct email confirms before send, posts PDF without download and reports uncertain/unconfigured states')
