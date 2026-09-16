@@ -5,6 +5,85 @@ import { PGlite } from '@electric-sql/pglite'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
 
+test('employee RLS recovery restores delegated saves without granting access or deleting history', async () => {
+  const database = new PGlite()
+  try {
+    await database.exec(`
+      create role authenticated;
+      create role anon;
+      create schema auth;
+      create function auth.uid() returns text language sql stable as $$ select current_setting('test.user') $$;
+      create table user_profiles (id text primary key, role text, is_active boolean);
+      create table user_module_permissions (user_id text primary key, funcionarios_view boolean, funcionarios_manage boolean);
+      insert into user_profiles values ('admin','admin',true), ('manager','operador',true), ('manage_only','operador',true), ('viewer','operador',true), ('operator','operador',true), ('inactive','admin',false), ('inactive_manager','operador',false);
+      insert into user_module_permissions values ('manager',true,true), ('manage_only',false,true), ('viewer',true,false), ('operator',false,false), ('inactive',true,true), ('inactive_manager',true,true);
+      create function is_active_user() returns boolean language sql stable security definer as $$ select coalesce((select is_active from user_profiles where id=auth.uid()),false) $$;
+      create function is_admin() returns boolean language sql stable security definer as $$ select coalesce((select role='admin' and is_active from user_profiles where id=auth.uid()),false) $$;
+      create table employees (id integer primary key, full_name text);
+      create table employee_dependents (id integer primary key, employee_id integer references employees(id), is_active boolean default true, deactivated_reason text);
+      alter table employees enable row level security;
+      alter table employee_dependents enable row level security;
+      insert into employees values (10,'Registro preservado');
+      insert into employee_dependents (id,employee_id) values (10,10);
+      create policy custom_employee_guard on employees as restrictive for insert to authenticated with check (id <> 99);
+      grant usage on schema public,auth to authenticated,anon;
+      grant select,insert,update,delete on employees,employee_dependents to authenticated,anon;
+    `)
+    const legacy = await readFile('supabase/04_employees.sql', 'utf8')
+    const permissions = await readFile('supabase/05_user_permissions.sql', 'utf8')
+    await database.exec(permissions.match(/create or replace function public\.has_module_permission[\s\S]+?\$\$;/)[0])
+    await database.exec(legacy.slice(legacy.indexOf('drop policy if exists "employees_admin_only"'), legacy.indexOf('-- Ao criar uma conta')))
+    await database.exec("set role authenticated; select set_config('test.user','manager',false)")
+    assert.equal((await database.query("select has_module_permission('funcionarios_manage') as allowed")).rows[0].allowed, true)
+    await assert.rejects(database.exec("insert into employees values (1,'Teste autorizado')"), /row-level security/)
+    await database.exec('reset role')
+    const snapshot = async () => ({
+      profiles: (await database.query('select * from user_profiles order by id')).rows,
+      permissions: (await database.query('select * from user_module_permissions order by user_id')).rows,
+      employees: (await database.query('select * from employees order by id')).rows,
+      dependents: (await database.query('select * from employee_dependents order by id')).rows,
+    })
+    const before = await snapshot()
+    const migration = await readFile('supabase/migrations/20260916050000_restore_employee_module_policies.sql', 'utf8')
+    await database.exec(migration)
+    await database.exec(migration)
+    assert.deepEqual(await snapshot(), before)
+    assert.equal((await database.query("select policyname from pg_policies where policyname='custom_employee_guard'")).rows.length, 1)
+    assert.ok((await database.query("select relrowsecurity from pg_class where relname in ('employees','employee_dependents')")).rows.every(row => row.relrowsecurity))
+    await database.exec("set role authenticated; select set_config('test.user','manager',false)")
+    assert.equal((await database.query("insert into employees values (1,'Teste autorizado') returning id")).rows[0].id, 1)
+    await database.exec('insert into employee_dependents (id,employee_id) values (1,1)')
+    assert.equal((await database.query("update employees set full_name='Atualizado' where id=1 returning id")).rows.length, 1)
+    assert.equal((await database.query("update employee_dependents set is_active=false,deactivated_reason='Motivo preservado' where id=1 returning id")).rows.length, 1)
+    for (const [index, allowed] of ['admin', 'manage_only'].entries()) {
+      await database.query("select set_config('test.user',$1,false)", [allowed])
+      assert.equal((await database.query('insert into employees values ($1,$2) returning id', [20 + index, 'Autorizado'])).rows.length, 1)
+      assert.equal((await database.query('insert into employee_dependents (id,employee_id) values ($1,$1) returning id', [20 + index])).rows.length, 1)
+      assert.equal((await database.query('delete from employee_dependents where id=10 returning id')).rows.length, 0)
+      assert.equal((await database.query('delete from employees where id=10 returning id')).rows.length, 0)
+      await assert.rejects(database.exec("insert into employees values (99,'Restricao adicional preservada')"), /row-level security/)
+    }
+    for (const denied of ['viewer', 'operator', 'inactive', 'inactive_manager', 'missing_profile']) {
+      await database.query("select set_config('test.user',$1,false)", [denied])
+      assert.equal((await database.query('select id from employees')).rows.length > 0, denied === 'viewer')
+      assert.equal((await database.query('select id from employee_dependents')).rows.length > 0, denied === 'viewer')
+      await assert.rejects(database.exec("insert into employees values (2,'Bloqueado')"), /row-level security/)
+      await assert.rejects(database.exec('insert into employee_dependents (id,employee_id) values (2,1)'), /row-level security/)
+      assert.equal((await database.query("update employees set full_name='Bloqueado' where id=10 returning id")).rows.length, 0)
+      assert.equal((await database.query('update employee_dependents set is_active=false where id=10 returning id')).rows.length, 0)
+    }
+    await database.exec("reset role; set role anon; select set_config('test.user','admin',false)")
+    assert.equal((await database.query('select * from employees')).rows.length, 0)
+    await assert.rejects(database.exec("insert into employees values (2,'Anonimo')"), /row-level security/)
+    await database.exec('reset role')
+    const after = await snapshot()
+    assert.deepEqual(after.profiles, before.profiles)
+    assert.deepEqual(after.permissions, before.permissions)
+    assert.deepEqual(after.employees.find(row => row.id === 10), before.employees[0])
+    assert.deepEqual(after.dependents.find(row => row.id === 10), before.dependents[0])
+  } finally { await database.close() }
+})
+
 test('registration status values satisfy the real SQL constraint and deactivate without deleting the record', async () => {
   const database = new PGlite()
   try {
