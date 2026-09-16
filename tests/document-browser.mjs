@@ -28,6 +28,8 @@ const tables = {
   app_notes: [{ key: 'ready_messages_draft', content: 'Rascunho anterior' }],
   email_logs: [],
   drop_documents: [],
+  employees: [{ id: 'employee1', employee_number: 1, full_name: 'FUNCIONARIO TESTE', cpf: '12345678901', personal_email: 'employee@example.com', state: null, monthly_hours: null, access_role: 'operador', employment_status: 'ativo', transport_voucher: false }],
+  employee_dependents: [],
 }
 const photoBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jK1cAAAAASUVORK5CYII=', 'base64')
 const storagePaths = new Set()
@@ -35,6 +37,10 @@ let serviceTemplatePath = ''
 const writes = []
 const failures = []
 let rejectDropWrite = false
+let employeeWriteError = null
+let rejectDependentName = ''
+let holdEmployeeWrite = false
+const pendingEmployeeWrites = []
 let unchangedDropWrite = false
 let holdDropWrite = false
 const pendingDropWrites = []
@@ -77,6 +83,25 @@ await context.route('**/*', async route => {
       return true
     }))
     let output = filtered
+    if (['employees', 'employee_dependents'].includes(table) && ['POST', 'PATCH'].includes(request.method())) {
+      const payload = request.postDataJSON()
+      const error = (code, message, status = 400) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ code, message }) })
+      if (table === 'employees') {
+        if (employeeWriteError) return error(employeeWriteError, 'Falha simulada.', 403)
+        if (source.some(row => row.id !== url.searchParams.get('id')?.slice(3) && (row.cpf === payload.cpf || row.personal_email?.toLowerCase() === payload.personal_email?.toLowerCase()))) return error('23505', 'Duplicidade simulada.', 409)
+        assert.equal(payload.id, undefined)
+        assert.equal(payload.employee_number, undefined)
+        assert.equal(payload.auth_user_id, undefined)
+        assert.ok(['operador', 'financeiro'].includes(payload.access_role))
+        assert.ok(['ativo', 'inativo', 'desligado'].includes(payload.employment_status))
+        assert.equal(typeof payload.transport_voucher, 'boolean')
+        assert.ok(payload.state === null || /^[A-Z]{2}$/.test(payload.state))
+        if (holdEmployeeWrite) await new Promise(resolve => pendingEmployeeWrites.push(resolve))
+      } else {
+        if (payload.full_name && payload.full_name === rejectDependentName) return error('42501', 'Falha simulada no dependente.', 403)
+        assert.ok(payload.cpf == null || /^\d{11}$/.test(payload.cpf))
+      }
+    }
     if (table === 'drops' && ['POST', 'PATCH'].includes(request.method())) {
       const payload = request.postDataJSON()
       if (payload.status != null) assert.ok(allowedDropStatuses.includes(payload.status), `Status rejected by SQL constraint: ${payload.status}`)
@@ -92,6 +117,7 @@ await context.route('**/*', async route => {
         const existing = source.find(row => record.key && row.key === record.key)
         if (existing) { Object.assign(existing, record); return existing }
         const inserted = { id: `${table}-${source.length + 1}`, is_active: true, ...record }
+        if (table === 'employees') inserted.employee_number = source.length + 1
         source.push(inserted)
         return inserted
       })
@@ -159,6 +185,105 @@ const page = await context.newPage()
 page.on('pageerror', error => failures.push(error.message))
 page.setDefaultTimeout(15000)
 try {
+  await page.goto('http://127.0.0.1:5173/funcionarios')
+  await page.getByRole('row').filter({ hasText: 'FUNCIONARIO TESTE' }).getByRole('button', { name: 'Editar', exact: true }).click()
+  await page.getByLabel('Nome completo', { exact: true }).fill('FUNCIONARIO ATUALIZADO')
+  await page.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await page.getByText('Funcionário atualizado com sucesso.', { exact: true }).waitFor()
+  assert.equal(tables.employees[0].full_name, 'FUNCIONARIO ATUALIZADO')
+  assert.equal(tables.employees[0].state, null)
+  assert.deepEqual(failures, [])
+  await page.getByLabel('Nome completo', { exact: true }).fill('FUNCIONARIO NOVO')
+  await page.getByLabel('CPF', { exact: true }).fill('12345678901')
+  await page.getByLabel('E-mail pessoal', { exact: true }).fill('novo@example.com')
+  await page.getByRole('button', { name: 'Cadastrar funcionário', exact: true }).click()
+  await page.getByRole('alert').filter({ hasText: 'Já existe um funcionário com este CPF ou e-mail.' }).waitFor()
+  assert.equal(await page.getByLabel('Nome completo', { exact: true }).inputValue(), 'FUNCIONARIO NOVO')
+  assert.equal(tables.employees.length, 1)
+  await page.getByLabel('CPF', { exact: true }).fill('98765432100')
+  employeeWriteError = '42501'
+  await page.getByRole('button', { name: 'Cadastrar funcionário', exact: true }).click()
+  await page.getByRole('alert').filter({ hasText: 'Sua conta não tem permissão' }).waitFor()
+  assert.equal(await page.getByRole('button', { name: 'Cadastrar funcionário', exact: true }).isEnabled(), true)
+  employeeWriteError = null
+  await page.getByLabel('UF', { exact: true }).fill('sp')
+  await page.getByLabel('Carga horária mensal', { exact: true }).fill('0')
+  await page.getByRole('button', { name: '+ Adicionar dependente', exact: true }).click()
+  await page.locator('.dependent-row').nth(0).getByLabel('Nome', { exact: true }).fill('DEPENDENTE UM')
+  const beforeIncompleteDependent = writes.length
+  await page.getByRole('button', { name: 'Cadastrar funcionário', exact: true }).click()
+  await page.getByRole('alert').filter({ hasText: 'Preencha nome e parentesco' }).waitFor()
+  assert.equal(writes.length, beforeIncompleteDependent)
+  await page.locator('.dependent-row').nth(0).getByLabel('Parentesco', { exact: true }).fill('Filho')
+  await page.getByRole('button', { name: '+ Adicionar dependente', exact: true }).click()
+  await page.locator('.dependent-row').nth(1).getByLabel('Nome', { exact: true }).fill('DEPENDENTE DOIS')
+  await page.locator('.dependent-row').nth(1).getByLabel('Parentesco', { exact: true }).fill('Filho')
+  rejectDependentName = 'DEPENDENTE DOIS'
+  holdEmployeeWrite = true
+  const pendingEmployeeRequest = page.waitForRequest(request => request.method() === 'POST' && request.url().includes('/rest/v1/employees'))
+  await page.getByRole('button', { name: 'Cadastrar funcionário', exact: true }).click()
+  await pendingEmployeeRequest
+  assert.equal(await page.getByRole('button', { name: 'Salvando...', exact: true }).isDisabled(), true)
+  assert.equal(await page.getByLabel('Nome completo', { exact: true }).isDisabled(), true)
+  await page.locator('.employee-form').evaluate(form => form.requestSubmit())
+  assert.equal(pendingEmployeeWrites.length, 1)
+  holdEmployeeWrite = false
+  pendingEmployeeWrites.shift()()
+  await page.getByRole('alert').filter({ hasText: 'Funcionário salvo, mas há dependentes pendentes.' }).waitFor()
+  assert.equal(tables.employees.length, 2)
+  const savedEmployee = tables.employees[1]
+  assert.equal(savedEmployee.state, 'SP')
+  assert.equal(savedEmployee.monthly_hours, 0)
+  assert.equal(savedEmployee.created_by, user.id)
+  assert.equal(tables.employee_dependents.length, 1)
+  const savedDependentId = tables.employee_dependents[0].id
+  rejectDependentName = ''
+  await page.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Funcionário atualizado com sucesso.' }).waitFor()
+  assert.equal(tables.employees.length, 2)
+  assert.equal(tables.employee_dependents.length, 2)
+  assert.equal(tables.employee_dependents[0].id, savedDependentId)
+  await page.reload()
+  await page.getByRole('row').filter({ hasText: 'FUNCIONARIO NOVO' }).getByRole('button', { name: 'Editar', exact: true }).click()
+  await page.locator('.dependent-row').nth(1).waitFor()
+  assert.equal(await page.locator('.dependent-row').nth(0).getByLabel('CPF', { exact: true }).inputValue(), '')
+  await page.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Funcionário atualizado com sucesso.' }).waitFor()
+  assert.equal(tables.employee_dependents.length, 2)
+  assert.deepEqual(failures, [])
+  await page.getByRole('row').filter({ hasText: 'FUNCIONARIO NOVO' }).getByRole('button', { name: 'Editar', exact: true }).click()
+  await page.locator('.dependent-row').nth(1).waitFor()
+  page.once('dialog', dialog => dialog.accept('Motivo preservado no teste'))
+  await page.locator('.dependent-row').nth(0).getByRole('button', { name: 'Desativar', exact: true }).click()
+  await page.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Funcionário atualizado com sucesso.' }).waitFor()
+  assert.equal(tables.employee_dependents[0].is_active, false)
+  assert.equal(tables.employee_dependents[0].deactivated_reason, 'Motivo preservado no teste')
+  assert.equal(tables.employee_dependents[0].deactivated_by, user.id)
+  assert.equal(tables.employee_dependents.length, 2)
+  await page.getByLabel('Nome completo', { exact: true }).fill('FUNCIONARIO SEM DEPENDENTES')
+  await page.getByLabel('CPF', { exact: true }).fill('11122233344')
+  await page.getByLabel('E-mail pessoal', { exact: true }).fill('  SEMDEPENDENTES@EXAMPLE.COM  ')
+  await page.getByRole('button', { name: 'Cadastrar funcionário', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Funcionário cadastrado com sucesso.' }).waitFor()
+  assert.equal(tables.employees.length, 3)
+  assert.equal(tables.employees[2].personal_email, 'semdependentes@example.com')
+  assert.equal(tables.employees[2].state, null)
+  assert.equal(tables.employees[2].access_role, 'operador')
+  assert.equal(tables.employees[2].employment_status, 'ativo')
+  assert.equal(tables.employees[2].transport_voucher, false)
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    const employeeLayout = await page.locator('.content,.employees,.employee-form,.employee-fields,.employee-list,.employee-list .table-wrap,.employee-fields section,.employee-fields input').evaluateAll(elements => elements.map(element => ({ tag: element.tagName, class: element.className, left: element.getBoundingClientRect().left, right: element.getBoundingClientRect().right, width: element.clientWidth, scroll: element.scrollWidth })).filter(element => element.right > innerWidth || element.left < 0))
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, JSON.stringify({ viewport, employeeLayout }))
+    await page.getByRole('button', { name: 'Cadastrar funcionário', exact: true }).scrollIntoViewIfNeeded()
+    const fits = await page.getByRole('button', { name: 'Cadastrar funcionário', exact: true }).evaluate(element => { const bounds = element.getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth && element.scrollWidth <= element.clientWidth })
+    assert.equal(fits, true)
+    await page.screenshot({ path: `tmp/browser-tests/employees-save-${viewport.width}.png` })
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  console.log('PASS: employees create/reopen with nullable fields, visible duplicate/permission errors, partial dependent retry without duplicates and concurrent-submit guard')
+
   await page.goto('http://127.0.0.1:5173/mensagens')
   await page.getByLabel('Rascunho de mensagem').waitFor()
   await page.waitForFunction(() => document.querySelector('[aria-label="Rascunho de mensagem"]')?.value === 'Rascunho anterior')

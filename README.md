@@ -71,6 +71,10 @@ O SQL é transacional: exige uma única view por período da fonte histórica, c
 
 O bruto segue a regra atual, **líquido + extravios W2D/D2D dos status definidos**, e Talita/Jorge = líquido - total dos DROPs. Os períodos 01, 02, 03, 04, 05 e 08 têm bruto diferente da coluna antiga da planilha porque seus status legados não entram na regra atual; não foram reclassificados. Exemplo validado no fechamento 33: líquido **R$ 153.227,51**, extravios **R$ 31.349,36**, bruto **R$ 184.576,87**, data **16/09/2026**. A suíte SQL usa o cálculo real da aplicação e testa preservação, repetição sem alterações e rollback por conflito, inclusive líquido zero.
 
+### Salvamento de funcionários
+
+O formulário aceita campos opcionais nulos ao reabrir funcionários e dependentes, incluindo UF e CPF de dependente. Somente os campos editáveis são enviados; matrícula, vínculo de autenticação e metadados existentes não são regravados. Erros de CPF/e-mail duplicado ou de permissão ficam visíveis e mantêm os dados digitados, sem deixar o botão preso em "Salvando". Se o funcionário já foi salvo e um dependente falhar, o formulário mantém os IDs confirmados para que a nova tentativa atualize esses registros. O cadastro e os dependentes continuam sendo gravações separadas, não uma transação única. A desativação de dependentes exige motivo e preserva o histórico. A correção não altera permissões, não envia convites e não exige SQL novo.
+
 ### Last Mile e pagamento total
 
 No formulário comum de cadastro (também usado ao reabrir Last Mile), **Salvar e permanecer** mantém os campos e o ID salvo na URL; novos salvamentos atualizam o mesmo registro. **Salvar e sair** retorna à lista correspondente; na criação esse botão continua chamado **Salvar cadastro**. A mudança para **EXCLUÍDO** exige motivo e grava a desativação lógica, sem excluir o histórico. Os status usam a lista canônica de `dropOptions`, compatível com a restrição SQL, inclusive os acentos de EXCLUÍDO e APROVAÇÃO. Falhas de gravação ficam visíveis e preservam os dados digitados e o motivo. Esta correção de salvamento não exige SQL novo nem altera permissões.
