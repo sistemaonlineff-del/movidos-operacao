@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readFile } from 'node:fs/promises'
 import { PGlite } from '@electric-sql/pglite'
+import { build } from 'esbuild'
+import { pathToFileURL } from 'node:url'
 
 test('financial email policies and identity migration preserve data and deny unauthorized access', async () => {
   const database = new PGlite()
@@ -87,5 +89,49 @@ test('direct mail reservations are unique and cannot be forged by browser client
     await assert.rejects(database.exec("insert into email_logs values (4,'enviando','forged-key')"), /row-level security/)
     await assert.rejects(database.exec("insert into email_logs values (5,'aceito',null)"), /row-level security/)
     await database.exec("insert into email_logs values (6,'preparado',null)")
+  } finally { await database.close() }
+})
+
+test('historical net recovery restores 33 totals, preserves existing records and rejects conflicts atomically', async () => {
+  const database = new PGlite()
+  await build({ entryPoints: ['src/financialData.ts'], outfile: 'tmp/database-tests/financial.cjs', bundle: true, platform: 'node', format: 'cjs' })
+  const { buildTotals } = await import(pathToFileURL(`${process.cwd()}/tmp/database-tests/financial.cjs`).href)
+  const migration = await readFile('supabase/migrations/20260916030000_recover_historical_net.sql', 'utf8')
+  try {
+    await database.exec(`
+      create table financial_views (id integer primary key, title text, source_file_name text, is_active boolean, notes text);
+      create table financial_periods (id integer primary key, financial_view_id integer references financial_views(id), label text, partner text, is_active boolean, net_amount numeric, payment_date date);
+    `)
+    await database.exec(migration)
+    const months = ['ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO','JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO']
+    for (let index = 0; index < 33; index++) {
+      const label = `${String(index + 1).padStart(2, '0')}. ${index % 2 + 1}Q DE ${months[Math.floor(index / 2)]}`
+      await database.query('insert into financial_views values ($1,$2,$3,true,$4)', [index + 1, label, '0000 - CONTROLE FINANCEIRO com macro.xlsx', index === 32 ? JSON.stringify({ reimbursement: 17, summary: { custom: 'preserve' } }) : 'Historico original'])
+      for (const offset of [0, 100]) await database.query('insert into financial_periods values ($1,$2,$3,$4,true,null,null)', [index + 1 + offset, index + 1, label, 'IMILE DELIVERY BRAZIL LTDA'])
+    }
+    await database.exec("insert into financial_views values (99,'OUTRO','outro.xlsx',true,'intocado')")
+    const beforePeriods = (await database.query('select * from financial_periods order by id')).rows
+    await database.exec(migration)
+    const views = (await database.query('select * from financial_views order by id')).rows
+    const totals = buildTotals([], [{ financial_period_id: 33, status: 'PUDO Missing', amount: 25107.22 }, { financial_period_id: 33, status: 'D2D Missing - não cobrei', amount: 6242.14 }], beforePeriods, views)
+    assert.equal(totals.length, 33)
+    assert.ok(totals.every(row => !row.missingNet))
+    assert.equal(Math.round(totals.reduce((sum, row) => sum + row.net, 0) * 100) / 100, 2150390.90)
+    assert.equal(totals[32].net, 153227.51)
+    assert.equal(totals[32].gross, 184576.87)
+    assert.equal(totals[32].reimbursement, 17)
+    assert.equal(totals[32].paymentDate, '2026-09-16')
+    assert.equal(JSON.parse(views[0].notes).originalNotes, 'Historico original')
+    assert.equal(JSON.parse(views[32].notes).summary.custom, 'preserve')
+    assert.equal(views[33].notes, 'intocado')
+    assert.deepEqual((await database.query('select * from financial_periods order by id')).rows, beforePeriods)
+    await database.exec(migration)
+    assert.deepEqual((await database.query('select * from financial_views order by id')).rows, views)
+    await database.query('update financial_views set notes=$1 where id=33', [JSON.stringify({ summary: { invoice: 0 } })])
+    await database.exec("update financial_views set notes='Restaurar depois' where id=1")
+    await assert.rejects(database.exec(migration), /Resumo divergente/)
+    await database.exec('rollback')
+    assert.equal((await database.query('select notes from financial_views where id=1')).rows[0].notes, 'Restaurar depois')
+    assert.equal(JSON.parse((await database.query('select notes from financial_views where id=33')).rows[0].notes).summary.invoice, 0)
   } finally { await database.close() }
 })
