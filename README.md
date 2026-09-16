@@ -61,6 +61,16 @@ A sessão será encaminhada ao backend escolhido. Capturar etiquetas pode consum
 
 As funções do leitor dependem de `server/label-auth.ts`, incluído no projeto e resolvido pelos imports `.js` durante a compilação. O módulo valida o token no Supabase, o perfil ativo e a permissão `label_reader_access`; administradores ativos têm acesso. O backend requer `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY`, e o OCR requer `GEMINI_API_KEY`, somente no servidor. `npm test` também compila e carrega as três APIs e valida a autorização com chamadas simuladas, sem consumir OCR nem gravar volumes. O build do frontend sozinho não valida essas funções.
 
+### Recuperação dos Totais Históricos
+
+A migração `supabase/migrations/20260916030000_recover_historical_net.sql` complementa os 33 fechamentos da importação `0000 - CONTROLE FINANCEIRO com macro.xlsx` com líquido e data da aba **Pgto Total** do arquivo original `.xlsm`. Os 33 valores conferidos somam **R$ 2.150.390,90**. O hash SHA-256 da fonte e a linha de origem ficam nas observações estruturadas de cada fechamento; o texto anterior é preservado em `originalNotes`. Linhas futuras sem líquido e linhas adicionais de reembolso não entram na recuperação.
+
+Em 15/09/2026, a complementação equivalente foi aplicada aos 33 registros existentes via sessão administrativa autorizada, com comparação das observações anteriores antes de cada gravação. A releitura confirmou todos os líquidos e a preservação dos demais registros: 1.449 períodos, 1.519 pagamentos históricos, 1.519 itens e 5.299 extravios. Nenhum histórico foi apagado/recriado. O arquivo SQL não foi executado no banco nem registrado automaticamente no controle de migrações; sua execução posterior reconhece os resumos completos e iguais como já recuperados e não os sobrescreve.
+
+O SQL é transacional: exige uma única view por período da fonte histórica, confere os vínculos e rejeita valores/datas conflitantes. Não grava o líquido em cada período de responsável, o que duplicaria o total. Não altera pagamentos de DROPs, extravios ou reembolsos. Em uma base sem essa importação específica, não faz alterações.
+
+O bruto segue a regra atual, **líquido + extravios W2D/D2D dos status definidos**, e Talita/Jorge = líquido - total dos DROPs. Os períodos 01, 02, 03, 04, 05 e 08 têm bruto diferente da coluna antiga da planilha porque seus status legados não entram na regra atual; não foram reclassificados. Exemplo validado no fechamento 33: líquido **R$ 153.227,51**, extravios **R$ 31.349,36**, bruto **R$ 184.576,87**, data **16/09/2026**. A suíte SQL usa o cálculo real da aplicação e testa preservação, repetição sem alterações e rollback por conflito, inclusive líquido zero.
+
 ### Envio direto dos fechamentos
 
 O botão **Enviar e-mails** envia um PDF por DROP pelo servidor, após confirmação do período, parceiro, remetente e quantidade. Não baixa `.eml` nem depende do Outlook instalado. O destinatário é consultado no cadastro do DROP pelo servidor; somente administrador ativo ou usuário ativo com `financeiro_manage` pode enviar. A resposta **ACEITO** significa aceitação pelo provedor, não comprovação de entrega na caixa do destinatário.
