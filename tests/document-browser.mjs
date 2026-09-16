@@ -33,6 +33,9 @@ let maximumReads = 0
 let completedReads = 0
 let allowReads = false
 const pendingReads = []
+const mailRequests = []
+let mailConfigured = true
+let mailUncertain = false
 const labelResult = { extraction: { recipient: { street: 'Rua das Flores', neighborhood: 'Centro', city: 'Suzano', postalCode: '08600-000' }, warnings: [], uncertainFields: [] } }
 await context.addInitScript(({ user, jwt }) => {
   localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token', JSON.stringify({ access_token: jwt, refresh_token: 'local-only', token_type: 'bearer', expires_at: Math.floor(Date.now() / 1000) + 3600, expires_in: 3600, user }))
@@ -72,6 +75,20 @@ await context.route('**/*', async route => {
     return json(request.headers().accept?.includes('application/vnd.pgrst.object+json') ? output[0] ?? null : output)
   }
   if (url.origin === 'http://127.0.0.1:5173') {
+    if (url.pathname === '/api/financial/send-closing') {
+      if (!mailConfigured) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Conta remetente não configurada no teste.' }) })
+      if (request.method() === 'GET') return json({ configured: true, from: 'sender@example.com' })
+      const payload = request.postDataJSON()
+      assert.ok(request.headers().authorization.startsWith('Bearer '))
+      assert.ok(Buffer.from(payload.pdf, 'base64').toString('latin1').startsWith('%PDF-'))
+      assert.equal(payload.period, 'SETEMBRO')
+      assert.equal(payload.partner, partner)
+      assert.equal(payload.dropId, 'drop1')
+      assert.equal(payload.to, undefined)
+      mailRequests.push(payload)
+      if (mailUncertain) return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ status: 'incerto', error: 'Confira a caixa remetente.' }) })
+      return json({ status: 'aceito', duplicate: false })
+    }
     if (url.pathname === '/api/contract-templates') return route.fulfill({ contentType: 'text/html', body: '<html>Local preview</html>' })
     if (url.pathname === '/api/label-routes') return json({ source: 'Teste local', summary: [], records: [{ id: 'route1', street: 'Rua das Flores', neighborhood: 'Centro', city: 'Suzano', postalCode: '08600-000', zone: 'Centro', route: '1', deliverySequence: 1, mapsUrl: '', routeUrl: '', sourceSheet: 'Teste', sourceRow: 1 }] })
     if (url.pathname === '/api/label-read') {
@@ -118,6 +135,32 @@ try {
     await page.locator('.closing-emails').screenshot({ path: `tmp/browser-tests/email-${viewport.width}.png` })
   }
   console.log('PASS: responsible, logistics partner and reference; desktop/mobile email layout')
+
+  await page.getByLabel('Período', { exact: true }).selectOption('SETEMBRO')
+  await page.getByLabel('Parceiro', { exact: true }).selectOption(partner)
+  let mailDownloads = 0
+  const countMailDownload = () => { mailDownloads++ }
+  page.on('download', countMailDownload)
+  page.once('dialog', dialog => dialog.dismiss())
+  await page.getByRole('button', { name: 'Enviar e-mails', exact: true }).click()
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Enviar e-mails' && !button.disabled))
+  assert.equal(mailRequests.length, 0)
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Enviar e-mails', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Aceitos pelo servidor de e-mail: 1.' }).waitFor()
+  assert.equal(mailRequests.length, 1)
+  assert.equal(mailDownloads, 0)
+  mailUncertain = true
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Enviar e-mails', exact: true }).click()
+  await page.getByRole('cell', { name: 'INCERTO', exact: true }).waitFor()
+  mailConfigured = false
+  await page.getByRole('button', { name: 'Enviar e-mails', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Conta remetente não configurada no teste.' }).waitFor()
+  assert.equal(mailRequests.length, 2)
+  assert.equal(mailDownloads, 0)
+  page.off('download', countMailDownload)
+  console.log('PASS: direct email confirms before send, posts PDF without download and reports uncertain/unconfigured states')
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('http://127.0.0.1:5173/cadastros/novo?edit=drop1')

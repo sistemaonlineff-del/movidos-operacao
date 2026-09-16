@@ -348,7 +348,7 @@ export function buildTotals(
             })),
             "value",
           )
-        : summaries.length
+        : summaries.some(summary => summary.reimbursement != null)
           ? sum(summaries, "reimbursement")
           : sum(matchingDetails, "reimbursement");
       const hasNet =

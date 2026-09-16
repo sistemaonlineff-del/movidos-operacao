@@ -64,3 +64,28 @@ test('financial email policies and identity migration preserve data and deny una
     assert.equal((await database.query('select * from email_logs')).rows.length, 0)
   } finally { await database.close() }
 })
+
+test('direct mail reservations are unique and cannot be forged by browser clients', async () => {
+  const database = new PGlite()
+  try {
+    await database.exec(`
+      create role authenticated;
+      create function is_active_user() returns boolean language sql as $$ select true $$;
+      create function has_module_permission(permission_name text) returns boolean language sql as $$ select true $$;
+      create table email_logs (id integer, status text constraint email_logs_status_check check (status in ('enviado','preparado','erro')));
+      insert into email_logs values (1,'enviado');
+      alter table email_logs enable row level security;
+      create policy email_logs_admin on email_logs for all to authenticated using (true) with check (true);
+      grant usage on schema public to authenticated;
+      grant select,insert on email_logs to authenticated;
+    `)
+    await database.exec(await readFile('supabase/migrations/20260916020000_direct_closing_email.sql', 'utf8'))
+    await database.exec("insert into email_logs values (2,'enviando','unique-key')")
+    await assert.rejects(database.exec("insert into email_logs values (3,'enviando','unique-key')"), /unique/)
+    assert.equal((await database.query('select status from email_logs where id=1')).rows[0].status, 'enviado')
+    await database.exec('set role authenticated')
+    await assert.rejects(database.exec("insert into email_logs values (4,'enviando','forged-key')"), /row-level security/)
+    await assert.rejects(database.exec("insert into email_logs values (5,'aceito',null)"), /row-level security/)
+    await database.exec("insert into email_logs values (6,'preparado',null)")
+  } finally { await database.close() }
+})

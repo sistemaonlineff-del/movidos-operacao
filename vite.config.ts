@@ -10,23 +10,25 @@ export default defineConfig(({ mode }) => {
 		}
 	}
 	const labelApi = /^\/api\/label-(routes|read|volume)(?:\?|$)/
+	const mailApi = /^\/api\/financial\/send-closing(?:\?|$)/
 	return {
 		plugins: [react(), {
 			name: 'local-label-api',
 			configureServer(server) {
 				if (backend) return
 				server.middlewares.use((request, response, next) => {
-					if (!labelApi.test(request.url ?? '')) return next()
+					const isMail = mailApi.test(request.url ?? '')
+					if (!isMail && !labelApi.test(request.url ?? '')) return next()
 					response.statusCode = 503
 					response.setHeader('Content-Type', 'application/json; charset=utf-8')
 					response.setHeader('Cache-Control', 'no-store')
-					response.end(JSON.stringify({ error: 'O backend do leitor não está conectado à prévia local. Configure MOVIDOS_BACKEND_URL com a origem HTTPS oficial e reinicie o servidor. A leitura e a gravação de pré-rotas usarão esse ambiente.' }))
+					response.end(JSON.stringify({ error: isMail ? 'O servidor de e-mail não está conectado à prévia local. Configure MOVIDOS_BACKEND_URL e a conta remetente no servidor.' : 'O backend do leitor não está conectado à prévia local. Configure MOVIDOS_BACKEND_URL com a origem HTTPS oficial e reinicie o servidor. A leitura e a gravação de pré-rotas usarão esse ambiente.' }))
 				})
 			},
 		}],
 		server: {
 			watch: { ignored: ['**/tmp/**'] },
-			proxy: backend ? { [labelApi.source]: { target: backend, changeOrigin: true, secure: true } } : undefined,
+			proxy: backend ? { [labelApi.source]: { target: backend, changeOrigin: true, secure: true }, [mailApi.source]: { target: backend, changeOrigin: true, secure: true } } : undefined,
 		},
 	}
 })
