@@ -36,6 +36,9 @@ const pendingReads = []
 const mailRequests = []
 let mailConfigured = true
 let mailUncertain = false
+let mailTestBlocked = false
+let mailRetryUncertain = false
+const testRetryId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const labelResult = { extraction: { recipient: { street: 'Rua das Flores', neighborhood: 'Centro', city: 'Suzano', postalCode: '08600-000' }, warnings: [], uncertainFields: [] } }
 await context.addInitScript(({ user, jwt }) => {
   localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token', JSON.stringify({ access_token: jwt, refresh_token: 'local-only', token_type: 'bearer', expires_at: Math.floor(Date.now() / 1000) + 3600, expires_in: 3600, user }))
@@ -85,8 +88,14 @@ await context.route('**/*', async route => {
         return json({ status: 'verified', message: 'Conexão e autenticação SMTP verificadas. Nenhum e-mail foi enviado. Isso não confirma a entrega da tentativa anterior nem libera seu reenvio.' })
       }
       if (payload.mode === 'test') {
-        assert.deepEqual(payload, { mode: 'test' })
         mailRequests.push(payload)
+        if (payload.retryOf) {
+          assert.deepEqual(payload, { mode: 'test', retryOf: testRetryId, reconciled: true })
+          if (mailRetryUncertain) return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ status: 'incerto', error: 'Repetição sem confirmação; confira as caixas.' }) })
+          return json({ status: 'aceito', duplicate: false })
+        }
+        assert.deepEqual(payload, { mode: 'test' })
+        if (mailTestBlocked) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ status: 'incerto', error: 'Teste anterior sem confirmação.', retryOf: testRetryId }) })
         return json({ status: 'aceito', duplicate: false })
       }
       assert.ok(Buffer.from(payload.pdf, 'base64').toString('latin1').startsWith('%PDF-'))
@@ -191,6 +200,49 @@ try {
   await page.getByRole('status').filter({ hasText: 'Conta remetente não configurada no teste.' }).waitFor()
   assert.equal(mailRequests.length, 3)
   assert.equal(writes.length, writesBeforeVerify)
+  mailConfigured = true
+  mailTestBlocked = true
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Enviar teste', exact: true }).click()
+  await page.getByRole('button', { name: 'Repetir teste', exact: true }).waitFor()
+  assert.equal(mailRequests.length, 4)
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    const fits = await page.getByRole('button', { name: 'Repetir teste', exact: true }).evaluate(element => {
+      const bounds = element.getBoundingClientRect()
+      return bounds.left >= 0 && bounds.right <= innerWidth && element.scrollWidth <= element.clientWidth
+    })
+    assert.equal(fits, true)
+    await page.locator('.closing-emails').screenshot({ path: `tmp/browser-tests/email-retry-${viewport.width}.png` })
+  }
+  page.once('dialog', async dialog => {
+    assert.match(dialog.message(), /entrada\/spam de fabioaf9@gmail.com/)
+    assert.match(dialog.message(), /UMA repetição/)
+    await dialog.dismiss()
+  })
+  await page.getByRole('button', { name: 'Repetir teste', exact: true }).click()
+  assert.equal(mailRequests.length, 4)
+  await page.getByRole('button', { name: 'Verificar conexão', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Conexão e autenticação SMTP verificadas.' }).waitFor()
+  await page.getByRole('button', { name: 'Repetir teste', exact: true }).waitFor()
+  assert.equal(mailRequests.length, 4)
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Repetir teste', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Teste aceito pelo provedor para fabioaf9@gmail.com.' }).waitFor()
+  assert.equal(mailRequests.length, 5)
+  assert.deepEqual(mailRequests[4], { mode: 'test', retryOf: testRetryId, reconciled: true })
+  mailRetryUncertain = true
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Enviar teste', exact: true }).click()
+  await page.getByRole('button', { name: 'Repetir teste', exact: true }).waitFor()
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Repetir teste', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Repetição sem confirmação' }).waitFor()
+  assert.equal(await page.getByRole('button', { name: 'Repetir teste', exact: true }).count(), 0)
+  assert.equal(mailRequests.length, 7)
+  assert.equal(writes.length, writesBeforeVerify)
+  assert.equal(mailDownloads, 0)
+  console.log('PASS: test retry requires mailbox confirmation, cancel does not send, verification does not retry and uncertain retry is not offered again')
   page.off('download', countMailDownload)
   console.log('PASS: direct email confirms before send, posts PDF without download and reports uncertain/unconfigured states')
 

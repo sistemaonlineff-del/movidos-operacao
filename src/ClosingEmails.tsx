@@ -40,6 +40,7 @@ export default function ClosingEmails({
   const [message, setMessage] = useState("");
   const sending = useRef(false);
   const [verifying, setVerifying] = useState(false);
+  const [testRetryId, setTestRetryId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!supabase) return;
@@ -140,15 +141,21 @@ export default function ClosingEmails({
   };
 
   const sendTest = async () => {
-    if (sending.current || !window.confirm("Enviar um e-mail real de teste para fabioaf9@gmail.com, com PDF fictício e sem dados dos DROPs?")) return;
+    const confirmation = testRetryId
+      ? "Você conferiu os Enviados da conta remetente e a entrada/spam de fabioaf9@gmail.com e não encontrou o teste? Autorizar UMA repetição para fabioaf9@gmail.com, com PDF fictício, preservando o histórico?"
+      : "Enviar um e-mail real de teste para fabioaf9@gmail.com, com PDF fictício e sem dados dos DROPs?";
+    if (sending.current || !window.confirm(confirmation)) return;
     sending.current = true;
     setPreparing(true);
     setMessage("");
     try {
-      const result = await requestMail({ mode: "test" });
+      const payload = testRetryId ? { mode: "test", retryOf: testRetryId, reconciled: true } : { mode: "test" };
+      setTestRetryId(null);
+      const result = await requestMail(payload);
+      if (result.status === "incerto" && typeof result.retryOf === "string") setTestRetryId(result.retryOf);
       if (result.status === "aceito") {
         setMessage(result.duplicate
-          ? "O teste de hoje já foi aceito pelo provedor; não foi reenviado. Confira fabioaf9@gmail.com, inclusive o spam."
+          ? "Este teste já foi aceito pelo provedor; não foi reenviado. Confira fabioaf9@gmail.com, inclusive o spam."
           : "Teste aceito pelo provedor para fabioaf9@gmail.com. Confira a caixa de entrada e o spam; a entrega ainda não foi confirmada.");
       } else setMessage(result.error || "O envio do teste não foi confirmado.");
     } catch (caught) {
@@ -233,9 +240,9 @@ export default function ClosingEmails({
             className="secondary"
             disabled={saving || preparing}
             onClick={() => void sendTest()}
-            title="Enviar teste para fabioaf9@gmail.com"
+            title={testRetryId ? "Repetir uma vez após conferir as caixas de e-mail" : "Enviar teste para fabioaf9@gmail.com"}
           >
-            Enviar teste
+            {testRetryId ? "Repetir teste" : "Enviar teste"}
           </button>
           <button
             className="secondary"
