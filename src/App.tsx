@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { FormEvent, Suspense, lazy, useEffect, useState } from "react";
+import { FormEvent, Suspense, lazy, useEffect, useRef, useState } from "react";
 import {
   Navigate,
   Route,
@@ -24,7 +24,7 @@ const ReadyMessages = lazy(() => import("./ReadyMessages"));
 const Documents = lazy(() => import("./Documents"));
 import { AccessProvider, Guard, useAccess } from "./access";
 import LabelReaderGate from "./LabelReaderGate";
-import { PARTNERS, ZONES, normalizePartner, normalizeZone } from "./dropOptions";
+import { DROP_STATUSES, PARTNERS, ZONES, normalizePartner, normalizeZone } from "./dropOptions";
 
 const Lista = lazy(() => import("./CadastrosLista"));
 const DropMap = lazy(() => import("./DropMap"));
@@ -47,19 +47,7 @@ type Drop = {
   [key: string]: unknown;
 };
 type Values = Record<string, string>;
-const statuses = [
-  "INTERESSADO",
-  "PICKUP - INTERESSADO",
-  "AG. ASSINATURA",
-  "CONTRATO ASSINADO",
-  "ENVIADO - AG. APROVAÃƒâ€¡ÃƒÆ’O",
-  "ATIVO",
-  "ATIVO - AG. LOGIN",
-  "ATIVO - AG. INSUMOS",
-  "CONGELADO",
-  "PROBLEMA",
-  "EXCLUÃƒÂDO",
-];
+const statuses = DROP_STATUSES;
 const ufs = [
   "AC",
   "AL",
@@ -614,26 +602,32 @@ function ContractButtons({ drop }: { drop: Drop | null }) {
 }
 function Cadastro() {
   const nav = useNavigate();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const editId = params.get("edit");
   const [values, setValues] = useState<Values>(blank);
   const [record, setRecord] = useState<Drop | null>(null);
   const [loading, setLoading] = useState(Boolean(editId));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [saveError, setSaveError] = useState(false);
+  const [reason, setReason] = useState("");
+  const savingRef = useRef(false);
   const put = (key: string, value: string) =>
     setValues((v) => ({ ...v, [key]: value }));
   useEffect(() => {
-    if (!editId || !supabase) return;
+    if (!supabase) return;
+    if (!editId) { setRecord(null); setValues(blank()); setReason(""); setLoading(false); return; }
+    if (record?.id === editId) return;
     supabase
       .from("drops")
       .select("*")
       .eq("id", editId)
       .single()
       .then(({ data, error }) => {
-        if (error) setMessage(error.message);
+        if (error) { setMessage(error.message); setSaveError(true); }
         else {
           setRecord(data as Drop);
+          setReason("");
           const next = blank();
           fields.forEach(
             (k) =>
@@ -658,9 +652,15 @@ function Cadastro() {
   }, [editId]);
   const save = async (e: FormEvent) => {
     e.preventDefault();
-    if (!supabase) return;
+    if (!supabase || savingRef.current) return;
+    const stay = (e.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "stay";
+    setMessage(""); setSaveError(true);
     if (!values.name.trim()) {
       setMessage("Informe o Nome do Drop.");
+      return;
+    }
+    if (!statuses.includes(values.status)) {
+      setMessage("Selecione um status válido para o cadastro.");
       return;
     }
     const latitude = values.latitude ? Number(values.latitude) : null;
@@ -677,57 +677,66 @@ function Cadastro() {
     const excluding = values.status.includes("EXCLU");
     let deactivationReason = "";
     if (excluding && (!editId || record?.is_active !== false)) {
-      deactivationReason = window.prompt("Informe obrigatoriamente o motivo para desativar este cadastro:")?.trim() ?? "";
+      deactivationReason = reason.trim() || window.prompt("Informe obrigatoriamente o motivo para desativar este cadastro:")?.trim() || "";
       if (!deactivationReason) { setMessage("A observação é obrigatória. O cadastro não foi desativado."); return; }
+      setReason(deactivationReason);
     }
-    const payload: Record<string, unknown> = {};
-    fields.forEach((k) => {
-      if (k === "latitude") payload[k] = latitude;
-      else if (k === "longitude") payload[k] = longitude;
-      else if (k === "monthly_value")
-        payload[k] = values[k] ? Number(digits(values[k])) / 100 : null;
-      else if (k === "size_sqm")
-        payload[k] = values[k] ? Number(values[k]) : null;
-      else payload[k] = values[k].trim() || null;
-    });
-    if (excluding) {
-      const { data: auth } = await supabase.auth.getUser();
-      payload.is_active = false;
-      if (deactivationReason) {
-        payload.deactivated_reason = deactivationReason;
-        payload.deactivated_at = new Date().toISOString();
-        payload.deactivated_by = auth.user?.id ?? null;
-      }
-    } else {
-      payload.is_active = true;
-      if (record?.is_active === false) {
-        payload.deactivated_reason = null;
-        payload.deactivated_at = null;
-        payload.deactivated_by = null;
-      }
-    }
+    savingRef.current = true;
     setSaving(true);
-    const result = editId
-      ? await supabase
-          .from("drops")
-          .update(payload)
-          .eq("id", editId)
-          .select()
-          .single()
-      : await supabase.from("drops").insert(payload).select().single();
-    setSaving(false);
-    if (result.error) {
-      setMessage(result.error.message);
-      return;
-    }
-    setRecord(result.data as Drop);
-    setValues(blank());
-    setMessage(
-      editId
-        ? "AlteraÃ§Ã£o salva. FormulÃ¡rio limpo."
-        : "Cadastro salvo. FormulÃ¡rio limpo.",
-    );
-    setTimeout(() => nav("/cadastros"), 550);
+    try {
+      const payload: Record<string, unknown> = {};
+      fields.forEach((field) => {
+        if (field === "latitude") payload[field] = latitude;
+        else if (field === "longitude") payload[field] = longitude;
+        else if (field === "monthly_value")
+          payload[field] = values[field] ? Number(digits(values[field])) / 100 : null;
+        else if (field === "size_sqm")
+          payload[field] = values[field] ? Number(values[field]) : null;
+        else payload[field] = values[field].trim() || null;
+      });
+      if (excluding) {
+        const { data: auth, error: authError } = await supabase.auth.getUser();
+        if (authError || !auth.user) throw new Error("Entre novamente no sistema antes de desativar o cadastro.");
+        payload.is_active = false;
+        if (deactivationReason) {
+          payload.deactivated_reason = deactivationReason;
+          payload.deactivated_at = new Date().toISOString();
+          payload.deactivated_by = auth.user.id;
+        }
+      } else {
+        payload.is_active = true;
+        if (record?.is_active === false) {
+          payload.deactivated_reason = null;
+          payload.deactivated_at = null;
+          payload.deactivated_by = null;
+        }
+      }
+      const result = editId
+        ? await supabase
+            .from("drops")
+            .update(payload)
+            .eq("id", editId)
+            .select()
+            .single()
+        : await supabase.from("drops").insert(payload).select().single();
+      if (result.error) throw result.error;
+      if (!result.data?.id || result.data.status !== payload.status || result.data.is_active !== payload.is_active || (deactivationReason && result.data.deactivated_reason !== deactivationReason)) throw new Error("O banco não confirmou as alterações do cadastro. Confira sua permissão antes de tentar novamente.");
+      setRecord(result.data as Drop);
+      setReason(""); setSaveError(false);
+      setMessage(excluding ? "Cadastro desativado e motivo salvo." : "Cadastro salvo com sucesso.");
+      if (stay) {
+        if (!editId) {
+          const nextParams = new URLSearchParams(params);
+          nextParams.set("edit", result.data.id);
+          setParams(nextParams, { replace: true });
+        }
+      } else {
+        nav(result.data.registration_type === "last_mile" ? "/cadastros/last-mile" : "/cadastros");
+      }
+    } catch (error) {
+      setMessage(`Não foi possível salvar. ${error instanceof Error ? error.message : String(error?.message || "Confira sua conexão e permissão.")}`);
+      setSaveError(true);
+    } finally { savingRef.current = false; setSaving(false); }
   };
   if (loading)
     return <section className="card">Carregando cadastroâ€¦</section>;
@@ -965,10 +974,12 @@ function Cadastro() {
         </section>
         <DropPhotos dropId={editId || record?.id || null} />
         <DropDocuments dropId={editId || record?.id || null} />
-        {message && <p className="form-message">{message}</p>}
+        {values.status.includes("EXCLU") && reason && <label className="deactivation-reason">Motivo da desativação<textarea value={reason} disabled={saving} onChange={event => setReason(event.target.value)} /></label>}
+        {message && <p className={saveError ? "error" : "form-message"} role={saveError ? "alert" : "status"}>{message}</p>}
         <div className="modal-actions">
           <button
             type="button"
+            disabled={saving}
             onClick={() => {
               setValues(blank());
               nav("/cadastros");
@@ -976,11 +987,14 @@ function Cadastro() {
           >
             Cancelar
           </button>
-          <button className="primary compact" disabled={saving}>
+          <button type="submit" className="secondary" name="saveAction" value="stay" disabled={saving}>
+            Salvar e permanecer
+          </button>
+          <button type="submit" className="primary compact" name="saveAction" value="exit" disabled={saving}>
             {saving
-              ? "Salvandoâ€¦"
+              ? "Salvando…"
               : editId
-                ? "Salvar alteraÃ§Ã£o"
+                ? "Salvar e sair"
                 : "Salvar cadastro"}
           </button>
         </div>

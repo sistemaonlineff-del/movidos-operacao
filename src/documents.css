@@ -1,3 +1,6 @@
+.cadastro-form>.modal-actions{flex-wrap:wrap}
+.cadastro-form .deactivation-reason{display:grid;gap:8px;margin-top:16px}
+.cadastro-form .deactivation-reason textarea{width:100%;min-height:80px;resize:vertical;font:inherit}
 .last-mile-cadastro,.last-mile-cadastro form,.last-mile-cadastro .form-grid>*{min-width:0;max-width:100%}
 .app:has(.last-mile-cadastro)>.content{min-width:0}
 .last-mile-cadastro input,.last-mile-cadastro select,.last-mile-cadastro textarea,.last-mile-cadastro .photo-upload,.last-mile-cadastro .document-upload{min-width:0;max-width:100%}
