@@ -25,7 +25,11 @@ const tables = {
   email_templates: [{ key: 'financial_closing', subject: 'MODELO FINANCEIRO PRIVADO', body: 'CONTEUDO FINANCEIRO PRIVADO' }, { key: 'ready-message-initial', subject: 'Mensagem inicial', body: 'Atendimento publico' }],
   app_notes: [{ key: 'ready_messages_draft', content: 'Rascunho anterior' }],
   email_logs: [],
+  drop_documents: [],
 }
+const photoBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jK1cAAAAASUVORK5CYII=', 'base64')
+const storagePaths = new Set()
+let serviceTemplatePath = ''
 const writes = []
 const failures = []
 let activeReads = 0
@@ -49,11 +53,20 @@ await context.route('**/*', async route => {
   const json = data => route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) })
   if (url.hostname.endsWith('supabase.co')) {
     if (url.pathname === '/auth/v1/user') return json(user)
+    if (url.pathname.startsWith('/storage/v1/')) {
+      const path = decodeURIComponent(url.pathname.split('/movidos-documents/')[1] || '')
+      if (url.pathname.startsWith('/storage/v1/object/sign/') && request.method() === 'POST') return json({ signedURL: `/object/sign/movidos-documents/${path}?token=test-only` })
+      if (request.method() === 'POST') { storagePaths.add(path); return json({ Key: `movidos-documents/${path}` }) }
+      assert.ok(storagePaths.has(path), `Stored object must exist: ${path}`)
+      return route.fulfill({ contentType: path.endsWith('.png') ? 'image/png' : 'application/pdf', body: path.endsWith('.png') ? photoBytes : Buffer.from('%PDF-1.7\nTest attachment\n%%EOF') })
+    }
     if (!url.pathname.startsWith('/rest/v1/')) return json([])
     const table = url.pathname.split('/').pop()
     const source = tables[table] ?? []
     const filtered = source.filter(row => [...url.searchParams].every(([field, value]) => {
       if (value.startsWith('eq.')) return String(row[field]) === value.slice(3)
+      if (value === 'is.null') return row[field] == null
+      if (value.startsWith('in.(')) return value.slice(4, -1).split(',').includes(String(row[field]))
       if (value.startsWith('like.')) return String(row[field]).startsWith(value.slice(5).replace(/%$/, ''))
       return true
     }))
@@ -107,7 +120,13 @@ await context.route('**/*', async route => {
       if (mailUncertain) return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ status: 'incerto', error: 'Confira a caixa remetente.' }) })
       return json({ status: 'aceito', duplicate: false })
     }
-    if (url.pathname === '/api/contract-templates') return route.fulfill({ contentType: 'text/html', body: '<html>Local preview</html>' })
+    if (url.pathname === '/api/contract-templates') {
+      if (request.method() === 'POST') {
+        assert.equal(tables.user_profiles[0].role, 'admin')
+        serviceTemplatePath = request.postDataJSON().serviceTemplatePath
+      }
+      return json({ serviceTemplatePath })
+    }
     if (url.pathname === '/api/label-routes') return json({ source: 'Teste local', summary: [], records: [{ id: 'route1', street: 'Rua das Flores', neighborhood: 'Centro', city: 'Suzano', postalCode: '08600-000', zone: 'Centro', route: '1', deliverySequence: 1, mapsUrl: '', routeUrl: '', sourceSheet: 'Teste', sourceRow: 1 }] })
     if (url.pathname === '/api/label-read') {
       if (request.method() === 'GET') return json({ configured: true })
@@ -270,6 +289,112 @@ try {
   assert.equal(tables.drops[0].terminated_at, '2026-09-15')
   assert.equal(tables.drops[0].termination_reason, 'Encerramento solicitado')
   console.log('PASS: PDFs use selected dates and termination reason; fields persist')
+
+  await page.goto('http://127.0.0.1:5173/financeiro/pagamento-total')
+  const totalRow = () => page.getByRole('row').filter({ has: page.getByText('SETEMBRO', { exact: true }) })
+  await totalRow().getByRole('button', { name: 'Editar', exact: true }).click()
+  let editor = page.getByRole('dialog', { name: 'Editar pagamento total' })
+  assert.equal(await editor.locator('input').count(), 2)
+  await editor.getByLabel('Total líquido a receber', { exact: true }).fill('0')
+  await editor.getByLabel('Data do pagamento', { exact: true }).fill('2026-09-22')
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Total líquido e data do pagamento atualizados.' }).waitFor()
+  assert.equal(tables.financial_periods[0].net_amount, 0)
+  assert.equal(tables.financial_periods[0].payment_date, '2026-09-22')
+  assert.equal(tables.financial_periods[0].partner, 'Eduardo')
+  await page.reload()
+  await totalRow().getByRole('button', { name: 'Editar', exact: true }).click()
+  assert.equal(await editor.getByLabel('Total líquido a receber', { exact: true }).inputValue(), '0')
+  tables.financial_periods[0].net_amount = 123
+  await editor.getByLabel('Total líquido a receber', { exact: true }).fill('99')
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.getByRole('alert').filter({ hasText: 'O registro mudou' }).waitFor()
+  assert.equal(tables.financial_periods[0].net_amount, 123)
+  await editor.getByRole('button', { name: 'Cancelar', exact: true }).click()
+  tables.financial_periods[0].net_amount = null
+  tables.financial_periods.push({ ...tables.financial_periods[0], id: 'p2', partner: 'Felipe' })
+  const preserved = { source: 'legacy', recovery: { hash: 'unchanged' }, summary: { invoice: 1000, reimbursement: 5, other: 'preserved' } }
+  tables.financial_views[0].notes = JSON.stringify(preserved)
+  await page.reload()
+  await totalRow().getByRole('button', { name: 'Editar', exact: true }).click()
+  await editor.getByLabel('Total líquido a receber', { exact: true }).fill('1200.50')
+  await editor.getByLabel('Data do pagamento', { exact: true }).fill('2026-09-23')
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    const fits = await editor.evaluate(element => { const bounds = element.getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth })
+    assert.equal(fits, true)
+    await page.screenshot({ path: `tmp/browser-tests/payment-total-edit-${viewport.width}.png` })
+  }
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Total líquido e data do pagamento atualizados.' }).waitFor()
+  assert.deepEqual(JSON.parse(tables.financial_views[0].notes), { ...preserved, summary: { ...preserved.summary, invoice: 1200.5, paymentDate: '2026-09-23' } })
+  assert.ok(tables.financial_periods.every(period => period.net_amount === null))
+  await page.reload()
+  await totalRow().getByRole('cell', { name: '23/09/2026', exact: true }).waitFor()
+  console.log('PASS: payment total edits only net/date, preserves metadata and zero, rejects stale writes and survives reload')
+
+  await page.goto('http://127.0.0.1:5173/cadastros/last-mile')
+  await page.getByRole('button', { name: '+ Novo cadastro', exact: true }).click()
+  await page.waitForURL('**/cadastros/last-mile/novo')
+  await page.getByRole('heading', { name: 'Fotos do ponto', exact: true }).waitFor()
+  await page.getByRole('heading', { name: 'Contratos e distratos', exact: true }).waitFor()
+  await page.getByRole('heading', { name: /Modelo do contrato/ }).waitFor()
+  assert.equal(await page.getByLabel('Anexar fotos', { exact: true }).count(), 0)
+  const dropCount = tables.drops.length
+  await page.getByLabel('Nome', { exact: true }).fill('LAST MILE TESTE')
+  await page.getByRole('button', { name: 'Salvar cadastro Last Mile', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Cadastro Last Mile salvo.' }).waitFor()
+  const lastMile = tables.drops.find(drop => drop.registration_type === 'last_mile')
+  assert.ok(lastMile)
+  await page.getByLabel('Nome', { exact: true }).fill('LAST MILE ATUALIZADO')
+  await page.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Cadastro Last Mile salvo.' }).waitFor()
+  assert.equal(tables.drops.length, dropCount + 1)
+  assert.equal(lastMile.name, 'LAST MILE ATUALIZADO')
+  await page.getByLabel('Anexar fotos', { exact: true }).setInputFiles({ name: 'fachada.png', mimeType: 'image/png', buffer: photoBytes })
+  await page.locator('.drop-photos img').waitFor()
+  for (const kind of ['contrato', 'distrato']) {
+    await page.getByLabel(`Anexar ${kind}`, { exact: true }).setInputFiles({ name: `${kind}.pdf`, mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\nTest attachment\n%%EOF') })
+    await page.locator('.drop-documents').getByRole('button', { name: `${kind}.pdf`, exact: true }).waitFor()
+  }
+  assert.deepEqual(tables.drop_documents.map(document => document.kind).sort(), ['contrato', 'distrato', 'foto'])
+  assert.ok(tables.drop_documents.every(document => document.drop_id === lastMile.id && document.storage_path.startsWith(`drops/${lastMile.id}/`)))
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await page.locator('.drop-photos').scrollIntoViewIfNeeded()
+    const bounds = await page.locator('.drop-photos').evaluate(element => { const bounds = element.getBoundingClientRect(); return { left: bounds.left, right: bounds.right, screen: innerWidth } })
+    if (bounds.left < 0 || bounds.right > bounds.screen + 1) {
+      const overflow = await page.locator('.last-mile-cadastro').evaluate(element => [element, ...element.querySelectorAll('*')].map(node => {
+        const rect = node.getBoundingClientRect(), style = getComputedStyle(node)
+        return { tag: node.tagName, class: node.className, width: rect.width, right: rect.right, min: style.minWidth, grid: style.gridTemplateColumns }
+      }).filter(row => row.right > innerWidth + 1))
+      assert.fail(JSON.stringify({ bounds, overflow }))
+    }
+    assert.equal(await page.locator('.drop-photos img').evaluate(image => image.complete && image.naturalWidth > 0), true)
+    await page.screenshot({ path: `tmp/browser-tests/last-mile-attachments-${viewport.width}.png`, fullPage: true })
+  }
+  await page.getByLabel('Enviar modelo temporário', { exact: true }).setInputFiles({ name: 'modelo.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: await readFile('public/templates/modelo-contrato-prestacao-servico.docx') })
+  await page.getByText('Modelo temporário ativado. Os próximos contratos usarão esta versão.', { exact: true }).waitFor()
+  assert.match(serviceTemplatePath, /^contract-templates\/service\//)
+  await page.getByRole('button', { name: 'Restaurar modelo padrão', exact: true }).click()
+  await page.getByText('Modelo padrão restaurado para os próximos contratos.', { exact: true }).waitFor()
+  assert.equal(serviceTemplatePath, '')
+  await page.goto(`http://127.0.0.1:5173/cadastros/novo?edit=${lastMile.id}`)
+  await page.locator('.drop-documents').getByRole('button', { name: 'contrato.pdf', exact: true }).waitFor()
+  await page.locator('.drop-photos img').waitFor()
+  const attachmentDownload = page.waitForEvent('download')
+  await page.locator('.drop-documents').getByRole('button', { name: 'contrato.pdf', exact: true }).click()
+  assert.equal((await attachmentDownload).suggestedFilename(), 'contrato.pdf')
+  tables.user_profiles[0].role = 'operador'
+  Object.assign(tables.user_module_permissions[0], { cadastros_view: true, cadastros_create: true, financeiro_view: true, financeiro_manage: false })
+  await page.goto('http://127.0.0.1:5173/cadastros/last-mile/novo')
+  await page.getByRole('heading', { name: 'Fotos do ponto', exact: true }).waitFor()
+  assert.equal(await page.getByRole('heading', { name: /Modelo do contrato/ }).count(), 0)
+  await page.goto('http://127.0.0.1:5173/financeiro/pagamento-total')
+  await totalRow().waitFor()
+  assert.equal(await page.getByRole('button', { name: 'Editar', exact: true }).count(), 0)
+  tables.user_profiles[0].role = 'admin'
+  console.log('PASS: Last Mile photos/contracts persist under one ID, model edit is admin-only and finance viewer cannot edit totals')
 
   await page.goto('http://127.0.0.1:5173/financeiro')
   await page.getByLabel('Período do fechamento').fill('NOVO PERIODO')

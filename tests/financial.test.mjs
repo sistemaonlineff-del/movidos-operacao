@@ -11,7 +11,7 @@ await build({ entryPoints: ['src/cnabSpreadsheet.ts'], outfile: 'tmp/financial-t
 await build({ entryPoints: ['src/closingSpreadsheet.ts'], outfile: 'tmp/financial-tests/closing.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
 const { createClosingTemplate, readClosingSummary, readHistoricalPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/closing.cjs`).href)
 const { readCnabSpreadsheet } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/spreadsheet.mjs`).href)
-const { buildDetails, buildTotals, lossClass, lossesFor, number, splitLosses } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
+const { buildDetails, buildTotals, paymentTotalTarget, lossClass, lossesFor, number, splitLosses } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
 const { createCnabInter, pixKeyType, prepareCnabPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/cnab.mjs`).href)
 const periods = [{ id: 'p1', label: '33. 1Q DE AGOSTO', partner: 'IMILE DELIVERY BRAZIL LTDA', financial_view_id: 'v1', net_amount: null }, { id: 'p2', label: '33. 1Q DE AGOSTO', partner: 'J&T EXPRESS LTDA', financial_view_id: 'v1', net_amount: null }]
 const item = { id: 'i1', financial_period_id: 'p1', drop_name_snapshot: 'VNM', quantity_packages: 2168, unit_value: .13, reimbursement: 0 }
@@ -82,6 +82,23 @@ test('recovering only invoice and date does not erase reimbursement from details
   assert.equal(total.reimbursement, 25)
   assert.equal(total.net, 1000)
   assert.equal(total.payable, 306.84)
+})
+
+test('manual payment totals target one source without duplicating legacy net or crossing partners', () => {
+  const partner = periods[0].partner
+  const legacyPeriods = [{ ...periods[0], partner: 'Eduardo' }, { ...periods[0], id: 'p3', partner: 'Felipe' }]
+  const view = { id: 'v1', notes: JSON.stringify({ source: 'preserved', summary: { invoice: 0, paymentDate: '2026-09-20', reimbursement: 12 } }) }
+  assert.equal(paymentTotalTarget([periods[0]], [view], periods[0].label, partner).table, 'financial_periods')
+  assert.equal(paymentTotalTarget(legacyPeriods, [view], periods[0].label, partner).table, 'financial_views')
+  assert.equal(paymentTotalTarget([...legacyPeriods, periods[1]], [view], periods[0].label, partner), null)
+  assert.equal(paymentTotalTarget(legacyPeriods.map(row => ({ ...row, net_amount: 10 })), [view], periods[0].label, partner), null)
+  assert.equal(paymentTotalTarget(legacyPeriods, [], periods[0].label, partner), null)
+  const detail = { period: periods[0].label, partner, receivable: 25, paymentDate: '2026-09-01' }
+  const total = buildTotals([detail], [loss('manual', 'PUDO Missing', 10)], legacyPeriods, [view])[0]
+  assert.equal(total.net, 0); assert.equal(total.gross, 10); assert.equal(total.companyPayment, -25)
+  assert.equal(total.paymentDate, '2026-09-20'); assert.equal(total.reimbursement, 12)
+  const updated = buildTotals([detail], [], [{ ...periods[0], net_amount: 1200.5, payment_date: '2026-09-21' }], [view])[0]
+  assert.equal(updated.net, 1200.5); assert.equal(updated.paymentDate, '2026-09-21')
 })
 
 test('closing template imports one net amount and date per partner without duplicating totals', async () => {

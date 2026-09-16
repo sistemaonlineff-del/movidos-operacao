@@ -11,6 +11,7 @@ import {
   notes,
   number,
   periodOrder,
+  paymentTotalTarget,
   round,
   text,
 } from "./financialData";
@@ -18,6 +19,7 @@ import { readFinancialRows as allRows } from "./financialStore";
 import CnabUpload from "./CnabUpload";
 import ClosingEmails from "./ClosingEmails";
 import { PARTNERS } from "./dropOptions";
+import { useAccess } from "./access";
 
 type Kind = "total" | "details" | "losses" | "cnab";
 const options = (values: unknown[]) =>
@@ -74,6 +76,8 @@ export default function FinanceiroVisuais({ kind }: { kind: Kind }) {
 }
 
 function FinanceiroVisualPage({ kind }: { kind: Kind }) {
+  const { can, profile } = useAccess();
+  const canEditTotal = profile?.is_active === true && can("financeiro_manage");
   const [periods, setPeriods] = useState<DataRow[]>([]),
     [views, setViews] = useState<DataRow[]>([]),
     [history, setHistory] = useState<DataRow[]>([]),
@@ -89,6 +93,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     [statusFilter, setStatusFilter] = useState(""),
     [observationFilter, setObservationFilter] = useState("");
   const [editing, setEditing] = useState<DataRow | null>(null),
+    [editingTotal, setEditingTotal] = useState<DataRow | null>(null),
     [editingLoss, setEditingLoss] = useState<DataRow | null>(null),
     [saving, setSaving] = useState(false),
     [editError, setEditError] = useState(""),
@@ -128,6 +133,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
   }, []);
   useEffect(() => {
     setEditing(null);
+    setEditingTotal(null);
     setEditingLoss(null);
     setDropFilter("");
     setStatusFilter("");
@@ -230,6 +236,43 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     } finally {
       setGeneratingCnab(false);
     }
+  };
+  const editTotal = (row: DataRow) => {
+    if (!canEditTotal) return;
+    const partners = options(periods.filter(period => period.label === row.period).map(financialPartner));
+    const partner = partnerFilter || (partners.length === 1 ? partners[0] : "");
+    if (!partner) { setError("Selecione um parceiro para editar o total deste período."); return; }
+    const target = paymentTotalTarget(periods, views, row.period, partner);
+    if (!target) { setError("Este total reúne origens sem um único registro editável. Confira os períodos importados antes de alterar o líquido."); return; }
+    setError(""); setEditError("");
+    setEditingTotal({ ...target, period: row.period, partner, net: row.net ?? "", paymentDate: row.paymentDate?.includes(",") ? "" : row.paymentDate || "" });
+  };
+  const saveTotal = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!editingTotal || !supabase || saving || !canEditTotal) return;
+    setSaving(true); setEditError("");
+    try {
+      const net = Number(editingTotal.net);
+      const paymentDate = text(editingTotal.paymentDate);
+      if (!text(editingTotal.net) || !Number.isFinite(net) || !/^\d{4}-\d{2}-\d{2}$/.test(paymentDate) || new Date(`${paymentDate}T12:00:00Z`).toISOString().slice(0, 10) !== paymentDate) throw new Error("Informe um líquido válido e a data do pagamento.");
+      const { table, record } = editingTotal;
+      let payload: DataRow;
+      if (table === "financial_views") {
+        const previous = notes(record.notes);
+        payload = { notes: JSON.stringify({ ...previous, originalNotes: previous.originalNotes ?? (Object.keys(previous).length ? undefined : record.notes), summary: { ...previous.summary, invoice: round(net), paymentDate } }) };
+      } else payload = { net_amount: round(net), payment_date: paymentDate };
+      let query = supabase.from(table).update(payload).eq("id", record.id).eq("is_active", true);
+      for (const field of table === "financial_views" ? ["notes"] : ["net_amount", "payment_date"]) {
+        query = record[field] == null ? query.is(field, null) : query.eq(field, record[field]);
+      }
+      const { data, error } = await query.select("id");
+      if (error) throw error;
+      if (data?.length !== 1) throw new Error("O registro mudou ou você não tem permissão. Atualize a página antes de tentar novamente.");
+      setEditingTotal(null); setMessage("Total líquido e data do pagamento atualizados.");
+      await load();
+    } catch (caught) {
+      setEditError((caught as Error).message || "Não foi possível salvar o pagamento total.");
+    } finally { setSaving(false); }
   };
   const saveDetail = async (event: FormEvent) => {
     event.preventDefault();
@@ -531,7 +574,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       {loading ? (
         <section className="card empty">Carregando dados da base…</section>
       ) : error && !periods.length ? null : kind === "total" ? (
-        <PaymentTotal rows={totals} />
+        <PaymentTotal rows={totals} onEdit={canEditTotal ? editTotal : undefined} />
       ) : kind === "details" ? (
         <PaymentDetails
           rows={filteredDetails}
@@ -565,6 +608,15 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           period={periodFilter}
           partner={partnerFilter}
         />
+      )}
+      {editingTotal && (
+        <Editor title="Editar pagamento total" onClose={() => !saving && setEditingTotal(null)} onSubmit={saveTotal} saving={saving} error={editError}>
+          <p>{editingTotal.period} · {editingTotal.partner}</p>
+          <div className="form-grid">
+            <label>Total líquido a receber<input autoFocus required type="number" step="0.01" value={editingTotal.net} onChange={event => setEditingTotal({ ...editingTotal, net: event.target.value })} /></label>
+            <label>Data do pagamento<input required type="date" value={editingTotal.paymentDate} onChange={event => setEditingTotal({ ...editingTotal, paymentDate: event.target.value })} /></label>
+          </div>
+        </Editor>
       )}
       {editing && (
         <Editor
@@ -745,7 +797,7 @@ function Editor({
     </dialog>
   );
 }
-function PaymentTotal({ rows }: { rows: DataRow[] }) {
+function PaymentTotal({ rows, onEdit }: { rows: DataRow[]; onEdit?: (row: DataRow) => void }) {
   return (
     <section className="card">
       {rows.some((row) => row.missingNet) && <p role="status" className="financial-hint">Total líquido pendente em um ou mais períodos.</p>}
@@ -758,6 +810,7 @@ function PaymentTotal({ rows }: { rows: DataRow[] }) {
                 <th key={field}>{title}</th>
               ))}
               <th>Data do pagamento</th>
+              {onEdit && <th>Ações</th>}
             </tr>
           </thead>
           <tbody>
@@ -767,6 +820,7 @@ function PaymentTotal({ rows }: { rows: DataRow[] }) {
                 <td key={field}>{rows.some(row => row[field] == null) ? "—" : money(sum(rows, field))}</td>
               ))}
               <td />
+              {onEdit && <td />}
             </tr>
             {rows.map((row) => (
               <tr key={row.period}>
@@ -796,9 +850,10 @@ function PaymentTotal({ rows }: { rows: DataRow[] }) {
                     ? row.paymentDate.split(", ").map(date).join(", ")
                     : "—"}
                 </td>
+                {onEdit && <td><button type="button" className="table-action" onClick={() => onEdit(row)} title={`Editar líquido e data de ${row.period}`}>Editar</button></td>}
               </tr>
             ))}
-            {!rows.length && <EmptyRow columns={12} />}
+            {!rows.length && <EmptyRow columns={onEdit ? 13 : 12} />}
           </tbody>
         </table>
       </div>
