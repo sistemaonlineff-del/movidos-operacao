@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { build } from 'esbuild'
 import { mkdir } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+import { createHash } from 'node:crypto'
 
 await mkdir('tmp/mail-tests', { recursive: true })
 await build({ entryPoints: ['server/closing-mail.ts'], outfile: 'tmp/mail-tests/mail.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
@@ -196,6 +197,7 @@ test('API checks permissions, uses registered recipient, reserves once and never
     assert.equal((await invoke()).body.status, 'incerto')
     assert.equal((await invoke()).status, 409)
     assert.equal(sends, 2)
+    assert.equal((await invoke()).body.retryOf, undefined)
     log = null; providerFails = false; finishFails = true
     assert.equal((await invoke()).body.status, 'incerto')
     assert.equal((await invoke()).status, 409)
@@ -216,6 +218,106 @@ test('API checks permissions, uses registered recipient, reserves once and never
     assert.equal(log.recipient_email, 'fabioaf9@gmail.com')
     assert.equal((await invoke(testPayload)).body.duplicate, true)
     assert.equal(sends, 4)
+    log.status = 'incerto'
+    assert.equal((await invoke(testPayload)).body.retryOf, log.id)
+    log.status = 'enviando'
+    assert.equal((await invoke(testPayload)).body.retryOf, undefined)
+    assert.equal(sends, 4)
+  } finally {
+    globalThis.fetch = originalFetch
+    for (const name of Object.keys(process.env)) if (!(name in originalEnv)) delete process.env[name]
+    Object.assign(process.env, originalEnv)
+  }
+})
+
+test('reconciled test retry preserves the original and reserves at most once, including concurrent or uncertain retries', async () => {
+  const originalEnv = { ...process.env }
+  const originalFetch = globalThis.fetch
+  const module = await import(pathToFileURL(`${process.cwd()}/tmp/mail-tests/handler.cjs`).href)
+  const handler = module.default.default ?? module.default
+  const originalId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const retryId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const original = { id: originalId, status: 'incerto', sent_at: '2026-09-16T01:31:17.377Z', recipient_email: 'fabioaf9@gmail.com', subject: 'MOVIDOS - Teste de envio de e-mail', attachment_name: 'movidos-teste-email.pdf', drop_name_snapshot: 'TESTE FICTICIO', drop_id: null, financial_period_id: null, delivery_key: createHash('sha256').update('mail-test:fabioaf9@gmail.com:2026-09-16').digest('hex') }
+  let prior = { ...original }, retryLog = null, active = true, role = 'admin', failSend = false, failFinish = false, failRead = false
+  let sends = 0, reservations = 0
+  const payload = { mode: 'test', retryOf: originalId, reconciled: true }
+  const invoke = async (body = payload) => {
+    let result
+    const response = { setHeader() {}, status(status) { this.statusCode = status; return this }, json(value) { result = { status: this.statusCode, body: value }; return this } }
+    await handler({ method: 'POST', headers: { authorization: 'Bearer test-token' }, body }, response)
+    return result
+  }
+  try {
+    Object.assign(process.env, { SUPABASE_URL: 'https://mail-test.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test-key', MAIL_PROVIDER: 'microsoft365', MAIL_FROM: 'sender@example.com', MAIL_MS_TENANT_ID: 'test-tenant', MAIL_MS_CLIENT_ID: 'test-client', MAIL_MS_CLIENT_SECRET: 'test-secret' })
+    delete process.env.MAIL_TEST_RECIPIENT
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input.url ?? String(input))
+      if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test-only' })
+      if (url.hostname === 'graph.microsoft.com') {
+        sends++
+        const message = JSON.parse(init.body).message
+        assert.equal(message.toRecipients[0].emailAddress.address, 'fabioaf9@gmail.com')
+        assert.match(Buffer.from(message.attachments[0].contentBytes, 'base64').toString('latin1'), /Documento ficticio/)
+        if (failSend) throw new Error('Simulated uncertain retry')
+        return new Response(null, { status: 202 })
+      }
+      assert.equal(url.origin, 'https://mail-test.supabase.co')
+      if (url.pathname === '/auth/v1/user') return Response.json({ id: '11111111-1111-4111-8111-111111111111' })
+      if (url.pathname.endsWith('/user_profiles')) return Response.json([{ role, is_active: active }])
+      if (url.pathname.endsWith('/user_module_permissions')) return Response.json([{ financeiro_manage: true }])
+      assert.ok(url.pathname.endsWith('/email_logs'), 'No financial data may be accessed')
+      if (init?.method === 'POST') {
+        if (retryLog) return Response.json({ code: '23505' }, { status: 409 })
+        reservations++
+        retryLog = { id: retryId, sent_at: original.sent_at, ...JSON.parse(init.body) }
+        assert.equal(retryLog.delivery_key, createHash('sha256').update(`mail-test-retry:${originalId}`).digest('hex'))
+        assert.equal(retryLog.status, 'enviando')
+        return Response.json({ id: retryId })
+      }
+      if (init?.method === 'PATCH') {
+        assert.equal(url.searchParams.get('id'), `eq.${retryId}`, 'Original log must never be updated')
+        if (failFinish) return Response.json({ message: 'Write failed' }, { status: 503 })
+        Object.assign(retryLog, JSON.parse(init.body))
+        return new Response(null, { status: 204 })
+      }
+      if (url.searchParams.has('id')) {
+        if (failRead) return Response.json({ message: 'Read failed' }, { status: 503 })
+        const selected = url.searchParams.get('id')?.toLowerCase() === `eq.${originalId}` ? prior : retryLog
+        return Response.json(selected ? [selected] : [])
+      }
+      return Response.json(retryLog ? [retryLog] : [])
+    }
+    active = false; assert.equal((await invoke()).status, 403)
+    active = true; role = 'operador'; assert.equal((await invoke()).status, 403)
+    role = 'admin'
+    for (const body of [{ ...payload, reconciled: false }, { ...payload, reconciled: 'true' }, { ...payload, retryOf: 'invalid' }]) assert.equal((await invoke(body)).status, 400)
+    process.env.MAIL_TEST_RECIPIENT = 'another@example.com'; assert.equal((await invoke()).status, 403)
+    delete process.env.MAIL_TEST_RECIPIENT
+    failRead = true; assert.equal((await invoke()).status, 503); failRead = false
+    prior = null; assert.equal((await invoke()).status, 409)
+    for (const patch of [{ status: 'aceito' }, { status: 'enviando' }, { recipient_email: 'another@example.com' }, { drop_id: 'drop' }, { financial_period_id: 'period' }, { drop_name_snapshot: 'REAL' }, { subject: 'Closing' }, { attachment_name: 'real.pdf' }, { delivery_key: 'forged' }, { sent_at: null }]) {
+      prior = { ...original, ...patch }
+      assert.equal((await invoke()).status, 409)
+    }
+    assert.equal(sends, 0); assert.equal(reservations, 0)
+    prior = { ...original }
+    const concurrent = await Promise.all([invoke(), invoke({ ...payload, retryOf: originalId.toUpperCase(), to: 'forged@example.com', pdf: 'ignored' })])
+    assert.ok(concurrent.some(result => result.body.status === 'aceito'))
+    assert.equal(sends, 1); assert.equal(reservations, 1)
+    assert.equal((await invoke()).body.duplicate, true)
+    assert.equal((await invoke({ ...payload, retryOf: originalId.toUpperCase() })).body.duplicate, true)
+    assert.deepEqual(prior, original)
+    retryLog = null; failSend = true
+    assert.equal((await invoke()).body.status, 'incerto')
+    assert.equal((await invoke()).status, 409)
+    assert.equal((await invoke()).body.retryOf, undefined)
+    assert.equal((await invoke({ ...payload, retryOf: retryId })).status, 409)
+    assert.equal(sends, 2); assert.equal(reservations, 2)
+    retryLog = null; failSend = false; failFinish = true
+    assert.equal((await invoke()).body.status, 'incerto')
+    assert.equal((await invoke()).status, 409)
+    assert.equal(sends, 3); assert.equal(reservations, 3)
+    assert.deepEqual(prior, original)
   } finally {
     globalThis.fetch = originalFetch
     for (const name of Object.keys(process.env)) if (!(name in originalEnv)) delete process.env[name]

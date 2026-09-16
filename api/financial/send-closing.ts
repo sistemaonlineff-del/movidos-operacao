@@ -9,21 +9,21 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const emailAddress = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/
 const testRecipient = 'fabioaf9@gmail.com'
 
-async function deliver(admin: SupabaseClient, res: VercelResponse, record: Record<string, unknown>, mail: ClosingMail, send: ReturnType<typeof configuredMailer>) {
+async function deliver(admin: SupabaseClient, res: VercelResponse, record: Record<string, unknown>, mail: ClosingMail, send: ReturnType<typeof configuredMailer>, offerTestRetry = false) {
   const { data: log, error: reserveError } = await admin.from('email_logs').insert(record).select('id').single()
   if (reserveError) {
     if (reserveError.code !== '23505') throw new MailError(503, 'Não foi possível registrar o envio. Nenhum e-mail foi disparado.')
-    const { data: previous, error } = await admin.from('email_logs').select('status,error_message').eq('delivery_key', record.delivery_key).maybeSingle()
+    const { data: previous, error } = await admin.from('email_logs').select('id,status,error_message').eq('delivery_key', record.delivery_key).maybeSingle()
     if (error || !previous) throw new MailError(503, 'Não foi possível conferir o envio anterior. Não repita o disparo.')
     if (previous.status === 'aceito') return res.status(200).json({ status: 'aceito', duplicate: true })
-    return res.status(409).json({ status: 'incerto', error: previous.error_message || 'Há um envio em andamento ou sem confirmação. Confira a caixa remetente antes de repetir.' })
+    return res.status(409).json({ status: 'incerto', error: previous.error_message || 'Há um envio em andamento ou sem confirmação. Confira a caixa remetente antes de repetir.', retryOf: offerTestRetry && previous.status === 'incerto' ? previous.id : undefined })
   }
   try {
     await send(mail)
   } catch (caught) {
     const message = `${mailFailureMessage(caught)} Confira a caixa remetente; não houve tentativa automática de reenvio.`
     await admin.from('email_logs').update({ status: 'incerto', error_message: message }).eq('id', log.id)
-    return res.status(502).json({ status: 'incerto', error: message })
+    return res.status(502).json({ status: 'incerto', error: message, retryOf: offerTestRetry ? log.id : undefined })
   }
   const { error: finishError } = await admin.from('email_logs').update({ status: 'aceito', sent_at: new Date().toISOString(), error_message: null }).eq('id', log.id)
   if (finishError) return res.status(202).json({ status: 'incerto', error: 'O provedor aceitou o e-mail, mas o registro final falhou. Não reenvie; confira a caixa remetente.' })
@@ -64,13 +64,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (profile.role !== 'admin') throw new MailError(403, 'Somente administrador pode enviar o e-mail de teste.')
       if (process.env.MAIL_TEST_RECIPIENT && process.env.MAIL_TEST_RECIPIENT.trim().toLowerCase() !== testRecipient) throw new MailError(403, 'O destinatário de teste configurado no servidor difere do destinatário autorizado.')
       const subject = 'MOVIDOS - Teste de envio de e-mail'
+      let deliveryKey = createHash('sha256').update(`mail-test:${testRecipient}:${new Date().toISOString().slice(0, 10)}`).digest('hex')
+      const retryRequested = input.retryOf != null
+      if (retryRequested) {
+        if (typeof input.retryOf !== 'string' || !uuid.test(input.retryOf) || input.reconciled !== true) throw new MailError(400, 'Confirme a conferência das caixas de e-mail antes de autorizar uma repetição do teste.')
+        const { data: previous, error } = await admin.from('email_logs').select('id,delivery_key,status,sent_at,recipient_email,subject,attachment_name,drop_name_snapshot,drop_id,financial_period_id').eq('id', input.retryOf).maybeSingle()
+        if (error) throw new MailError(503, 'Não foi possível conferir a tentativa anterior. Nenhum e-mail foi enviado.')
+        if (!previous || previous.status !== 'incerto' || previous.recipient_email !== testRecipient || previous.subject !== subject || previous.attachment_name !== 'movidos-teste-email.pdf' || previous.drop_name_snapshot !== 'TESTE FICTICIO' || previous.drop_id != null || previous.financial_period_id != null || !previous.sent_at || !Number.isFinite(Date.parse(previous.sent_at))) throw new MailError(409, 'Somente o teste fictício original sem confirmação pode ter uma repetição autorizada.')
+        const originalKey = createHash('sha256').update(`mail-test:${testRecipient}:${new Date(previous.sent_at).toISOString().slice(0, 10)}`).digest('hex')
+        if (previous.delivery_key !== originalKey) throw new MailError(409, 'Esta tentativa não permite outra repetição. Confira as caixas de e-mail antes de qualquer nova ação.')
+        deliveryKey = createHash('sha256').update(`mail-test-retry:${previous.id.toLowerCase()}`).digest('hex')
+      }
       const body = 'Este e um teste autorizado do envio direto do sistema MOVIDOS. O PDF anexo contem somente dados ficticios. Nenhum fechamento real foi enviado.'
       const document = new jsPDF()
       document.text(['MOVIDOS - TESTE DE E-MAIL', '', 'Documento ficticio, sem valor financeiro.', 'Nenhum dado de DROP ou fechamento real.', `Destinatario: ${testRecipient}`], 20, 25)
       const pdf = Buffer.from(document.output('arraybuffer'))
       const attachmentName = 'movidos-teste-email.pdf'
-      const deliveryKey = createHash('sha256').update(`mail-test:${testRecipient}:${new Date().toISOString().slice(0, 10)}`).digest('hex')
-      return await deliver(admin, res, { delivery_key: deliveryKey, recipient_email: testRecipient, subject, attachment_name: attachmentName, drop_name_snapshot: 'TESTE FICTICIO', status: 'enviando', created_by: auth.user.id }, { to: testRecipient, subject, body, attachmentName, pdf }, send)
+      return await deliver(admin, res, { delivery_key: deliveryKey, recipient_email: testRecipient, subject, attachment_name: attachmentName, drop_name_snapshot: 'TESTE FICTICIO', status: 'enviando', created_by: auth.user.id }, { to: testRecipient, subject, body, attachmentName, pdf }, send, !retryRequested)
     }
     if (input.mode != null) throw new MailError(400, 'Modo de envio inválido.')
     if (!uuid.test(input.dropId ?? '') || !uuid.test(input.periodId ?? '')) throw new MailError(400, 'DROP ou período inválido.')
