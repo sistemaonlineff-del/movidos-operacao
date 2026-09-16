@@ -5,6 +5,23 @@ import { PGlite } from '@electric-sql/pglite'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
 
+test('registration status values satisfy the real SQL constraint and deactivate without deleting the record', async () => {
+  const database = new PGlite()
+  try {
+    await build({ entryPoints: ['src/dropOptions.ts'], outfile: 'tmp/database-tests/drop-options.cjs', bundle: true, platform: 'node', format: 'cjs' })
+    const { DROP_STATUSES } = await import(pathToFileURL(`${process.cwd()}/tmp/database-tests/drop-options.cjs`).href)
+    const schema = await readFile('supabase/schema.sql', 'utf8')
+    const statusColumn = schema.match(/status text not null default 'INTERESSADO' check \(status in \([^\n]+\)\)/)[0]
+    await database.exec(`create table drops (id integer primary key, ${statusColumn}, is_active boolean not null, deactivated_reason text, deactivated_at timestamptz, deactivated_by text); insert into drops values (1,'ATIVO',true,null,null,null)`)
+    const invalidStatus = Buffer.from('EXCLUÍDO', 'utf8').toString('latin1')
+    await assert.rejects(database.query('update drops set status=$1,is_active=false,deactivated_reason=$2 where id=1', [invalidStatus, 'Encerramento']), /check constraint/)
+    assert.deepEqual((await database.query('select status,is_active,deactivated_reason from drops')).rows, [{ status: 'ATIVO', is_active: true, deactivated_reason: null }])
+    for (const status of DROP_STATUSES) await database.query('update drops set status=$1 where id=1', [status])
+    await database.query('update drops set status=$1,is_active=false,deactivated_reason=$2,deactivated_at=now(),deactivated_by=$3 where id=1', ['EXCLUÍDO', 'Encerramento solicitado', 'test-user'])
+    assert.deepEqual((await database.query('select id,status,is_active,deactivated_reason,deactivated_by from drops')).rows, [{ id: 1, status: 'EXCLUÍDO', is_active: false, deactivated_reason: 'Encerramento solicitado', deactivated_by: 'test-user' }])
+  } finally { await database.close() }
+})
+
 test('financial email policies and identity migration preserve data and deny unauthorized access', async () => {
   const database = new PGlite()
   try {

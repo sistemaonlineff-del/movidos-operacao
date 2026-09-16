@@ -73,6 +73,8 @@ O bruto segue a regra atual, **líquido + extravios W2D/D2D dos status definidos
 
 ### Last Mile e pagamento total
 
+No formulário comum de cadastro (também usado ao reabrir Last Mile), **Salvar e permanecer** mantém os campos e o ID salvo na URL; novos salvamentos atualizam o mesmo registro. **Salvar e sair** retorna à lista correspondente; na criação esse botão continua chamado **Salvar cadastro**. A mudança para **EXCLUÍDO** exige motivo e grava a desativação lógica, sem excluir o histórico. Os status usam a lista canônica de `dropOptions`, compatível com a restrição SQL, inclusive os acentos de EXCLUÍDO e APROVAÇÃO. Falhas de gravação ficam visíveis e preservam os dados digitados e o motivo. Esta correção de salvamento não exige SQL novo nem altera permissões.
+
 O cadastro Last Mile inclui as mesmas seções de fotos, contratos e distratos do cadastro comum. Os anexos são liberados após salvar, vinculados ao ID salvo e continuam disponíveis ao reabrir o cadastro pela lista. Salvar novamente atualiza o mesmo registro. Administradores ativos também podem baixar o modelo padrão, editar o DOCX externamente, enviar uma versão temporária e restaurar o padrão; o modelo é compartilhado com os demais cadastros, não exclusivo do Last Mile.
 
 Aplicar `supabase/migrations/20260916040000_protect_contract_templates.sql` no Supabase antes de liberar a administração de modelos. A API já restringe as alterações a administradores ativos; a migração adiciona políticas restritivas para criação, atualização e exclusão de objetos da pasta `contract-templates/`, inclusive tentativas diretas fora da tela, sem restringir anexos em `drops/`. Não exclui nem regrava arquivos existentes. O deploy não executa esta migração automaticamente.

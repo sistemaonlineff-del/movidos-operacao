@@ -8,6 +8,8 @@ import * as XLSX from 'xlsx'
 await mkdir('tmp/browser-tests', { recursive: true })
 await build({ entryPoints: ['src/closingSpreadsheet.ts'], outfile: 'tmp/browser-tests/closing.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
 const { createClosingTemplate } = await import(pathToFileURL(`${process.cwd()}/tmp/browser-tests/closing.cjs`).href)
+const schema = await readFile('supabase/schema.sql', 'utf8')
+const allowedDropStatuses = [...schema.match(/status text not null default 'INTERESSADO' check \(status in \(([^\n]+)\)\)/)[1].matchAll(/'([^']+)'/g)].map(match => match[1])
 const browser = await chromium.launch({ channel: 'msedge', headless: true, args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] })
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true })
 const user = { id: '11111111-1111-4111-8111-111111111111', email: 'local-test@example.com', aud: 'authenticated' }
@@ -32,6 +34,10 @@ const storagePaths = new Set()
 let serviceTemplatePath = ''
 const writes = []
 const failures = []
+let rejectDropWrite = false
+let unchangedDropWrite = false
+let holdDropWrite = false
+const pendingDropWrites = []
 let activeReads = 0
 let maximumReads = 0
 let completedReads = 0
@@ -71,6 +77,13 @@ await context.route('**/*', async route => {
       return true
     }))
     let output = filtered
+    if (table === 'drops' && ['POST', 'PATCH'].includes(request.method())) {
+      const payload = request.postDataJSON()
+      if (payload.status != null) assert.ok(allowedDropStatuses.includes(payload.status), `Status rejected by SQL constraint: ${payload.status}`)
+      if (rejectDropWrite) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Permissão negada no teste.' }) })
+      if (unchangedDropWrite) return json(filtered[0] ?? null)
+      if (holdDropWrite) await new Promise(resolve => pendingDropWrites.push(resolve))
+    }
     if (request.method() === 'POST') {
       const payload = request.postDataJSON()
       writes.push({ table, payload })
@@ -283,12 +296,103 @@ try {
       assert.ok(pdf.includes('Encerramento solicitado'))
     }
   }
-  await page.locator('.cadastro-form').getByRole('button', { name: /^Salvar/ }).click()
+  await page.locator('.cadastro-form').getByRole('button', { name: 'Salvar e sair', exact: true }).click()
   await page.waitForURL('**/cadastros')
   assert.equal(tables.drops[0].signed_at, '2026-09-02')
   assert.equal(tables.drops[0].terminated_at, '2026-09-15')
   assert.equal(tables.drops[0].termination_reason, 'Encerramento solicitado')
   console.log('PASS: PDFs use selected dates and termination reason; fields persist')
+
+  await page.goto('http://127.0.0.1:5173/cadastros/novo?edit=drop1')
+  const registrationStatus = page.getByRole('combobox', { name: 'Status', exact: true })
+  await registrationStatus.waitFor()
+  const statusValues = await registrationStatus.locator('option').evaluateAll(options => options.map(option => option.value).filter(Boolean))
+  assert.deepEqual(statusValues, allowedDropStatuses)
+  await registrationStatus.selectOption('EXCLUÍDO')
+  const writesBeforeExclude = writes.length
+  for (const response of [null, '   ']) {
+    page.once('dialog', dialog => response === null ? dialog.dismiss() : dialog.accept(response))
+    await page.getByRole('button', { name: 'Salvar e permanecer', exact: true }).click()
+    await page.getByRole('alert').filter({ hasText: 'A observação é obrigatória.' }).waitFor()
+    assert.equal(writes.length, writesBeforeExclude)
+    assert.equal(tables.drops[0].is_active, true)
+  }
+  rejectDropWrite = true
+  page.once('dialog', dialog => dialog.accept('  Encerramento confirmado pelo cliente  '))
+  await page.getByRole('button', { name: 'Salvar e permanecer', exact: true }).click()
+  await page.getByRole('alert').filter({ hasText: 'Permissão negada no teste.' }).waitFor()
+  assert.equal(page.url(), 'http://127.0.0.1:5173/cadastros/novo?edit=drop1')
+  assert.equal(await registrationStatus.inputValue(), 'EXCLUÍDO')
+  assert.equal(await page.getByRole('textbox', { name: 'Motivo da desativação', exact: true }).inputValue(), 'Encerramento confirmado pelo cliente')
+  assert.equal(tables.drops[0].status, 'ATIVO')
+  assert.equal(writes.length, writesBeforeExclude)
+  rejectDropWrite = false; unchangedDropWrite = true
+  await page.getByRole('button', { name: 'Salvar e permanecer', exact: true }).click()
+  await page.getByRole('alert').filter({ hasText: 'O banco não confirmou' }).waitFor()
+  assert.equal(writes.length, writesBeforeExclude)
+  unchangedDropWrite = false
+  await page.getByRole('button', { name: 'Salvar e permanecer', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Cadastro desativado e motivo salvo.' }).waitFor()
+  assert.equal(tables.drops[0].status, 'EXCLUÍDO')
+  assert.equal(tables.drops[0].is_active, false)
+  assert.equal(tables.drops[0].deactivated_reason, 'Encerramento confirmado pelo cliente')
+  assert.equal(tables.drops[0].deactivated_by, user.id)
+  assert.ok(Number.isFinite(Date.parse(tables.drops[0].deactivated_at)))
+  assert.equal(await page.getByRole('textbox', { name: 'Nome do Drop', exact: true }).inputValue(), 'DROP TESTE')
+  const savedDeactivation = { ...tables.drops[0] }
+  await page.reload()
+  await page.waitForFunction(() => [...document.querySelectorAll('select')].some(select => select.value === 'EXCLUÍDO'))
+  await page.getByRole('button', { name: 'Salvar e permanecer', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Cadastro desativado e motivo salvo.' }).waitFor()
+  assert.equal(tables.drops[0].deactivated_at, savedDeactivation.deactivated_at)
+  assert.equal(tables.drops[0].deactivated_reason, savedDeactivation.deactivated_reason)
+  await registrationStatus.selectOption('ENVIADO - AG. APROVAÇÃO')
+  await page.getByRole('button', { name: 'Salvar e permanecer', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Cadastro salvo com sucesso.' }).waitFor()
+  assert.equal(tables.drops[0].status, 'ENVIADO - AG. APROVAÇÃO')
+  assert.equal(tables.drops[0].is_active, true)
+  assert.equal(tables.drops[0].deactivated_reason, null)
+  await registrationStatus.selectOption('ATIVO')
+  await page.getByRole('button', { name: 'Salvar e sair', exact: true }).click()
+  await page.waitForURL('**/cadastros')
+  assert.equal(tables.drops[0].status, 'ATIVO')
+
+  await page.goto('http://127.0.0.1:5173/cadastros/novo')
+  const countBeforeCreate = tables.drops.length
+  await page.getByRole('textbox', { name: 'Nome do Drop', exact: true }).fill('NOVO SEM SAIR')
+  holdDropWrite = true
+  const creationRequest = page.waitForRequest(request => request.method() === 'POST' && request.url().includes('/rest/v1/drops'))
+  await page.getByRole('button', { name: 'Salvar e permanecer', exact: true }).click()
+  await creationRequest
+  assert.equal(await page.getByRole('button', { name: 'Salvar e permanecer', exact: true }).isDisabled(), true)
+  await page.locator('form.cadastro-form').evaluate(form => form.requestSubmit())
+  assert.equal(pendingDropWrites.length, 1)
+  holdDropWrite = false
+  pendingDropWrites.splice(0).forEach(finish => finish())
+  await page.waitForURL('**/cadastros/novo?edit=*')
+  await page.getByRole('status').filter({ hasText: 'Cadastro salvo com sucesso.' }).waitFor()
+  assert.equal(tables.drops.length, countBeforeCreate + 1)
+  const savedDropId = new URL(page.url()).searchParams.get('edit')
+  await page.getByRole('textbox', { name: 'Nome do Drop', exact: true }).fill('NOVO SEM DUPLICAR')
+  await page.getByRole('button', { name: 'Salvar e permanecer', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Cadastro salvo com sucesso.' }).waitFor()
+  assert.equal(tables.drops.length, countBeforeCreate + 1)
+  assert.equal(tables.drops.find(drop => drop.id === savedDropId).name, 'NOVO SEM DUPLICAR')
+  await page.reload()
+  await page.waitForFunction(() => [...document.querySelectorAll('input')].some(input => input.value === 'NOVO SEM DUPLICAR'))
+  assert.equal(new URL(page.url()).searchParams.get('edit'), savedDropId)
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await page.getByRole('button', { name: 'Salvar e permanecer', exact: true }).scrollIntoViewIfNeeded()
+    for (const name of ['Salvar e permanecer', 'Salvar e sair', 'Cancelar']) {
+      const bounds = await page.getByRole('button', { name, exact: true }).evaluate(button => { const bounds = button.getBoundingClientRect(); return { left: bounds.left, right: bounds.right, screen: innerWidth, fits: button.scrollWidth <= button.clientWidth } })
+      assert.ok(bounds.left >= 0 && bounds.right <= bounds.screen + 1 && bounds.fits, JSON.stringify(bounds))
+    }
+    await page.screenshot({ path: `tmp/browser-tests/cadastro-save-${viewport.width}.png` })
+  }
+  await page.goto('http://127.0.0.1:5173/cadastros/novo')
+  assert.equal(await page.getByRole('textbox', { name: 'Nome do Drop', exact: true }).inputValue(), '')
+  console.log('PASS: canonical excluded/approval status, required reason, persistent deactivation, visible failures, stay/save-exit and no duplicate inserts')
 
   await page.goto('http://127.0.0.1:5173/financeiro/pagamento-total')
   const totalRow = () => page.getByRole('row').filter({ has: page.getByText('SETEMBRO', { exact: true }) })
