@@ -80,6 +80,10 @@ await context.route('**/*', async route => {
       if (request.method() === 'GET') return json({ configured: true, from: 'sender@example.com' })
       const payload = request.postDataJSON()
       assert.ok(request.headers().authorization.startsWith('Bearer '))
+      if (payload.mode === 'verify') {
+        assert.deepEqual(payload, { mode: 'verify' })
+        return json({ status: 'verified', message: 'Conexão e autenticação SMTP verificadas. Nenhum e-mail foi enviado. Isso não confirma a entrega da tentativa anterior nem libera seu reenvio.' })
+      }
       if (payload.mode === 'test') {
         assert.deepEqual(payload, { mode: 'test' })
         mailRequests.push(payload)
@@ -176,6 +180,17 @@ try {
   assert.equal(mailRequests.length, 3)
   assert.deepEqual(mailRequests[2], { mode: 'test' })
   assert.equal(mailDownloads, 0)
+  const writesBeforeVerify = writes.length
+  await page.getByRole('button', { name: 'Verificar conexão', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Conexão e autenticação SMTP verificadas.' }).waitFor()
+  assert.equal(mailRequests.length, 3)
+  assert.equal(writes.length, writesBeforeVerify)
+  assert.equal(mailDownloads, 0)
+  mailConfigured = false
+  await page.getByRole('button', { name: 'Verificar conexão', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Conta remetente não configurada no teste.' }).waitFor()
+  assert.equal(mailRequests.length, 3)
+  assert.equal(writes.length, writesBeforeVerify)
   page.off('download', countMailDownload)
   console.log('PASS: direct email confirms before send, posts PDF without download and reports uncertain/unconfigured states')
 

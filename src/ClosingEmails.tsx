@@ -39,6 +39,7 @@ export default function ClosingEmails({
   const [preparing, setPreparing] = useState(false);
   const [message, setMessage] = useState("");
   const sending = useRef(false);
+  const [verifying, setVerifying] = useState(false);
 
   useEffect(() => {
     if (!supabase) return;
@@ -116,6 +117,26 @@ export default function ClosingEmails({
     }
     const result = await response.json();
     return { ...result, ok: response.ok, httpStatus: response.status };
+  };
+
+  const verifyConnection = async () => {
+    if (sending.current) return;
+    sending.current = true;
+    setVerifying(true);
+    setPreparing(true);
+    setMessage("");
+    try {
+      const result = await requestMail({ mode: "verify" });
+      setMessage(result.ok && result.status === "verified"
+        ? result.message
+        : result.error || "Não foi possível verificar a conexão. Nenhum e-mail foi enviado.");
+    } catch (caught) {
+      setMessage(`${(caught as Error).message || "Falha de conexão."} A verificação não envia e-mails.`);
+    } finally {
+      sending.current = false;
+      setVerifying(false);
+      setPreparing(false);
+    }
   };
 
   const sendTest = async () => {
@@ -203,6 +224,14 @@ export default function ClosingEmails({
           <button
             className="secondary"
             disabled={saving || preparing}
+            onClick={() => void verifyConnection()}
+            title="Testar autenticação SMTP sem enviar e-mail"
+          >
+            {verifying ? "Verificando…" : "Verificar conexão"}
+          </button>
+          <button
+            className="secondary"
+            disabled={saving || preparing}
             onClick={() => void sendTest()}
             title="Enviar teste para fabioaf9@gmail.com"
           >
@@ -220,7 +249,7 @@ export default function ClosingEmails({
             disabled={preparing || !groups.length || !period || !partner}
             onClick={() => void prepare()}
           >
-            {preparing ? "Enviando…" : "Enviar e-mails"}
+            {preparing && !verifying ? "Enviando…" : "Enviar e-mails"}
           </button>
         </div>
       </div>

@@ -8,7 +8,18 @@ await mkdir('tmp/mail-tests', { recursive: true })
 await build({ entryPoints: ['server/closing-mail.ts'], outfile: 'tmp/mail-tests/mail.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
 await build({ entryPoints: ['api/financial/send-closing.ts'], outfile: 'tmp/mail-tests/handler.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
 await build({ entryPoints: ['api/financial/send-closing.ts', 'server/closing-mail.ts', 'src/financialData.ts', 'src/dropOptions.ts'], outdir: 'tmp/mail-tests/native', outbase: '.', bundle: false, platform: 'node', format: 'esm' })
-const { configuredMailer } = await import(pathToFileURL(`${process.cwd()}/tmp/mail-tests/mail.cjs`).href)
+const { configuredMailer, mailFailureMessage, verifyMailConnection } = await import(pathToFileURL(`${process.cwd()}/tmp/mail-tests/mail.cjs`).href)
+
+test('mail failures explain safe error categories without exposing provider responses or secrets', () => {
+  assert.match(mailFailureMessage({ code: 'EAUTH' }), /senha de aplicativo/)
+  assert.match(mailFailureMessage({ code: 'ETIMEDOUT' }), /conexão/)
+  assert.match(mailFailureMessage({ code: 'EENVELOPE' }), /remetente ou destinatário/)
+  assert.match(mailFailureMessage({ code: 'EMESSAGE' }), /conteúdo ou anexo/)
+  for (const code of ['EAUTH', 'ESOCKET', 'UNKNOWN']) {
+    assert.ok(!mailFailureMessage({ code, message: 'secret-password', response: 'secret-token' }).includes('secret'))
+  }
+  assert.match(mailFailureMessage(null), /não confirmou/)
+})
 
 test('mail connector blocks missing configuration and submits PDF to Microsoft only after authorization', async () => {
   const originalEnv = { ...process.env }
@@ -74,6 +85,31 @@ test('SMTP requires verified TLS and sends only the supplied PDF attachment', as
     }
     assert.equal(await configuredMailer(createTransport)({ to: 'drop@example.com', subject: 'Closing', body: 'Test', attachmentName: 'test.pdf', pdf: Buffer.from('%PDF-test') }), 'smtp')
     assert.equal(closed, true)
+  } finally {
+    for (const name of Object.keys(process.env)) if (!(name in originalEnv)) delete process.env[name]
+    Object.assign(process.env, originalEnv)
+  }
+})
+
+test('SMTP diagnostic authenticates without sendMail, closes transport and sanitizes failures', async () => {
+  const originalEnv = { ...process.env }
+  let verified = 0, closed = 0, fail = false
+  try {
+    Object.assign(process.env, { MAIL_PROVIDER: 'smtp', MAIL_FROM: 'sender@example.com', MAIL_SMTP_HOST: 'smtp.example.com', MAIL_SMTP_PORT: '465', MAIL_SMTP_USER: 'sender@example.com', MAIL_SMTP_PASSWORD: 'secret-password' })
+    const createTransport = options => {
+      assert.equal(options.secure, true)
+      assert.equal(options.tls.rejectUnauthorized, true)
+      return {
+        async verify() { verified++; if (fail) throw Object.assign(new Error('secret-password'), { code: 'EAUTH' }); return true },
+        async sendMail() { assert.fail('Diagnostic must never send mail') },
+        close() { closed++ },
+      }
+    }
+    await verifyMailConnection(createTransport)
+    assert.equal(verified, 1); assert.equal(closed, 1)
+    fail = true
+    await assert.rejects(verifyMailConnection(createTransport), error => error.status === 502 && /senha de aplicativo/.test(error.message) && !error.message.includes('secret-password'))
+    assert.equal(verified, 2); assert.equal(closed, 2)
   } finally {
     for (const name of Object.keys(process.env)) if (!(name in originalEnv)) delete process.env[name]
     Object.assign(process.env, originalEnv)
@@ -165,9 +201,12 @@ test('API checks permissions, uses registered recipient, reserves once and never
     assert.equal((await invoke()).status, 409)
     assert.equal(sends, 3)
     testMode = true; log = null; finishFails = false
+    assert.equal((await invoke({ mode: 'verify' })).status, 403)
     const testPayload = { mode: 'test', to: 'forged@example.com', pdf: 'ignored', subject: 'ignored' }
     assert.equal((await invoke(testPayload)).status, 403)
     role = 'admin'
+    assert.equal((await invoke({ mode: 'verify' })).status, 400)
+    assert.equal(sends, 3)
     process.env.MAIL_TEST_RECIPIENT = 'another@example.com'
     assert.equal((await invoke(testPayload)).status, 403)
     delete process.env.MAIL_TEST_RECIPIENT
