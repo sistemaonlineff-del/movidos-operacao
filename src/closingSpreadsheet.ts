@@ -22,6 +22,26 @@ export function downloadClosingTemplate() {
   XLSX.writeFile(createClosingTemplate(), 'modelo-fechamento-financeiro.xlsx')
 }
 
+export function readHistoricalPayments(workbook: XLSX.WorkBook) {
+  const sheet = workbook.Sheets['Pgto Total']
+  if (!sheet) throw new Error('Aba Pgto Total ausente.')
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' })
+  if (text(rows[1]?.[0]) !== 'PERÍODO' || text(rows[1]?.[7]) !== 'TOTAL LÍQUIDO A RECEBER') throw new Error('Cabeçalhos do histórico não reconhecidos.')
+  const payments = new Map<string, { period: string; invoice: number; paymentDate: string; sourceLine: number }>()
+  rows.slice(2).forEach((row, index) => {
+    if (!text(row[7])) return
+    const period = text(row[0])
+    if (!period || typeof row[7] !== 'number' || !Number.isFinite(row[7])) throw new Error(`Líquido inválido na linha ${index + 3}.`)
+    if (payments.has(period)) throw new Error(`Mais de um líquido preenchido para ${period}. Confira antes de importar.`)
+    const rawDate = row[12]
+    const decoded = typeof rawDate === 'number' ? XLSX.SSF.parse_date_code(rawDate, { date1904: workbook.Workbook?.WBProps?.date1904 }) : null
+    const paymentDate = parsePaymentDate(decoded ? `${decoded.y}-${decoded.m}-${decoded.d}` : rawDate)
+    if (!paymentDate) throw new Error(`Data inválida para ${period}.`)
+    payments.set(period, { period, invoice: Math.round((row[7] + Number.EPSILON) * 100) / 100, paymentDate, sourceLine: index + 3 })
+  })
+  return [...payments.values()]
+}
+
 export function readClosingSummary(workbook: XLSX.WorkBook, partners: string[]) {
   const sheet = workbook.Sheets['Pagamento Total']
   if (!sheet) throw new Error('Baixe o modelo atualizado e preencha a aba Pagamento Total.')

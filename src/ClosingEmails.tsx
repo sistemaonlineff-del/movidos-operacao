@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DataRow } from "./financialData";
 import { key, text } from "./financialData";
 import { createClosingPdf } from "./financialReport";
-import { downloadOutlookDraft, safeFileName } from "./emailDraft";
 import { supabase } from "./lib/supabase";
 
 const legacySubject = "FECHAMENTO 2Q DE JUNHO - IMILE";
@@ -39,6 +38,7 @@ export default function ClosingEmails({
   const [saving, setSaving] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [message, setMessage] = useState("");
+  const sending = useRef(false);
 
   useEffect(() => {
     if (!supabase) return;
@@ -102,77 +102,74 @@ export default function ClosingEmails({
     setMessage(error ? error.message : "Modelo de e-mail salvo com sucesso!");
   };
 
-  const log = async (
-    row: DataRow,
-    status: "preparado" | "erro",
-    errorMessage: string,
-    attachmentName: string,
-  ) => {
-    if (!supabase) return;
-    await supabase
-      .from("email_logs")
-      .insert({
-        financial_period_id: row.periodId || null,
-        drop_id: row.dropId || null,
-        period_label: period,
-        partner,
-        drop_name_snapshot: text(row.drop),
-        responsible: text(row.responsible) || null,
-        recipient_email: text(row.email) || null,
-        status,
-        error_message: errorMessage || null,
-        subject,
-        attachment_name: attachmentName || null,
-      });
+  const requestMail = async (payload?: DataRow) => {
+    const session = await supabase?.auth.getSession();
+    const token = session?.data.session?.access_token;
+    if (!token) throw new Error("Entre novamente no sistema.");
+    const response = await fetch("/api/financial/send-closing", {
+      method: payload ? "POST" : "GET",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: payload ? JSON.stringify(payload) : undefined,
+    });
+    if (!response.headers.get("content-type")?.includes("application/json")) {
+      throw new Error("O serviço de envio direto ainda não está disponível neste ambiente.");
+    }
+    const result = await response.json();
+    return { ...result, ok: response.ok, httpStatus: response.status };
   };
 
   const prepare = async () => {
-    if (!period || !partner) {
+    if (sending.current) return;
+    if (!period || !partner || !subject.trim() || !body.trim()) {
       setMessage(
-        "Selecione um período e um parceiro antes de preparar os e-mails.",
+        "Selecione período e parceiro e preencha o assunto e o texto do e-mail.",
       );
       return;
     }
+    sending.current = true;
     setPreparing(true);
     setMessage("");
-    setResults([]);
     const next: Result[] = [];
-    for (const group of groups) {
-      const row = group[0],
-        email = text(row.email);
-      if (!email) {
-        next.push({
-          drop: text(row.drop),
-          status: "ERRO",
-          error: "E-mail vazio",
-        });
-        await log(row, "erro", "E-mail vazio", "");
-        continue;
+    try {
+      const configuration = await requestMail();
+      if (!configuration.ok) throw new Error(configuration.error || "Envio não configurado.");
+      if (!window.confirm(`Enviar o fechamento ${period} de ${partner} para ${groups.length} DROP(s), usando ${configuration.from}?`)) return;
+      setResults([]);
+      for (const group of groups) {
+        const row = group[0];
+        if (!row.dropId || !row.periodId) {
+          next.push({ drop: text(row.drop), status: "ERRO", error: "Confira o vínculo do DROP com o cadastro e o período." });
+          setResults([...next]);
+          continue;
+        }
+        let pdf: string;
+        try {
+          pdf = createClosingPdf(group, losses, periods).output("datauristring").split(",")[1];
+        } catch {
+          next.push({ drop: text(row.drop), status: "ERRO", error: "Não foi possível gerar o PDF." });
+          setResults([...next]);
+          continue;
+        }
+        setMessage(`Enviando ${next.length + 1} de ${groups.length}: ${text(row.drop)}`);
+        try {
+          const result = await requestMail({ dropId: row.dropId, periodId: row.periodId, period, partner, subject, body, pdf });
+          const status = result.status === "aceito" ? "ACEITO" : result.status === "incerto" ? "INCERTO" : "ERRO";
+          next.push({ drop: text(row.drop), status, error: result.error || (result.duplicate ? "Já aceito anteriormente; não reenviado." : "") });
+          setResults([...next]);
+          if (status === "INCERTO" || [401, 403, 503].includes(result.httpStatus)) break;
+        } catch {
+          next.push({ drop: text(row.drop), status: "INCERTO", error: "Conexão interrompida. Confira a caixa remetente antes de tentar novamente." });
+          setResults([...next]);
+          break;
+        }
       }
-      try {
-        const attachmentName = `${safeFileName(`${text(row.drop)} - ${period}`) || "fechamento"}.pdf`;
-        downloadOutlookDraft({
-          to: email,
-          subject,
-          body,
-          attachmentName,
-          pdf: createClosingPdf(group, losses, periods),
-        });
-        next.push({ drop: text(row.drop), status: "PREPARADO", error: "" });
-        await log(row, "preparado", "", attachmentName);
-      } catch (caught) {
-        const error =
-          (caught as Error).message || "Não foi possível preparar o e-mail.";
-        next.push({ drop: text(row.drop), status: "ERRO", error });
-        await log(row, "erro", error, "");
-      }
-      await new Promise((resolve) => setTimeout(resolve, 120));
+      setMessage(`Aceitos pelo servidor de e-mail: ${next.filter(item => item.status === "ACEITO").length}. Sem confirmação: ${next.filter(item => item.status === "INCERTO").length}. Erros: ${next.filter(item => item.status === "ERRO").length}. Não processados: ${groups.length - next.length}.`);
+    } catch (caught) {
+      setMessage((caught as Error).message || "Não foi possível iniciar o envio.");
+    } finally {
+      sending.current = false;
+      setPreparing(false);
     }
-    setResults(next);
-    setPreparing(false);
-    setMessage(
-      `Processo concluído! Preparados: ${next.filter((item) => item.status === "PREPARADO").length}. Erros: ${next.filter((item) => item.status === "ERRO").length}. Abra cada arquivo .eml no Outlook, confira e clique em Enviar.`,
-    );
   };
 
   return (
@@ -181,10 +178,6 @@ export default function ClosingEmails({
         <div>
           <p className="eyebrow">E-MAIL</p>
           <h3>Enviar fechamento por e-mail</h3>
-          <p>
-            Igual ao sistema antigo: prepara uma mensagem do Outlook por DROP,
-            com o PDF anexado, para conferência antes do envio.
-          </p>
         </div>
         <div>
           <button
@@ -196,10 +189,10 @@ export default function ClosingEmails({
           </button>
           <button
             className="primary compact"
-            disabled={preparing || !groups.length}
+            disabled={preparing || !groups.length || !period || !partner}
             onClick={() => void prepare()}
           >
-            {preparing ? "Preparando…" : "Preparar e-mails no Outlook"}
+            {preparing ? "Enviando…" : "Enviar e-mails"}
           </button>
         </div>
       </div>
@@ -207,6 +200,7 @@ export default function ClosingEmails({
         <label>
           Assunto do e-mail
           <input
+            disabled={preparing}
             value={subject}
             onChange={(event) => setSubject(event.target.value)}
           />
@@ -214,6 +208,7 @@ export default function ClosingEmails({
         <label className="full">
           Texto do e-mail
           <textarea
+            disabled={preparing}
             value={body}
             onChange={(event) => setBody(event.target.value)}
           />
@@ -245,7 +240,7 @@ export default function ClosingEmails({
                   <td>{result.drop}</td>
                   <td>
                     <span
-                      className={`pill ${result.status === "ERRO" ? "status-problem" : "status-active"}`}
+                      className={`pill ${["ERRO", "INCERTO", "ENVIANDO"].includes(result.status) ? "status-problem" : "status-active"}`}
                     >
                       {result.status}
                     </span>

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "tsc --noEmit",
-    "test": "node --test tests/financial.test.mjs tests/database.test.mjs tests/label-api.test.mjs",
+    "test": "node --test tests/financial.test.mjs tests/database.test.mjs tests/label-api.test.mjs tests/closing-mail.test.mjs",
     "test:browser": "node tests/document-browser.mjs",
     "test:cadastros": "node tests/cadastros-browser.mjs"
   },
@@ -19,6 +19,7 @@
     "file-saver": "^2.0.5",
     "jspdf": "^4.2.1",
     "leaflet": "^1.9.4",
+    "nodemailer": "^10.0.10",
     "pizzip": "^3.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -28,6 +29,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^22.0.0",
+    "@types/nodemailer": "^8.0.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.0.0",

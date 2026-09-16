@@ -9,7 +9,7 @@ await build({ entryPoints: ['src/financialData.ts'], outfile: 'tmp/financial-tes
 await build({ entryPoints: ['src/cnabInter.ts'], outfile: 'tmp/financial-tests/cnab.mjs', bundle: true, platform: 'node', format: 'esm' })
 await build({ entryPoints: ['src/cnabSpreadsheet.ts'], outfile: 'tmp/financial-tests/spreadsheet.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' })
 await build({ entryPoints: ['src/closingSpreadsheet.ts'], outfile: 'tmp/financial-tests/closing.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
-const { createClosingTemplate, readClosingSummary } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/closing.cjs`).href)
+const { createClosingTemplate, readClosingSummary, readHistoricalPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/closing.cjs`).href)
 const { readCnabSpreadsheet } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/spreadsheet.mjs`).href)
 const { buildDetails, buildTotals, lossClass, lossesFor, number, splitLosses } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
 const { createCnabInter, pixKeyType, prepareCnabPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/cnab.mjs`).href)
@@ -76,6 +76,14 @@ test('a legitimate zero invoice and reimbursement override are preserved', () =>
   assert.equal(total.net, 0); assert.equal(total.reimbursement, 0); assert.equal(total.companyPayment, -281.84)
 })
 
+test('recovering only invoice and date does not erase reimbursement from details', () => {
+  const details = buildDetails([], [{ ...item, reimbursement: 25 }], [], [periods[0]])
+  const total = buildTotals(details, [], [periods[0]], [{ id: 'v1', notes: JSON.stringify({ summary: { invoice: 1000, paymentDate: '2026-09-16' } }) }])[0]
+  assert.equal(total.reimbursement, 25)
+  assert.equal(total.net, 1000)
+  assert.equal(total.payable, 306.84)
+})
+
 test('closing template imports one net amount and date per partner without duplicating totals', async () => {
   const XLSX = await import('xlsx')
   const workbook = createClosingTemplate()
@@ -89,6 +97,19 @@ test('closing template imports one net amount and date per partner without dupli
   XLSX.utils.sheet_add_aoa(workbook.Sheets['Pagamento Total'], [[partner, 10, '15/09/2026']], { origin: -1 })
   assert.throws(() => readClosingSummary(workbook, [partner]), /apenas uma linha/)
   assert.throws(() => readClosingSummary(createClosingTemplate(), [partner]), /confira parceiro/)
+})
+
+test('historical complement preserves zero and dates, skips blank reimbursements and rejects duplicate net values', async () => {
+  const XLSX = await import('xlsx')
+  const rows = [['Vendors/PERÍODO'], ['PERÍODO', '', '', '', '', '', '', 'TOTAL LÍQUIDO A RECEBER'], ['PERIODO', '', '', '', '', '', '', 153227.50999999998, '', '', '', '', 46281], ['PERIODO', 'Reembolso', '', '', '', '', 500, '', '', '', '', '', ''], ['ZERO', '', '', '', '', '', '', 0, '', '', '', '', 46280], ['FUTURO', '', '', '', '', '', '', '', '', '', '', '', 46301]]
+  const workbook = { SheetNames: ['Pgto Total'], Sheets: { 'Pgto Total': XLSX.utils.aoa_to_sheet(rows) } }
+  const result = readHistoricalPayments(workbook)
+  assert.deepEqual(result, [{ period: 'PERIODO', invoice: 153227.51, paymentDate: '2026-09-16', sourceLine: 3 }, { period: 'ZERO', invoice: 0, paymentDate: '2026-09-15', sourceLine: 5 }])
+  const total = buildTotals([], [], [{ id: 'period', label: 'PERIODO', partner: 'IMILE DELIVERY BRAZIL LTDA', financial_view_id: 'view' }], [{ id: 'view', notes: JSON.stringify({ summary: result[0] }) }])[0]
+  assert.equal(total.net, 153227.51)
+  assert.equal(total.gross, 153227.51)
+  XLSX.utils.sheet_add_aoa(workbook.Sheets['Pgto Total'], [rows[2]], { origin: -1 })
+  assert.throws(() => readHistoricalPayments(workbook), /Mais de um líquido/)
 })
 
 test('CNAB reads native Excel dates independently of display format and rejects invalid dates', async () => {
