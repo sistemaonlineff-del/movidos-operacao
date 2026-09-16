@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 await mkdir('tmp/mail-tests', { recursive: true })
 await build({ entryPoints: ['server/closing-mail.ts'], outfile: 'tmp/mail-tests/mail.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
 await build({ entryPoints: ['api/financial/send-closing.ts'], outfile: 'tmp/mail-tests/handler.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
+await build({ entryPoints: ['api/financial/send-closing.ts', 'server/closing-mail.ts', 'src/financialData.ts', 'src/dropOptions.ts'], outdir: 'tmp/mail-tests/native', outbase: '.', bundle: false, platform: 'node', format: 'esm' })
 const { configuredMailer } = await import(pathToFileURL(`${process.cwd()}/tmp/mail-tests/mail.cjs`).href)
 
 test('mail connector blocks missing configuration and submits PDF to Microsoft only after authorization', async () => {
@@ -88,7 +89,8 @@ test('API checks permissions, uses registered recipient, reserves once and never
   const dropId = '22222222-2222-4222-8222-222222222222'
   const periodId = '33333333-3333-4333-8333-333333333333'
   const partner = 'IMILE DELIVERY BRAZIL LTDA'
-  let active = true, manage = false, providerFails = false, finishFails = false
+  let active = true, manage = false, providerFails = false, finishFails = false, testMode = false
+  let role = 'operador'
   let sends = 0, reservations = 0, log = null
   const payload = { dropId, periodId, period: 'SETEMBRO', partner, subject: 'Test', body: 'Message', to: 'untrusted@example.com', pdf: Buffer.from('%PDF-1.7\n%%EOF').toString('base64') }
   const invoke = async (body = payload) => {
@@ -105,13 +107,20 @@ test('API checks permissions, uses registered recipient, reserves once and never
       if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test-only' })
       if (url.hostname === 'graph.microsoft.com') {
         sends++
-        assert.equal(JSON.parse(init.body).message.toRecipients[0].emailAddress.address, 'registered@example.com')
+        const message = JSON.parse(init.body).message
+        assert.equal(message.toRecipients[0].emailAddress.address, testMode ? 'fabioaf9@gmail.com' : 'registered@example.com')
+        if (testMode) {
+          assert.match(message.subject, /Teste/)
+          assert.equal(message.attachments[0].name, 'movidos-teste-email.pdf')
+          assert.match(Buffer.from(message.attachments[0].contentBytes, 'base64').toString('latin1'), /Documento ficticio/)
+        }
         if (providerFails) throw new Error('Simulated lost response')
         return new Response(null, { status: 202 })
       }
       assert.equal(url.origin, 'https://mail-test.supabase.co')
       if (url.pathname === '/auth/v1/user') return Response.json({ id: userId })
-      if (url.pathname.endsWith('/user_profiles')) return Response.json([{ role: 'operador', is_active: active }])
+      if (url.pathname.endsWith('/user_profiles')) return Response.json([{ role, is_active: active }])
+      if (testMode) assert.ok(!['/drops', '/financial_periods', '/financial_drop_items', '/financial_payment_history'].some(path => url.pathname.endsWith(path)))
       if (url.pathname.endsWith('/user_module_permissions')) return Response.json([{ financeiro_manage: manage }])
       if (url.pathname.endsWith('/drops')) return Response.json([{ id: dropId, name: 'DROP', email: 'registered@example.com', responsible: 'Test' }])
       if (url.pathname.endsWith('/financial_periods')) return Response.json([{ id: periodId, label: 'SETEMBRO', partner, financial_view_id: 'view' }])
@@ -155,9 +164,30 @@ test('API checks permissions, uses registered recipient, reserves once and never
     assert.equal((await invoke()).body.status, 'incerto')
     assert.equal((await invoke()).status, 409)
     assert.equal(sends, 3)
+    testMode = true; log = null; finishFails = false
+    const testPayload = { mode: 'test', to: 'forged@example.com', pdf: 'ignored', subject: 'ignored' }
+    assert.equal((await invoke(testPayload)).status, 403)
+    role = 'admin'
+    process.env.MAIL_TEST_RECIPIENT = 'another@example.com'
+    assert.equal((await invoke(testPayload)).status, 403)
+    delete process.env.MAIL_TEST_RECIPIENT
+    assert.equal((await invoke(testPayload)).body.status, 'aceito')
+    assert.equal(log.financial_period_id, undefined)
+    assert.equal(log.drop_id, undefined)
+    assert.equal(log.recipient_email, 'fabioaf9@gmail.com')
+    assert.equal((await invoke(testPayload)).body.duplicate, true)
+    assert.equal(sends, 4)
   } finally {
     globalThis.fetch = originalFetch
     for (const name of Object.keys(process.env)) if (!(name in originalEnv)) delete process.env[name]
     Object.assign(process.env, originalEnv)
   }
+})
+
+test('mail API loads in native Node ESM without bundler extension resolution', async () => {
+  const { default: handler } = await import(pathToFileURL(`${process.cwd()}/tmp/mail-tests/native/api/financial/send-closing.js`).href)
+  let status
+  const response = { setHeader() {}, status(value) { status = value; return this }, json() { return this } }
+  await handler({ method: 'GET', headers: {} }, response)
+  assert.equal(status, 401)
 })

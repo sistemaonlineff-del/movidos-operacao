@@ -1,11 +1,34 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
-import { configuredMailer, MailError } from '../../server/closing-mail.js'
+import { jsPDF } from 'jspdf'
+import { configuredMailer, MailError, type ClosingMail } from '../../server/closing-mail.js'
 import { financialPartner } from '../../src/financialData.js'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const emailAddress = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/
+const testRecipient = 'fabioaf9@gmail.com'
+
+async function deliver(admin: SupabaseClient, res: VercelResponse, record: Record<string, unknown>, mail: ClosingMail, send: ReturnType<typeof configuredMailer>) {
+  const { data: log, error: reserveError } = await admin.from('email_logs').insert(record).select('id').single()
+  if (reserveError) {
+    if (reserveError.code !== '23505') throw new MailError(503, 'Não foi possível registrar o envio. Nenhum e-mail foi disparado.')
+    const { data: previous, error } = await admin.from('email_logs').select('status').eq('delivery_key', record.delivery_key).maybeSingle()
+    if (error || !previous) throw new MailError(503, 'Não foi possível conferir o envio anterior. Não repita o disparo.')
+    if (previous.status === 'aceito') return res.status(200).json({ status: 'aceito', duplicate: true })
+    return res.status(409).json({ status: 'incerto', error: 'Há um envio em andamento ou sem confirmação. Confira a caixa remetente antes de repetir.' })
+  }
+  try {
+    await send(mail)
+  } catch {
+    await admin.from('email_logs').update({ status: 'incerto', error_message: 'O provedor não confirmou o envio. Conferir a caixa remetente; repetição automática bloqueada.' }).eq('id', log.id)
+    return res.status(502).json({ status: 'incerto', error: 'O provedor não confirmou o envio. Confira a caixa remetente; não houve tentativa automática de reenvio.' })
+  }
+  const { error: finishError } = await admin.from('email_logs').update({ status: 'aceito', sent_at: new Date().toISOString(), error_message: null }).eq('id', log.id)
+  if (finishError) return res.status(202).json({ status: 'incerto', error: 'O provedor aceitou o e-mail, mas o registro final falhou. Não reenvie; confira a caixa remetente.' })
+  return res.status(200).json({ status: 'aceito', duplicate: false })
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Cache-Control', 'no-store')
   if (!['GET', 'POST'].includes(req.method ?? '')) return res.status(405).json({ error: 'Método não permitido.' })
@@ -31,6 +54,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (schemaError) throw new MailError(503, 'A atualização do banco para envio direto ainda não foi aplicada.')
     if (req.method === 'GET') return res.status(200).json({ configured: true, from: process.env.MAIL_FROM?.trim() })
     const input = req.body ?? {}
+    if (input.mode === 'test') {
+      if (profile.role !== 'admin') throw new MailError(403, 'Somente administrador pode enviar o e-mail de teste.')
+      if (process.env.MAIL_TEST_RECIPIENT && process.env.MAIL_TEST_RECIPIENT.trim().toLowerCase() !== testRecipient) throw new MailError(403, 'O destinatário de teste configurado no servidor difere do destinatário autorizado.')
+      const subject = 'MOVIDOS - Teste de envio de e-mail'
+      const body = 'Este e um teste autorizado do envio direto do sistema MOVIDOS. O PDF anexo contem somente dados ficticios. Nenhum fechamento real foi enviado.'
+      const document = new jsPDF()
+      document.text(['MOVIDOS - TESTE DE E-MAIL', '', 'Documento ficticio, sem valor financeiro.', 'Nenhum dado de DROP ou fechamento real.', `Destinatario: ${testRecipient}`], 20, 25)
+      const pdf = Buffer.from(document.output('arraybuffer'))
+      const attachmentName = 'movidos-teste-email.pdf'
+      const deliveryKey = createHash('sha256').update(`mail-test:${testRecipient}:${new Date().toISOString().slice(0, 10)}`).digest('hex')
+      return await deliver(admin, res, { delivery_key: deliveryKey, recipient_email: testRecipient, subject, attachment_name: attachmentName, drop_name_snapshot: 'TESTE FICTICIO', status: 'enviando', created_by: auth.user.id }, { to: testRecipient, subject, body, attachmentName, pdf }, send)
+    }
+    if (input.mode != null) throw new MailError(400, 'Modo de envio inválido.')
     if (!uuid.test(input.dropId ?? '') || !uuid.test(input.periodId ?? '')) throw new MailError(400, 'DROP ou período inválido.')
     const subject = typeof input.subject === 'string' ? input.subject.trim() : ''
     const body = typeof input.body === 'string' ? input.body.trim() : ''
@@ -51,23 +87,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!membership.some(result => result.data?.length)) throw new MailError(400, 'O DROP não possui itens neste fechamento.')
     const attachmentName = 'fechamento.pdf'
     const deliveryKey = createHash('sha256').update(JSON.stringify([period.financial_view_id || period.id, period.label, input.partner, drop.id])).digest('hex')
-    const { data: log, error: reserveError } = await admin.from('email_logs').insert({ delivery_key: deliveryKey, financial_period_id: period.id, drop_id: drop.id, recipient_email: drop.email, period_label: period.label, partner: input.partner, drop_name_snapshot: drop.name, responsible: drop.responsible, subject, attachment_name: attachmentName, status: 'enviando', created_by: auth.user.id }).select('id').single()
-    if (reserveError) {
-      if (reserveError.code !== '23505') throw new MailError(503, 'Não foi possível registrar o envio. Nenhum e-mail foi disparado.')
-      const { data: previous, error } = await admin.from('email_logs').select('status').eq('delivery_key', deliveryKey).maybeSingle()
-      if (error || !previous) throw new MailError(503, 'Não foi possível conferir o envio anterior. Não repita o disparo.')
-      if (previous.status === 'aceito') return res.status(200).json({ status: 'aceito', duplicate: true })
-      return res.status(409).json({ status: 'incerto', error: 'Há um envio em andamento ou sem confirmação. Confira a caixa remetente antes de repetir.' })
-    }
-    try {
-      await send({ to: drop.email, subject, body, attachmentName, pdf })
-    } catch {
-      await admin.from('email_logs').update({ status: 'incerto', error_message: 'O provedor não confirmou o envio. Conferir a caixa remetente; repetição automática bloqueada.' }).eq('id', log.id)
-      return res.status(502).json({ status: 'incerto', error: 'O provedor não confirmou o envio. Confira a caixa remetente; não houve tentativa automática de reenvio.' })
-    }
-    const { error: finishError } = await admin.from('email_logs').update({ status: 'aceito', sent_at: new Date().toISOString(), error_message: null }).eq('id', log.id)
-    if (finishError) return res.status(202).json({ status: 'incerto', error: 'O provedor aceitou o e-mail, mas o registro final falhou. Não reenvie; confira a caixa remetente.' })
-    return res.status(200).json({ status: 'aceito', duplicate: false })
+    return await deliver(admin, res, { delivery_key: deliveryKey, financial_period_id: period.id, drop_id: drop.id, recipient_email: drop.email, period_label: period.label, partner: input.partner, drop_name_snapshot: drop.name, responsible: drop.responsible, subject, attachment_name: attachmentName, status: 'enviando', created_by: auth.user.id }, { to: drop.email, subject, body, attachmentName, pdf }, send)
   } catch (error) {
     return res.status(error instanceof MailError ? error.status : 500).json({ error: error instanceof MailError ? error.message : 'Não foi possível concluir a solicitação de envio.' })
   }

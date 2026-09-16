@@ -1,4 +1,4 @@
-import { normalizePartner, PARTNERS } from './dropOptions';
+import { normalizePartner, PARTNERS } from './dropOptions.js';
 
 export type DataRow = Record<string, any>;
 export const financialPartner = (row: DataRow) => row.logistics_partner || (PARTNERS.includes(normalizePartner(row.partner)) ? normalizePartner(row.partner) : PARTNERS[0]);

@@ -112,10 +112,30 @@ export default function ClosingEmails({
       body: payload ? JSON.stringify(payload) : undefined,
     });
     if (!response.headers.get("content-type")?.includes("application/json")) {
-      throw new Error("O serviço de envio direto ainda não está disponível neste ambiente.");
+      throw new Error(`A API de e-mail não respondeu corretamente (HTTP ${response.status}). Confira o deploy e os logs da função na Vercel. Nenhum envio foi confirmado.`);
     }
     const result = await response.json();
     return { ...result, ok: response.ok, httpStatus: response.status };
+  };
+
+  const sendTest = async () => {
+    if (sending.current || !window.confirm("Enviar um e-mail real de teste para fabioaf9@gmail.com, com PDF fictício e sem dados dos DROPs?")) return;
+    sending.current = true;
+    setPreparing(true);
+    setMessage("");
+    try {
+      const result = await requestMail({ mode: "test" });
+      if (result.status === "aceito") {
+        setMessage(result.duplicate
+          ? "O teste de hoje já foi aceito pelo provedor; não foi reenviado. Confira fabioaf9@gmail.com, inclusive o spam."
+          : "Teste aceito pelo provedor para fabioaf9@gmail.com. Confira a caixa de entrada e o spam; a entrega ainda não foi confirmada.");
+      } else setMessage(result.error || "O envio do teste não foi confirmado.");
+    } catch (caught) {
+      setMessage(`${(caught as Error).message || "Falha de conexão."} Confira a caixa remetente antes de repetir o teste.`);
+    } finally {
+      sending.current = false;
+      setPreparing(false);
+    }
   };
 
   const prepare = async () => {
@@ -180,6 +200,14 @@ export default function ClosingEmails({
           <h3>Enviar fechamento por e-mail</h3>
         </div>
         <div>
+          <button
+            className="secondary"
+            disabled={saving || preparing}
+            onClick={() => void sendTest()}
+            title="Enviar teste para fabioaf9@gmail.com"
+          >
+            Enviar teste
+          </button>
           <button
             className="secondary"
             disabled={saving || preparing}
