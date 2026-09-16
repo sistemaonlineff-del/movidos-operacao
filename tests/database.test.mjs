@@ -135,3 +135,38 @@ test('historical net recovery restores 33 totals, preserves existing records and
     assert.equal(JSON.parse((await database.query('select notes from financial_views where id=33')).rows[0].notes).summary.invoice, 0)
   } finally { await database.close() }
 })
+
+test('missing permission helper is restored without granting access or replacing an existing implementation', async () => {
+  const database = new PGlite()
+  try {
+    await database.exec(`
+      create role authenticated;
+      create schema auth;
+      create function auth.uid() returns text language sql stable as $$ select current_setting('test.user') $$;
+      create table user_profiles (id text primary key, role text, is_active boolean);
+      create table user_module_permissions (user_id text primary key, financeiro_manage boolean, financeiro_view boolean);
+      insert into user_profiles values ('admin','admin',true), ('finance','financeiro',true), ('operator','operador',true), ('inactive','admin',false), ('missing','operador',true);
+      insert into user_module_permissions values ('finance',true,true), ('operator',false,false), ('inactive',true,true);
+      create function is_active_user() returns boolean language sql stable security definer as $$ select exists(select 1 from user_profiles where id=auth.uid() and is_active) $$;
+      create function is_admin() returns boolean language sql stable security definer as $$ select exists(select 1 from user_profiles where id=auth.uid() and is_active and role='admin') $$;
+      create table email_logs (status text);
+      alter table email_logs enable row level security;
+      grant usage on schema public,auth to authenticated;
+    `)
+    const migration = await readFile('supabase/migrations/20260916015000_restore_permission_helper.sql', 'utf8')
+    const before = (await database.query('select * from user_module_permissions order by user_id')).rows
+    await database.exec(migration)
+    await database.exec(await readFile('supabase/migrations/20260916020000_direct_closing_email.sql', 'utf8'))
+    await database.exec('set role authenticated')
+    for (const [user, allowed] of [['admin', true], ['finance', true], ['operator', false], ['inactive', false], ['missing', false]]) {
+      await database.query("select set_config('test.user',$1,false)", [user])
+      assert.equal((await database.query("select has_module_permission('financeiro_manage') as allowed")).rows[0].allowed, allowed)
+    }
+    await database.exec('reset role')
+    assert.deepEqual((await database.query('select * from user_module_permissions order by user_id')).rows, before)
+    await database.exec("create or replace function has_module_permission(permission_name text) returns boolean language sql as $$ select false $$")
+    await database.exec(migration)
+    await database.exec("select set_config('test.user','admin',false)")
+    assert.equal((await database.query("select has_module_permission('financeiro_manage') as allowed")).rows[0].allowed, false)
+  } finally { await database.close() }
+})
