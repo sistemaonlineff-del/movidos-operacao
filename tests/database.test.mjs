@@ -67,6 +67,41 @@ test('financial email policies and identity migration preserve data and deny una
   } finally { await database.close() }
 })
 
+test('contract template storage stays admin-only without restricting registration attachments', async () => {
+  const database = new PGlite()
+  try {
+    await database.exec(`
+      create role authenticated;
+      create schema storage;
+      create table storage.objects (name text primary key, bucket_id text, content text);
+      create function public.is_admin() returns boolean language sql stable as $$ select current_setting('test.user')='admin' $$;
+      alter table storage.objects enable row level security;
+      create policy existing_access on storage.objects for all to authenticated using (current_setting('test.user')<>'inactive') with check (current_setting('test.user')<>'inactive');
+      grant usage on schema public,storage to authenticated;
+      grant select,insert,update,delete on storage.objects to authenticated;
+      insert into storage.objects values ('contract-templates/config.json','movidos-documents','config'), ('contract-templates/service/original.docx','movidos-documents','original'), ('drops/last-mile/fotos/fachada.png','movidos-documents','photo');
+    `)
+    const before = (await database.query('select * from storage.objects order by name')).rows
+    const migration = await readFile('supabase/migrations/20260916040000_protect_contract_templates.sql', 'utf8')
+    await database.exec(migration)
+    await database.exec(migration)
+    assert.deepEqual((await database.query('select * from storage.objects order by name')).rows, before)
+    await database.exec("set role authenticated; select set_config('test.user','operator',false)")
+    await assert.rejects(database.exec("insert into storage.objects values ('contract-templates/service/forged.docx','movidos-documents','forged')"), /row-level security/)
+    assert.equal((await database.query("update storage.objects set content='forged' where name like 'contract-templates/%' returning name")).rows.length, 0)
+    assert.equal((await database.query("delete from storage.objects where name like 'contract-templates/%' returning name")).rows.length, 0)
+    await assert.rejects(database.exec("update storage.objects set name='contract-templates/service/moved.docx' where name='drops/last-mile/fotos/fachada.png'"), /row-level security/)
+    await database.exec("insert into storage.objects values ('drops/last-mile/contratos/signed.pdf','movidos-documents','contract')")
+    assert.equal((await database.query("update storage.objects set content='changed' where name='drops/last-mile/contratos/signed.pdf' returning name")).rows.length, 1)
+    await database.exec("select set_config('test.user','admin',false)")
+    await database.exec("insert into storage.objects values ('contract-templates/service/new.docx','movidos-documents','new')")
+    assert.equal((await database.query("update storage.objects set content='new config' where name='contract-templates/config.json' returning name")).rows.length, 1)
+    assert.equal((await database.query("delete from storage.objects where name='contract-templates/service/new.docx' returning name")).rows.length, 1)
+    await database.exec("select set_config('test.user','inactive',false)")
+    await assert.rejects(database.exec("insert into storage.objects values ('contract-templates/service/disabled.docx','movidos-documents','disabled')"), /row-level security/)
+  } finally { await database.close() }
+})
+
 test('direct mail reservations are unique and cannot be forged by browser clients', async () => {
   const database = new PGlite()
   try {

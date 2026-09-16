@@ -284,6 +284,16 @@ export function buildDetails(
         a.drop.localeCompare(b.drop),
     );
 }
+export function paymentTotalTarget(periods: DataRow[], views: DataRow[], label: string, partner: string) {
+  const selected = periods.filter(period => period.label === label && financialPartner(period) === partner);
+  if (!selected.length) return null;
+  if (selected.length === 1) return { table: "financial_periods", record: selected[0] };
+  const view = views.find(view => view.id === selected[0].financial_view_id);
+  if (!view || selected.some(period => period.financial_view_id !== view.id || period.net_amount != null) ||
+      periods.some(period => period.financial_view_id === view.id && (period.label !== label || financialPartner(period) !== partner))) return null;
+  return { table: "financial_views", record: view };
+}
+
 export function buildTotals(
   details: DataRow[],
   losses: DataRow[],
@@ -359,13 +369,11 @@ export function buildTotals(
       const totalLoss = round(split.w2d + split.d2d);
       const gross = net === null ? null : round(net + totalLoss);
       const payable = sum(matchingDetails, "receivable");
+      const periodDates = matchingPeriods.map(row => row.payment_date).filter(Boolean);
+      const summaryDates = summaries.map(row => row.paymentDate).filter(Boolean);
       const dates = [
         ...new Set(
-          [
-            ...summaries.map((row) => row.paymentDate),
-            ...matchingPeriods.map((row) => row.payment_date),
-            ...matchingDetails.map((row) => row.paymentDate),
-          ]
+          (hasNet && periodDates.length ? periodDates : summaryDates.length ? summaryDates : periodDates.length ? periodDates : matchingDetails.map(row => row.paymentDate))
             .filter(Boolean)
             .map((value) => text(value).slice(0, 10)),
         ),

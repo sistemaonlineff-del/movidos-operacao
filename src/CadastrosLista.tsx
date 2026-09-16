@@ -421,7 +421,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
           </button>
           <button
             className="primary compact"
-            onClick={() => navigate("/cadastros/novo")}
+            onClick={() => navigate(kind === "last_mile" ? "/cadastros/last-mile/novo" : "/cadastros/novo")}
           >
             + Novo cadastro
           </button>
