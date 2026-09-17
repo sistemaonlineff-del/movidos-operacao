@@ -11,11 +11,42 @@ await build({ entryPoints: ['src/cnabSpreadsheet.ts'], outfile: 'tmp/financial-t
 await build({ entryPoints: ['src/closingSpreadsheet.ts'], outfile: 'tmp/financial-tests/closing.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
 const { createClosingTemplate, readClosingSummary, readHistoricalPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/closing.cjs`).href)
 const { readCnabSpreadsheet } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/spreadsheet.mjs`).href)
-const { buildDetails, buildTotals, paymentTotalTarget, lossClass, lossesFor, number, splitLosses, lossEditorValues, lossEventPayload } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
+const { buildDetails, buildTotals, paymentTotalTarget, lossClass, lossesFor, number, splitLosses, lossEditorValues, lossEventPayload, lossBatchPayloads } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
 const { createCnabInter, pixKeyType, prepareCnabPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/cnab.mjs`).href)
 const periods = [{ id: 'p1', label: '33. 1Q DE AGOSTO', partner: 'IMILE DELIVERY BRAZIL LTDA', financial_view_id: 'v1', net_amount: null }, { id: 'p2', label: '33. 1Q DE AGOSTO', partner: 'J&T EXPRESS LTDA', financial_view_id: 'v1', net_amount: null }]
 const item = { id: 'i1', financial_period_id: 'p1', drop_name_snapshot: 'VNM', quantity_packages: 2168, unit_value: .13, reimbursement: 0 }
 const loss = (id, status, amount, period = 'p1') => ({ id, financial_period_id: period, period_label: periods[0].label, drop_name_snapshot: 'VNM', status, amount })
+
+test('payment details workbook matches table columns and totals with numeric amounts and literal PIX', async () => {
+  await build({ entryPoints: ['src/excelDownload.ts'], outfile: 'tmp/financial-tests/excel.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
+  const { createPaymentDetailsWorkbook } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/excel.cjs`).href)
+  const XLSX = await import('xlsx')
+  const rows = [{ referenceCnpj: 'MOVIDOS', period: '34. 2Q DE AGOSTO', drop: '=FORMULA()', responsible: 'Pessoa', partner: periods[0].partner, packages: 10, unit: .13, subtotal: 1.3, w2d: .2, d2d: 0, loss: .2, reimbursement: 0, receivable: 1.1, paymentDate: '2026-09-17', pix: '00123456789' }]
+  const workbook = await createPaymentDetailsWorkbook(rows)
+  const sheet = XLSX.read(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }), { type: 'buffer' }).Sheets['Pagamento Detalhes']
+  const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })
+  assert.deepEqual(matrix[0], ['CNPJ de referência', 'Período', 'DROP', 'Responsável', 'Parceiro', 'Total pacote', 'Valor acordado', 'Subtotal', 'Extravio W2D', 'Extravio D2D', 'Total extravio', 'Reembolso iMile', 'Total a receber', 'Data pagamento', 'PIX'])
+  assert.deepEqual(matrix[2], ['MOVIDOS', rows[0].period, '=FORMULA()', 'Pessoa', periods[0].partner, 10, .13, 1.3, .2, 0, .2, 0, 1.1, '17/09/2026', '00123456789'])
+  assert.equal(matrix[1][5], 10); assert.equal(matrix[1][6], ''); assert.equal(matrix[1][12], 1.1)
+  assert.equal(sheet.C3.f, undefined); assert.equal(sheet.O3.t, 's'); assert.equal(sheet.M3.t, 'n')
+  assert.equal(XLSX.utils.sheet_to_json((await createPaymentDetailsWorkbook([])).Sheets['Pagamento Detalhes'], { header: 1 }).length, 2)
+})
+
+test('bulk loss plan changes only marked fields, validates the entire selection and preserves separate identities', () => {
+  const rows = [ { ...loss('one', 'PUDO Missing', 10), updated_at: 'version-one', partner: periods[0].partner, observation: 'Keep one', waybill: 'WB-1' }, { ...loss('two', 'D2D Missing', 20, 'p2'), updated_at: 'version-two', partner: periods[1].partner, observation: 'Keep two', waybill: 'WB-2' } ]
+  const snapshot = structuredClone(rows)
+  const plan = lossBatchPayloads(rows, { status: 'PUDO Missing - não cobrei' }, periods, [])
+  assert.deepEqual(plan.map(change => change.payload), [{ status: 'PUDO Missing - não cobrei' }, { status: 'PUDO Missing - não cobrei' }])
+  assert.deepEqual(plan.map(change => change.original.id), ['one', 'two'])
+  assert.deepEqual(lossBatchPayloads(rows, { amount: 0, observation: '' }, periods, []).map(change => change.payload), [{ amount: 0, observation: null }, { amount: 0, observation: null }])
+  assert.equal(lossBatchPayloads(rows, { partner: periods[0].partner }, periods, [])[1].payload.financial_period_id, 'p1')
+  assert.throws(() => lossBatchPayloads(rows, {}, periods, []), /ao menos um campo/)
+  assert.throws(() => lossBatchPayloads(rows, { id: 'no' }, periods, []), /não permitido/)
+  assert.throws(() => lossBatchPayloads([...rows, rows[0]], { status: 'Novo' }, periods, []), /repetidos/)
+  assert.throws(() => lossBatchPayloads([rows[0], { ...rows[1], updated_at: null }], { status: 'Novo' }, periods, []), /sem versão/)
+  assert.throws(() => lossBatchPayloads(rows, { period_label: 'INEXISTENTE' }, periods, []), /fechamento existente/)
+  assert.deepEqual(rows, snapshot)
+})
 
 test('loss editor preserves metadata and timestamps, rebinds changed identities and validates new occurrences', () => {
   const original = { ...loss('loss1', 'PUDO Missing', 10), partner: null, period_label: null, drop_id: 'original-drop', waybill: ' WB-1 ', received_at: '2026-09-16T23:30:42.123-03:00', legacy_id: 42, is_active: true, created_by: 'creator', updated_at: 'version-1' }

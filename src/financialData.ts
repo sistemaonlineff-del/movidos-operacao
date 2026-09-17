@@ -1,6 +1,16 @@
 import { normalizePartner, PARTNERS } from './dropOptions.js';
 
 export type DataRow = Record<string, any>;
+export const paymentDetailFields = [
+  ["referenceCnpj", "CNPJ de referência", "select"],
+  ["period", "Período", "text"], ["drop", "DROP", "text"],
+  ["responsible", "Responsável", "text"], ["partner", "Parceiro", "text"],
+  ["packages", "Total pacote", "number"], ["unit", "Valor acordado", "number"],
+  ["subtotal", "Subtotal", "number"], ["w2d", "Extravio W2D", "number"],
+  ["d2d", "Extravio D2D", "number"], ["loss", "Total extravio", "number"],
+  ["reimbursement", "Reembolso iMile", "number"], ["receivable", "Total a receber", "number"],
+  ["paymentDate", "Data pagamento", "date"], ["pix", "PIX", "text"],
+];
 export const financialPartner = (row: DataRow) => row.logistics_partner || (PARTNERS.includes(normalizePartner(row.partner)) ? normalizePartner(row.partner) : PARTNERS[0]);
 export const text = (value: unknown) => String(value ?? "").trim();
 export const key = (value: unknown) =>
@@ -83,6 +93,28 @@ export function lossEventPayload(draft: DataRow, original: DataRow | null, perio
     payload.drop_id = matches[0]?.id ?? null;
   }
   return payload;
+}
+export const lossEditableFields = [
+  ["period_label", "Período", "text"], ["partner", "Parceiro", "text"],
+  ["drop_name_snapshot", "Scan station / DROP", "text"], ["waybill", "Waybill nº", "text"],
+  ["label_code", "Código da etiqueta", "text"], ["bag_code", "Saca", "text"],
+  ["status", "Status", "text"], ["seller", "Seller", "text"],
+  ["received_at", "Recebimento", "datetime-local"], ["amount", "Valor do extravio", "number"],
+  ["observation", "Observações", "textarea"],
+];
+export function lossBatchPayloads(rows: DataRow[], changes: DataRow, periods: DataRow[], drops: DataRow[]) {
+  const fields = Object.keys(changes);
+  if (!rows.length || !fields.length) throw new Error("Selecione extravios e marque ao menos um campo para alterar.");
+  if (fields.some(field => !lossEditableFields.some(([allowed]) => field === allowed))) throw new Error("Campo não permitido na edição em massa.");
+  if (new Set(rows.map(row => row.id)).size !== rows.length) throw new Error("A seleção contém registros repetidos.");
+  return rows.map(original => {
+    if (!original.id || !original.updated_at || original.is_active === false) throw new Error("Atualize os dados antes de editar em massa: há um registro sem versão ou indisponível.");
+    const edited = lossEventPayload({ ...lossEditorValues(original, periods), ...changes }, original, periods, drops);
+    const included = new Set(fields);
+    if (fields.includes("period_label") || fields.includes("partner")) ["financial_period_id", "period_label", "partner"].forEach(field => included.add(field));
+    if (fields.includes("drop_name_snapshot") || fields.includes("partner")) included.add("drop_id");
+    return { original, payload: Object.fromEntries([...included].map(field => [field, edited[field]])) };
+  });
 }
 export function notes(value: unknown): DataRow {
   try {

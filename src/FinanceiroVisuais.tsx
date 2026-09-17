@@ -7,6 +7,8 @@ import {
   DataRow,
   date,
   key,
+  lossBatchPayloads,
+  lossEditableFields,
   lossEditorValues,
   lossEventPayload,
   money,
@@ -14,6 +16,7 @@ import {
   number,
   periodOrder,
   paymentTotalTarget,
+  paymentDetailFields as detailFields,
   round,
   text,
 } from "./financialData";
@@ -56,23 +59,6 @@ const totalColumns = [
   ["assumed", "Prejuízo que eu assumi e não descontei dos DROPs"],
   ["companyPayment", "Pagamento para Talita e Jorge"],
 ];
-const detailFields = [
-  ["referenceCnpj", "CNPJ de referência", "select"],
-  ["period", "Período", "text"],
-  ["drop", "DROP", "text"],
-  ["responsible", "Responsável", "text"],
-  ["partner", "Parceiro", "text"],
-  ["packages", "Total pacote", "number"],
-  ["unit", "Valor acordado", "number"],
-  ["subtotal", "Subtotal", "number"],
-  ["w2d", "Extravio W2D", "number"],
-  ["d2d", "Extravio D2D", "number"],
-  ["loss", "Total extravio", "number"],
-  ["reimbursement", "Reembolso iMile", "number"],
-  ["receivable", "Total a receber", "number"],
-  ["paymentDate", "Data pagamento", "date"],
-  ["pix", "PIX", "text"],
-];
 const cnabFields = [
   ["drop", "DROP", "text"],
   ["responsible", "RESPONSÁVEL", "text"],
@@ -112,6 +98,12 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     [observationFilter, setObservationFilter] = useState("");
   const [lossColumnFilters, setLossColumnFilters] = useState<Record<string, string>>({});
   const [duplicatesOnly, setDuplicatesOnly] = useState(false);
+  const [selectedLossIds, setSelectedLossIds] = useState<Set<string>>(new Set());
+  const [bulkLosses, setBulkLosses] = useState<DataRow[] | null>(null);
+  const [bulkChanges, setBulkChanges] = useState<DataRow>({});
+  const [bulkConfirmed, setBulkConfirmed] = useState(false);
+  const [bulkAttempted, setBulkAttempted] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(0);
   const [editing, setEditing] = useState<DataRow | null>(null),
     [editingTotal, setEditingTotal] = useState<DataRow | null>(null),
     [editingLoss, setEditingLoss] = useState<DataRow | null>(null),
@@ -121,6 +113,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     [generatingCnab, setGeneratingCnab] = useState(false);
   const load = async () => {
     setLoading(true);
+    setSelectedLossIds(new Set());
     setError("");
     try {
       const [p, v, h, i, l, d] = await Promise.all(
@@ -155,6 +148,8 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     setEditing(null);
     setEditingTotal(null);
     setEditingLoss(null);
+    setBulkLosses(null);
+    setSelectedLossIds(new Set());
     setDropFilter("");
     setStatusFilter("");
     setObservationFilter("");
@@ -220,6 +215,14 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       waybillCounts,
     ],
   );
+  const selectedLosses = filteredLosses.filter(row => selectedLossIds.has(row.id));
+  useEffect(() => {
+    const visible = new Set(filteredLosses.map(row => row.id));
+    setSelectedLossIds(current => {
+      const next = new Set([...current].filter(id => canEditTotal && visible.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [filteredLosses, canEditTotal]);
   const totals = useMemo(
     () =>
       buildTotals(details, losses, periods, views, periodFilter, partnerFilter)
@@ -239,13 +242,12 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     (all, drop) => (all.has(key(drop)) ? all : all.set(key(drop), drop)),
     new Map<string, string>(),
   );
-  const report = async (rows: DataRow[]) => {
+  const report = async (rows: DataRow[], excel = false) => {
     setGenerating(true);
     setError("");
     try {
-      await (
-        await import("./financialReport")
-      ).downloadClosingPdf(rows, losses, periods);
+      if (excel) await (await import("./excelDownload")).downloadPaymentDetailsExcel(rows);
+      else await (await import("./financialReport")).downloadClosingPdf(rows, losses, periods);
       setMessage("Relatório de fechamento gerado.");
     } catch (caught) {
       setError(
@@ -461,6 +463,36 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       setSaving(false);
     }
   };
+  const openBulkLosses = () => {
+    if (!canEditTotal || !selectedLosses.length || lossSaving.current) return;
+    setBulkLosses(selectedLosses.map(row => ({ ...row })));
+    setBulkChanges({}); setBulkConfirmed(false); setBulkAttempted(false); setBulkProgress(0); setEditError("");
+  };
+  const saveBulkLosses = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!supabase || !bulkLosses || lossSaving.current || bulkAttempted) return;
+    if (!canEditTotal) { setEditError("Você não tem permissão para gerenciar extravios."); return; }
+    if (!bulkConfirmed) { setEditError("Confirme a quantidade de extravios antes de aplicar."); return; }
+    lossSaving.current = true; setSaving(true); setEditError("");
+    let attempted = false, completed = 0;
+    try {
+      const plan = lossBatchPayloads(bulkLosses, bulkChanges, periods, drops);
+      attempted = true; setBulkAttempted(true);
+      for (const { original, payload } of plan) {
+        const result = await supabase.from("loss_events").update(payload).eq("id", original.id).eq("is_active", true).eq("updated_at", original.updated_at).select("id").single();
+        if (result.error?.code === "PGRST116" || (!result.error && result.data?.id !== original.id)) throw new Error("Um extravio foi alterado ou não está mais disponível.");
+        if (result.error) throw result.error;
+        completed++; setBulkProgress(completed);
+      }
+      setMessage(`${completed} extravio(s) atualizado(s) em massa.`);
+    } catch (caught) {
+      const reason = text((caught as Error).message) || "Não foi possível confirmar a gravação.";
+      setEditError(attempted ? `${completed} de ${bulkLosses.length} gravações confirmadas. Lote interrompido: ${reason} Feche e confira os registros antes de selecionar novamente; a última tentativa pode ter sido gravada.` : reason);
+    } finally {
+      if (attempted) await load();
+      lossSaving.current = false; setSaving(false);
+    }
+  };
   const changeDetail = (field: string, value: string) =>
     setEditing((previous) => {
       if (!previous) return previous;
@@ -519,9 +551,9 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
             <button
               className="secondary"
               disabled={loading || generating || !filteredDetails.length}
-              onClick={() => void report(filteredDetails)}
+              onClick={() => void report(filteredDetails, true)}
             >
-              {generating ? "Gerando PDF…" : "Gerar relatório de fechamento"}
+              {generating ? "Gerando Excel…" : "Baixar Excel do fechamento"}
             </button>
           )}
           {kind === "cnab" && (
@@ -654,6 +686,14 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           columnFilters={lossColumnFilters}
           onFilter={(field, value) => setLossColumnFilters(current => ({ ...current, [field]: value }))}
           waybillCounts={waybillCounts}
+          selectedIds={selectedLossIds}
+          onSelect={(id, checked) => setSelectedLossIds(current => {
+            const next = new Set(current);
+            if (checked) next.add(id); else next.delete(id);
+            return next;
+          })}
+          onSelectAll={checked => setSelectedLossIds(new Set(checked ? filteredLosses.map(row => row.id) : []))}
+          onBulkEdit={openBulkLosses}
           onEdit={canEditTotal ? openLoss : undefined}
         />
       )}
@@ -722,6 +762,29 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
             reembolso recalculam o total a receber. Você também pode ajustar os
             totais manualmente.
           </p>
+        </Editor>
+      )}
+      {bulkLosses && (
+        <Editor title="Editar extravios em massa" onClose={() => !lossSaving.current && setBulkLosses(null)} onSubmit={saveBulkLosses} saving={saving} error={editError}
+          submitLabel={`Aplicar em ${bulkLosses.length} extravios`} submitDisabled={bulkAttempted || !bulkConfirmed || !Object.keys(bulkChanges).length || !canEditTotal} cancelLabel={bulkAttempted ? "Fechar" : "Cancelar"}>
+          <p>{bulkLosses.length} extravio(s) selecionado(s)</p>
+          <fieldset disabled={bulkAttempted} className="bulk-loss-fields">
+            {lossEditableFields.map(([field, label, type]) => {
+              const enabled = Object.prototype.hasOwnProperty.call(bulkChanges, field);
+              const suggestions = field === "period_label" ? periodOptions : field === "partner" ? options([...PARTNERS, ...periods.map(row => row.partner)]) : field === "status" ? options(["PUDO Missing", "PUDO Missing - não cobrei", "D2D Missing", "D2D Missing - não cobrei", ...losses.map(row => row.status)]) : [];
+              return <div key={field} className="bulk-loss-field">
+                <label className="bulk-field-toggle"><input type="checkbox" checked={enabled} onChange={event => {
+                  setBulkChanges(current => { const next = { ...current }; if (event.target.checked) next[field] = ""; else delete next[field]; return next; });
+                  setBulkConfirmed(false); setEditError("");
+                }} />Alterar {label}</label>
+                {type === "textarea" ? <textarea aria-label={label} disabled={!enabled} value={bulkChanges[field] ?? ""} onChange={event => { setBulkChanges(current => ({ ...current, [field]: event.target.value })); setBulkConfirmed(false); setEditError(""); }} />
+                  : <input aria-label={label} disabled={!enabled} type={type} step={type === "datetime-local" ? "1" : "0.01"} required={enabled && ["period_label", "partner", "amount"].includes(field)} list={suggestions.length ? `bulk-${field}` : undefined} value={bulkChanges[field] ?? ""} onChange={event => { setBulkChanges(current => ({ ...current, [field]: event.target.value })); setBulkConfirmed(false); setEditError(""); }} />}
+                {suggestions.length > 0 && <datalist id={`bulk-${field}`}>{suggestions.map(value => <option key={value} value={value} />)}</datalist>}
+              </div>;
+            })}
+            <label className="bulk-confirm"><input type="checkbox" checked={bulkConfirmed} onChange={event => setBulkConfirmed(event.target.checked)} />Confirmo aplicar os campos marcados aos {bulkLosses.length} extravios selecionados</label>
+          </fieldset>
+          {bulkAttempted && <p role="status">{bulkProgress} de {bulkLosses.length} gravações confirmadas.</p>}
         </Editor>
       )}
       {editingLoss && (
@@ -808,6 +871,9 @@ function Editor({
   onSubmit,
   saving,
   error,
+  submitLabel = "Salvar alterações",
+  submitDisabled = false,
+  cancelLabel = "Cancelar",
 }: {
   title: string;
   children: React.ReactNode;
@@ -815,6 +881,9 @@ function Editor({
   onSubmit: (event: FormEvent) => void;
   saving: boolean;
   error: string;
+  submitLabel?: string;
+  submitDisabled?: boolean;
+  cancelLabel?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -852,10 +921,10 @@ function Editor({
         )}
         <div className="modal-actions">
           <button type="button" disabled={saving} onClick={onClose}>
-            Cancelar
+            {cancelLabel}
           </button>
-          <button className="primary compact" disabled={saving}>
-            {saving ? "Salvando…" : "Salvar alterações"}
+          <button className="primary compact" disabled={saving || submitDisabled}>
+            {saving ? "Salvando…" : submitLabel}
           </button>
         </div>
       </form>
@@ -946,7 +1015,7 @@ function PaymentDetails({
         </p>
       )}
       <div className="table-wrap">
-        <table>
+        <table className="payment-details-table">
           <thead>
             <tr>
               {detailFields.map(([field, title]) => (
@@ -1067,6 +1136,10 @@ function Losses({
   columnFilters,
   onFilter,
   waybillCounts,
+  selectedIds,
+  onSelect,
+  onSelectAll,
+  onBulkEdit,
   onEdit,
 }: {
   rows: DataRow[];
@@ -1074,18 +1147,29 @@ function Losses({
   columnFilters: Record<string, string>;
   onFilter: (field: string, value: string) => void;
   waybillCounts: Map<string, number>;
+  selectedIds: Set<string>;
+  onSelect: (id: string, checked: boolean) => void;
+  onSelectAll: (checked: boolean) => void;
+  onBulkEdit: () => void;
   onEdit?: (row: DataRow) => void;
 }) {
+  const selectedCount = rows.filter(row => selectedIds.has(row.id)).length;
   return (
     <section className="card financial-losses">
       <div className="financial-loss-total" role="status">
         <span>{rows.length} extravio(s) nos filtros selecionados</span>
         <strong>Total: {money(sum(rows, "amount"))}</strong>
       </div>
+      {onEdit && <div className="financial-actions loss-selection-actions">
+        <span role="status">{selectedCount} selecionado(s)</span>
+        <button type="button" className="secondary" disabled={!selectedCount} onClick={onBulkEdit}>Editar selecionados</button>
+        <button type="button" className="secondary" disabled={!selectedCount} onClick={() => onSelectAll(false)}>Limpar seleção</button>
+      </div>}
       <div className="table-wrap">
         <table className="losses-table">
           <thead>
             <tr>
+              {onEdit && <th className="loss-selection-cell" scope="col"><input type="checkbox" aria-label="Selecionar todos os extravios filtrados" disabled={!rows.length} checked={rows.length > 0 && selectedCount === rows.length} ref={element => { if (element) element.indeterminate = selectedCount > 0 && selectedCount < rows.length; }} onChange={event => onSelectAll(event.target.checked)} /></th>}
               {lossColumns.map(([field, title]) => (
                 <th key={field} scope="col">
                   {title}
@@ -1101,6 +1185,7 @@ function Losses({
               const duplicateCount = waybillCounts.get(key(row.waybill)) ?? 0;
               return (
                 <tr key={row.id}>
+                  {onEdit && <td className="loss-selection-cell"><input type="checkbox" aria-label={`Selecionar extravio ${row.waybill || row.id} de ${row.drop_name_snapshot || "DROP não informado"}`} checked={selectedIds.has(row.id)} onChange={event => onSelect(row.id, event.target.checked)} /></td>}
                   <td>{row.period_label ?? period?.label ?? "—"}</td>
                   <td>
                     <strong>{row.drop_name_snapshot ?? "—"}</strong>
@@ -1138,11 +1223,11 @@ function Losses({
                 </tr>
               );
             })}
-            {!rows.length && <EmptyRow columns={11} />}
+            {!rows.length && <EmptyRow columns={onEdit ? 12 : 11} />}
           </tbody>
           <tfoot>
             <tr className="financial-totals">
-              <th scope="row" colSpan={8}>
+              <th scope="row" colSpan={onEdit ? 9 : 8}>
                 Total filtrado
               </th>
               <td>{money(sum(rows, "amount"))}</td>
