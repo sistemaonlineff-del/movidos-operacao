@@ -8,6 +8,12 @@
 .financial-totals th { color: inherit; letter-spacing: 0; }
 .financial-loss-total { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; padding: .7rem 0 1.2rem; }
 .financial-loss-total strong { color: #a33b2f; font-size: 1.1rem; }
+.losses-table thead input { display: block; width: 9rem; max-width: 100%; margin-top: .6rem; padding: .45rem .55rem; border-radius: 6px; font-size: .8rem; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.visual-filters .loss-duplicates-filter { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.loss-duplicates-filter input { width: 1rem; height: 1rem; margin: 0; flex: 0 0 auto; }
+.losses-table td.duplicate-waybill { background: #fff2bd; color: #694300; box-shadow: inset 3px 0 #bd8100; font-weight: 700; }
+.losses-table td.duplicate-waybill .table-subtitle { color: inherit; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .losses-table td.duplicate-waybill { background: #493b13; color: #ffe395; } }
 .financial-hint { color: #637278; font-size: .82rem; line-height: 1.5; }
 .financial-editor { width: min(900px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 1px solid #c8dadc; border-radius: 16px; padding: 1.5rem; color: #172f35; background: white; }
 .financial-editor::backdrop { background: #101820b8; }

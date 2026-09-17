@@ -27,6 +27,19 @@ const options = (values: unknown[]) =>
     a.localeCompare(b, "pt-BR", { numeric: true }),
   );
 const referenceCnpjs = ["JOTA EXPRESS", "MOVIDOS", "BELLY"];
+const lossColumns = [
+  ["period", "Período"], ["drop", "Scan station / DROP"],
+  ["waybill", "Waybill nº"], ["label_code", "Código da etiqueta"],
+  ["bag_code", "Saca"], ["status", "Status"], ["seller", "Seller"],
+  ["received_at", "Recebimento"], ["amount", "Valor"], ["observation", "Observações"],
+];
+const lossColumnValue = (row: DataRow, field: string, period?: DataRow) => {
+  if (field === "period") return row.period_label ?? period?.label ?? "";
+  if (field === "drop") return `${text(row.drop_name_snapshot)} ${text(row.partner ?? period?.partner)}`;
+  if (field === "received_at") return row.received_at ? `${new Date(row.received_at).toLocaleString("pt-BR")} ${text(row.received_at)}` : "";
+  if (field === "amount") return `${money(row.amount)} ${number(row.amount).toFixed(2)} ${number(row.amount).toFixed(2).replace(".", ",")}`;
+  return text(row[field]);
+};
 const sum = (rows: DataRow[], field: string) =>
   round(rows.reduce((total, row) => total + number(row[field]), 0));
 const totalColumns = [
@@ -92,6 +105,8 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     [dropFilter, setDropFilter] = useState(""),
     [statusFilter, setStatusFilter] = useState(""),
     [observationFilter, setObservationFilter] = useState("");
+  const [lossColumnFilters, setLossColumnFilters] = useState<Record<string, string>>({});
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
   const [editing, setEditing] = useState<DataRow | null>(null),
     [editingTotal, setEditingTotal] = useState<DataRow | null>(null),
     [editingLoss, setEditingLoss] = useState<DataRow | null>(null),
@@ -138,6 +153,8 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     setDropFilter("");
     setStatusFilter("");
     setObservationFilter("");
+    setLossColumnFilters({});
+    setDuplicatesOnly(false);
   }, [kind]);
   const periodById = useMemo(
     () => new Map(periods.map((row) => [row.id, row])),
@@ -157,6 +174,14 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       ),
     [details, periodFilter, partnerFilter, dropFilter],
   );
+  const waybillCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of losses) {
+      const waybill = key(row.waybill);
+      if (waybill) counts.set(waybill, (counts.get(waybill) ?? 0) + 1);
+    }
+    return counts;
+  }, [losses]);
   const filteredLosses = useMemo(
     () =>
       losses
@@ -170,7 +195,10 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
             (!dropFilter || key(row.drop_name_snapshot) === dropFilter) &&
             (!statusFilter || row.status === statusFilter) &&
             (!observationFilter ||
-              key(row.observation).includes(key(observationFilter)))
+              key(row.observation).includes(key(observationFilter))) &&
+            (!duplicatesOnly || (waybillCounts.get(key(row.waybill)) ?? 0) > 1) &&
+            Object.entries(lossColumnFilters).every(([field, value]) =>
+              !key(value) || key(lossColumnValue(row, field, period)).includes(key(value)))
           );
         })
         .sort((a, b) => text(b.received_at).localeCompare(text(a.received_at))),
@@ -182,18 +210,22 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       dropFilter,
       statusFilter,
       observationFilter,
+      lossColumnFilters,
+      duplicatesOnly,
+      waybillCounts,
     ],
   );
   const totals = useMemo(
     () =>
-      buildTotals(details, losses, periods, views, periodFilter, partnerFilter),
+      buildTotals(details, losses, periods, views, periodFilter, partnerFilter)
+        .sort((first, second) => periodOrder(second.period) - periodOrder(first.period) || second.period.localeCompare(first.period, "pt-BR", { numeric: true })),
     [details, losses, periods, views, periodFilter, partnerFilter],
   );
   const periodOptions = options([
     ...periods.map((row) => row.label),
     ...details.map((row) => row.period),
     ...losses.map((row) => row.period_label),
-  ]).sort((a, b) => periodOrder(a) - periodOrder(b));
+  ]).sort((first, second) => periodOrder(second) - periodOrder(first) || second.localeCompare(first, "pt-BR", { numeric: true }));
   const partnerOptions = PARTNERS;
   const dropOptions = options([
     ...details.map((row) => row.drop),
@@ -540,13 +572,17 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
                 placeholder="Buscar nas observações"
               />
             </label>
+            <label className="loss-duplicates-filter">
+              <input type="checkbox" checked={duplicatesOnly} onChange={event => setDuplicatesOnly(event.target.checked)} />
+              Somente Waybills duplicados
+            </label>
           </>
         )}
         {(periodFilter ||
           partnerFilter ||
           dropFilter ||
           statusFilter ||
-          observationFilter) && (
+          observationFilter || duplicatesOnly || Object.values(lossColumnFilters).some(Boolean)) && (
           <button
             className="secondary"
             onClick={() => {
@@ -555,6 +591,8 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
               setDropFilter("");
               setStatusFilter("");
               setObservationFilter("");
+              setLossColumnFilters({});
+              setDuplicatesOnly(false);
             }}
           >
             Limpar filtros
@@ -594,6 +632,9 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         <Losses
           rows={filteredLosses}
           periodById={periodById}
+          columnFilters={lossColumnFilters}
+          onFilter={(field, value) => setLossColumnFilters(current => ({ ...current, [field]: value }))}
+          waybillCounts={waybillCounts}
           onEdit={(row) => {
             setEditError("");
             setEditingLoss({ ...row });
@@ -999,42 +1040,41 @@ function CnabDetails({ rows }: { rows: DataRow[] }) {
 function Losses({
   rows,
   periodById,
+  columnFilters,
+  onFilter,
+  waybillCounts,
   onEdit,
 }: {
   rows: DataRow[];
   periodById: Map<string, DataRow>;
+  columnFilters: Record<string, string>;
+  onFilter: (field: string, value: string) => void;
+  waybillCounts: Map<string, number>;
   onEdit: (row: DataRow) => void;
 }) {
   return (
-    <section className="card">
+    <section className="card financial-losses">
       <div className="financial-loss-total" role="status">
         <span>{rows.length} extravio(s) nos filtros selecionados</span>
         <strong>Total: {money(sum(rows, "amount"))}</strong>
       </div>
       <div className="table-wrap">
-        <table>
+        <table className="losses-table">
           <thead>
             <tr>
-              {[
-                "Período",
-                "Scan station / DROP",
-                "Waybill nº",
-                "Código da etiqueta",
-                "Saca",
-                "Status",
-                "Seller",
-                "Recebimento",
-                "Valor",
-                "Observações",
-                "Ação",
-              ].map((title) => (
-                <th key={title}>{title}</th>
+              {lossColumns.map(([field, title]) => (
+                <th key={field} scope="col">
+                  {title}
+                  <input type="search" aria-label={`Filtrar ${title}`} placeholder="Filtrar" value={columnFilters[field] ?? ""} onChange={event => onFilter(field, event.target.value)} />
+                </th>
               ))}
+              <th scope="col">Ação</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => {
               const period = periodById.get(row.financial_period_id);
+              const duplicateCount = waybillCounts.get(key(row.waybill)) ?? 0;
               return (
                 <tr key={row.id}>
                   <td>{row.period_label ?? period?.label ?? "—"}</td>
@@ -1051,7 +1091,10 @@ function Losses({
                     "status",
                     "seller",
                   ].map((field) => (
-                    <td key={field}>{row[field] || "—"}</td>
+                    <td key={field} className={field === "waybill" && duplicateCount > 1 ? "duplicate-waybill" : undefined}>
+                      {row[field] || "—"}
+                      {field === "waybill" && duplicateCount > 1 && <small className="table-subtitle" title={`${duplicateCount} ocorrências deste Waybill na base de extravios carregada`}>Duplicado ({duplicateCount})</small>}
+                    </td>
                   ))}
                   <td>
                     {row.received_at

@@ -539,15 +539,96 @@ try {
 
   await page.goto('http://127.0.0.1:5173/financeiro')
   await page.getByLabel('Período do fechamento').fill('NOVO PERIODO')
+  const templateDownload = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Baixar modelo', exact: true }).click()
+  const downloadedTemplate = await templateDownload
+  assert.equal(downloadedTemplate.suggestedFilename(), 'modelo-fechamento-financeiro.xlsx')
+  const downloadedWorkbook = XLSX.read(await readFile(await downloadedTemplate.path()), { type: 'buffer' })
+  assert.deepEqual(XLSX.utils.sheet_to_json(downloadedWorkbook.Sheets['Pagamento Total'], { header: 1 })[0], ['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'])
+  assert.equal(downloadedWorkbook.Sheets['Pagamento Total'].A2.v, 'NOVO PERIODO')
   const workbook = createClosingTemplate()
   workbook.Sheets.Fechamento = XLSX.utils.aoa_to_sheet([['Periodo', 'Parceiro', 'Drop', 'QuantidadePacote', 'CNPJReferencia'], ['', partner, 'DROP TESTE', 100, 'MOVIDOS']])
-  workbook.Sheets['Pagamento Total'] = XLSX.utils.aoa_to_sheet([['Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'], [partner, 999.99, 46280]])
+  workbook.Sheets['Pagamento Total'] = XLSX.utils.aoa_to_sheet([['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'], ['OUTRO PERIODO', partner, 999.99, 46280]])
+  const writesBeforeWrongPeriod = writes.length
+  await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'periodo-divergente.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
+  await page.getByText('Pagamento Total: o período OUTRO PERIODO não corresponde ao fechamento NOVO PERIODO.', { exact: true }).waitFor()
+  assert.equal(writes.length, writesBeforeWrongPeriod)
+  workbook.Sheets['Pagamento Total'].A2.v = 'NOVO PERIODO'
+  workbook.Sheets.Fechamento.A2.v = 'OUTRO PERIODO'
+  await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'fechamento-divergente.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
+  await page.getByText('O período OUTRO PERIODO da planilha não corresponde ao fechamento NOVO PERIODO.', { exact: true }).waitFor()
+  assert.equal(writes.length, writesBeforeWrongPeriod)
+  workbook.Sheets.Fechamento.A2.v = ''
   await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'fechamento-teste.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
   await page.getByText('View de NOVO PERIODO importada com sucesso e consolidado geral atualizado.', { exact: true }).waitFor()
   const imported = tables.financial_periods.find(row => row.label === 'NOVO PERIODO')
   assert.equal(imported.net_amount, 999.99)
   assert.equal(imported.payment_date, '2026-09-15')
-  console.log('PASS: uploaded closing stores net and payment date once per partner')
+  console.log('PASS: downloaded template includes selected period, mismatches write nothing and imported closing stores net/date once per partner')
+
+  const oldestPeriod = { id: 'oldest', label: '01. 1Q DE ABRIL', partner, net_amount: 100, is_active: true }
+  const latestPeriod = { id: 'latest', label: '33. 1Q DE AGOSTO', partner, net_amount: 200, is_active: true }
+  tables.financial_periods = [oldestPeriod, latestPeriod, { id: 'middle9', label: '09. 1Q DE AGOSTO', partner, net_amount: 90, is_active: true }, { id: 'middle10', label: '10. 2Q DE AGOSTO', partner, net_amount: 100, is_active: true }]
+  tables.financial_payment_history = []; tables.financial_drop_items = []; tables.financial_views = []
+  tables.loss_events = [
+    { id: 'loss1', financial_period_id: 'latest', drop_name_snapshot: 'DROP ALFA', partner, waybill: 'WB-001', label_code: 'ETQ-ALFA', bag_code: 'SACA-A', status: 'D2D Missing', seller: 'Loja Árvore', received_at: '2026-09-15T12:00:00Z', amount: 10.5, observation: 'Conferência urgente', is_active: true },
+    { id: 'loss2', financial_period_id: 'oldest', period_label: oldestPeriod.label, drop_name_snapshot: 'DROP BETA', partner, waybill: ' wb-001 ', label_code: 'ETQ-BETA', bag_code: 'SACA-B', status: 'PUDO Missing', seller: 'Loja Beta', received_at: '2026-09-14T12:00:00Z', amount: 20, observation: 'Aguardar análise', is_active: true },
+    { id: 'loss3', financial_period_id: 'latest', drop_name_snapshot: 'DROP GAMA', partner: 'J&T EXPRESS LTDA', waybill: 'WB-UNICO', label_code: 'ETQ-GAMA', bag_code: 'SACA-C', status: 'Outro', seller: 'Loja Gama', received_at: null, amount: 30, observation: '', is_active: true },
+    { id: 'loss4', financial_period_id: 'oldest', drop_name_snapshot: 'DROP DELTA', partner, waybill: null, amount: 0, is_active: true },
+    { id: 'loss5', financial_period_id: 'oldest', drop_name_snapshot: 'DROP EPSILON', partner, waybill: '', amount: 0, is_active: true },
+  ]
+  const lossesSnapshot = structuredClone(tables.loss_events)
+  const writesBeforeFilters = writes.length
+  await page.goto('http://127.0.0.1:5173/financeiro/pagamento-total')
+  await page.getByRole('cell', { name: latestPeriod.label, exact: true }).waitFor()
+  const expectedPeriods = [latestPeriod.label, '10. 2Q DE AGOSTO', '09. 1Q DE AGOSTO', oldestPeriod.label]
+  assert.deepEqual(await page.getByRole('combobox', { name: 'Período', exact: true }).locator('option').evaluateAll(options => options.map(option => option.value).filter(Boolean)), expectedPeriods)
+  assert.deepEqual(await page.locator('.finance-visual-page tbody tr:not(.financial-totals) td:first-child strong').allTextContents(), expectedPeriods)
+  await page.goto('http://127.0.0.1:5173/financeiro/extravios')
+  const lossRows = page.locator('.losses-table tbody tr').filter({ has: page.getByRole('button', { name: 'Editar', exact: true }) })
+  await lossRows.nth(4).waitFor()
+  assert.equal(await page.locator('.losses-table thead input').count(), 10)
+  assert.equal(await page.locator('.duplicate-waybill').count(), 2)
+  assert.equal(await page.getByText('Duplicado (2)', { exact: true }).count(), 2)
+  assert.equal(await page.locator('.duplicate-waybill').first().evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 242, 189)')
+  await page.getByRole('checkbox', { name: 'Somente Waybills duplicados', exact: true }).check()
+  assert.equal(await lossRows.count(), 2)
+  assert.match(await page.locator('.financial-loss-total').innerText(), /30,50/)
+  await page.getByRole('combobox', { name: 'Período', exact: true }).selectOption(latestPeriod.label)
+  assert.equal(await lossRows.count(), 1)
+  assert.equal(await page.getByText('Duplicado (2)', { exact: true }).count(), 1)
+  assert.match(await page.locator('.financial-loss-total').innerText(), /10,50/)
+  await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click()
+  for (const [column, value] of [['Período', '33.'], ['Scan station / DROP', 'alfa'], ['Waybill nº', 'wb-001'], ['Código da etiqueta', 'etq-alfa'], ['Saca', 'saca-a'], ['Status', 'd2d'], ['Seller', 'arvore'], ['Recebimento', '15/09/2026'], ['Valor', '10,50'], ['Observações', 'conferencia']]) {
+    await page.getByRole('searchbox', { name: `Filtrar ${column}`, exact: true }).fill(value)
+    assert.equal(await lossRows.count(), column === 'Período' || column === 'Waybill nº' ? 2 : 1, column)
+    await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click()
+    assert.equal(await lossRows.count(), 5)
+  }
+  await page.getByRole('searchbox', { name: 'Filtrar Recebimento', exact: true }).fill('2026-09-15')
+  await page.getByRole('searchbox', { name: 'Filtrar Valor', exact: true }).fill('10.50')
+  await page.getByRole('searchbox', { name: 'Filtrar Seller', exact: true }).fill('ARVORE')
+  assert.equal(await lossRows.count(), 1)
+  await page.getByRole('searchbox', { name: 'Filtrar Waybill nº', exact: true }).fill('INEXISTENTE')
+  assert.equal(await lossRows.count(), 0)
+  assert.match(await page.locator('.financial-loss-total').innerText(), /0,00/)
+  await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click()
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    await page.getByRole('searchbox', { name: 'Filtrar Waybill nº', exact: true }).scrollIntoViewIfNeeded()
+    await page.screenshot({ path: `tmp/browser-tests/loss-filters-${viewport.width}.png` })
+    await page.getByRole('searchbox', { name: 'Filtrar Observações', exact: true }).scrollIntoViewIfNeeded()
+    await page.getByRole('searchbox', { name: 'Filtrar Observações', exact: true }).fill('urgente')
+    assert.equal(await lossRows.count(), 1)
+    await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click()
+  }
+  await page.emulateMedia({ colorScheme: 'dark' })
+  assert.equal(await page.locator('.duplicate-waybill').first().evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(73, 59, 19)')
+  await page.emulateMedia({ colorScheme: 'light' })
+  assert.equal(writes.length, writesBeforeFilters)
+  assert.deepEqual(tables.loss_events, lossesSnapshot)
+  console.log('PASS: newest periods first, all ten loss columns filter, duplicate Waybills stay highlighted across filters and totals preserve every record')
 
   await page.goto('http://127.0.0.1:5173/leitor-etiquetas')
   await page.getByRole('button', { name: 'Abrir leitura contínua sem pausa' }).click()

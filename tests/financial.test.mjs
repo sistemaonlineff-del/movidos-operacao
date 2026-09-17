@@ -105,6 +105,10 @@ test('closing template imports one net amount and date per partner without dupli
   const XLSX = await import('xlsx')
   const workbook = createClosingTemplate()
   const partner = periods[0].partner
+  assert.deepEqual(XLSX.utils.sheet_to_json(workbook.Sheets['Pagamento Total'], { header: 1 })[0], ['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'])
+  const populated = createClosingTemplate('33. 1Q DE AGOSTO')
+  assert.equal(populated.Sheets['Pagamento Total'].A2.v, '33. 1Q DE AGOSTO')
+  assert.equal(populated.Sheets.Fechamento.A2.v, '33. 1Q DE AGOSTO')
   workbook.Sheets['Pagamento Total'] = XLSX.utils.aoa_to_sheet([['Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'], [partner, 0, 46280]])
   const summary = readClosingSummary(workbook, [partner]).get(partner)
   assert.deepEqual(summary, { net_amount: 0, payment_date: '2026-09-15' })
@@ -114,6 +118,11 @@ test('closing template imports one net amount and date per partner without dupli
   XLSX.utils.sheet_add_aoa(workbook.Sheets['Pagamento Total'], [[partner, 10, '15/09/2026']], { origin: -1 })
   assert.throws(() => readClosingSummary(workbook, [partner]), /apenas uma linha/)
   assert.throws(() => readClosingSummary(createClosingTemplate(), [partner]), /confira parceiro/)
+  workbook.Sheets['Pagamento Total'] = XLSX.utils.aoa_to_sheet([['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'], ['33. 1Q DE AGOSTO', partner, 0, 46280]])
+  assert.deepEqual(readClosingSummary(workbook, [partner], '33. 1Q DE AGOSTO').get(partner), summary)
+  assert.throws(() => readClosingSummary(workbook, [partner], '34. 2Q DE AGOSTO'), /não corresponde/)
+  workbook.Sheets['Pagamento Total'].A2.v = ''
+  assert.deepEqual(readClosingSummary(workbook, [partner], '33. 1Q DE AGOSTO').get(partner), summary)
 })
 
 test('historical complement preserves zero and dates, skips blank reimbursements and rejects duplicate net values', async () => {
