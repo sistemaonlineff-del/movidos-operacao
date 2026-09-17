@@ -24,7 +24,7 @@ const ReadyMessages = lazy(() => import("./ReadyMessages"));
 const Documents = lazy(() => import("./Documents"));
 import { AccessProvider, Guard, useAccess } from "./access";
 import LabelReaderGate from "./LabelReaderGate";
-import { DROP_STATUSES, PARTNERS, ZONES, normalizePartner, normalizeZone } from "./dropOptions";
+import { DROP_STATUSES, PARTNERS, PIX_KEY_TYPES, VEHICLE_TYPES, ZONES, normalizePartner, normalizeZone } from "./dropOptions";
 
 const Lista = lazy(() => import("./CadastrosLista"));
 const DropMap = lazy(() => import("./DropMap"));
@@ -83,6 +83,7 @@ const times = Array.from(
     `${String(Math.floor((i * 30) / 60)).padStart(2, "0")}:${String((i * 30) % 60).padStart(2, "0")}`,
 );
 const partners = PARTNERS;
+const lastMileFields = ["vehicle_type", "vehicle_plate", "pix_key_type"];
 const fields = [
   "status",
   "name",
@@ -130,7 +131,7 @@ const fields = [
 ];
 const blank = (): Values =>
   Object.fromEntries(
-    fields.map((k) => [k, k === "status" ? "INTERESSADO" : ""]),
+    [...fields, ...lastMileFields].map((k) => [k, k === "status" ? "INTERESSADO" : ""]),
   );
 // O cadastro legado (VBA/Access) gravava horários como "08h00".  Normalizamos
 // na leitura para que sejam selecionados corretamente e, ao salvar, permaneçam
@@ -629,7 +630,7 @@ function Cadastro() {
           setRecord(data as Drop);
           setReason("");
           const next = blank();
-          fields.forEach(
+          [...fields, ...lastMileFields].forEach(
             (k) =>
               (next[k] =
                 data?.[k] === null || data?.[k] === undefined
@@ -694,6 +695,9 @@ function Cadastro() {
           payload[field] = values[field] ? Number(values[field]) : null;
         else payload[field] = values[field].trim() || null;
       });
+      if (record?.registration_type === "last_mile") {
+        lastMileFields.forEach(field => { payload[field] = values[field].trim() || null; });
+      }
       if (excluding) {
         const { data: auth, error: authError } = await supabase.auth.getUser();
         if (authError || !auth.user) throw new Error("Entre novamente no sistema antes de desativar o cadastro.");
@@ -757,6 +761,11 @@ function Cadastro() {
               value={values.name}
               onChange={(v) => put("name", v)}
             />
+            {record?.registration_type === "last_mile" && <>
+              <Select label="Tipo de veículo" value={values.vehicle_type} set={value => put("vehicle_type", value)} items={VEHICLE_TYPES} />
+              <Input label="Placa do veículo" value={values.vehicle_plate} onChange={value => put("vehicle_plate", value)} />
+              <Select label="Tipo de chave PIX" value={values.pix_key_type} set={value => put("pix_key_type", value)} items={PIX_KEY_TYPES} />
+            </>}
             <Select
               label="Parceiro logÃ­stico"
               value={values.partner}

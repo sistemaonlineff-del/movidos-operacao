@@ -5,6 +5,43 @@ import { PGlite } from '@electric-sql/pglite'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
 
+test('Last Mile vehicle migration preserves PIX and partner constraints while allowing an unselected partner', async () => {
+  const database = new PGlite()
+  try {
+    await build({ entryPoints: ['src/dropOptions.ts'], outfile: 'tmp/database-tests/last-mile-options.cjs', bundle: true, platform: 'node', format: 'cjs' })
+    const { PARTNERS, VEHICLE_TYPES, PIX_KEY_TYPES } = await import(pathToFileURL(`${process.cwd()}/tmp/database-tests/last-mile-options.cjs`).href)
+    await database.exec(`
+      create role authenticated;
+      create table public.drops (id integer primary key, partner text, pix_key_type text, pix_key text, vehicle_plate text);
+      alter table public.drops enable row level security;
+      create policy existing_drop_access on public.drops for select to authenticated using (true);
+      insert into public.drops values (1,null,'CPF','test-key','ABC1D23');
+    `)
+    const partnerSchema = await readFile('supabase/migrations/20260914130000_restore_drop_partners.sql', 'utf8')
+    await database.exec(`alter table public.drops ${partnerSchema.match(/add constraint drops_partner_check[\s\S]+?;/)[0]}`)
+    const before = (await database.query('select * from drops')).rows[0]
+    const policiesBefore = (await database.query("select policyname,qual,with_check from pg_policies where tablename='drops'")).rows
+    const migration = await readFile('supabase/migrations/20260917100000_add_last_mile_vehicle_type.sql', 'utf8')
+    await database.exec(migration)
+    await database.exec(migration)
+    assert.deepEqual((await database.query('select * from drops')).rows[0], { ...before, vehicle_type: null })
+    assert.deepEqual((await database.query("select policyname,qual,with_check from pg_policies where tablename='drops'")).rows, policiesBefore)
+    assert.equal((await database.query("select relrowsecurity from pg_class where relname='drops'")).rows[0].relrowsecurity, true)
+    await assert.rejects(database.exec("insert into drops (id,partner) values (2,'')"), /drops_partner_check/)
+    await assert.rejects(database.exec("insert into drops (id,partner) values (2,'PARCEIRO INVALIDO')"), /drops_partner_check/)
+    assert.equal((await database.query("insert into drops (id,partner,vehicle_type,pix_key_type) values (2,null,'Moto','CPF') returning partner")).rows[0].partner, null)
+    for (const partner of PARTNERS) await database.query('update drops set partner=$1 where id=2', [partner])
+    for (const vehicleType of VEHICLE_TYPES) {
+      assert.ok(!PIX_KEY_TYPES.includes(vehicleType))
+      await database.query('update drops set vehicle_type=$1 where id=2', [vehicleType])
+    }
+    assert.equal((await database.query('select pix_key_type from drops where id=2')).rows[0].pix_key_type, 'CPF')
+    await database.exec(migration)
+    assert.deepEqual((await database.query('select * from drops where id=1')).rows[0], { ...before, vehicle_type: null })
+    assert.equal((await database.query('select vehicle_type from drops where id=2')).rows[0].vehicle_type, VEHICLE_TYPES.at(-1))
+  } finally { await database.close() }
+})
+
 test('employee RLS recovery restores delegated saves without granting access or deleting history', async () => {
   const database = new PGlite()
   try {
