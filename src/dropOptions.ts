@@ -2,6 +2,8 @@ export const DROP_STATUSES = ['INTERESSADO', 'PICKUP - INTERESSADO', 'AG. ASSINA
 export const statusTone = (status: string) => status.startsWith('ATIVO') ? 'active' : /PROBLEMA|EXCLU/.test(status) ? 'problem' : status.includes('CONGELADO') ? 'frozen' : 'progress'
 
 export const PARTNERS = ['IMILE DELIVERY BRAZIL LTDA', 'J&T EXPRESS LTDA']
+export const VEHICLE_TYPES = ['Moto', 'Carro', 'Utilitário', 'Van', 'Caminhão', 'Bicicleta', 'Outro']
+export const PIX_KEY_TYPES = ['CPF', 'CNPJ', 'E-mail', 'Telefone', 'Chave aleatória']
 export const ZONES = ['ABC', 'CENTRO', 'FORA DE SP', 'INTERIOR', 'LESTE', 'NORTE', 'OESTE', 'OUTROS ESTADOS', 'SUL']
 
 export const normalizePartner = (value: string | null | undefined) => {
