@@ -58,11 +58,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const send = configuredMailer()
     const { error: schemaError } = await admin.from('email_logs').select('delivery_key').limit(1)
     if (schemaError) throw new MailError(503, 'A atualização do banco para envio direto ainda não foi aplicada.')
-    if (req.method === 'GET') return res.status(200).json({ configured: true, from: process.env.MAIL_FROM?.trim() })
+    const restrictedRecipient = process.env.MAIL_TEST_RECIPIENT?.trim().toLowerCase() || null
+    if (req.method === 'GET') return res.status(200).json({ configured: true, from: process.env.MAIL_FROM?.trim(), testRecipient: restrictedRecipient })
     const input = req.body ?? {}
     if (input.mode === 'test') {
       if (profile.role !== 'admin') throw new MailError(403, 'Somente administrador pode enviar o e-mail de teste.')
-      if (process.env.MAIL_TEST_RECIPIENT && process.env.MAIL_TEST_RECIPIENT.trim().toLowerCase() !== testRecipient) throw new MailError(403, 'O destinatário de teste configurado no servidor difere do destinatário autorizado.')
+      if (restrictedRecipient && restrictedRecipient !== testRecipient) throw new MailError(403, 'O destinatário de teste configurado no servidor difere do destinatário autorizado.')
       const subject = 'MOVIDOS - Teste de envio de e-mail'
       let deliveryKey = createHash('sha256').update(`mail-test:${testRecipient}:${new Date().toISOString().slice(0, 10)}`).digest('hex')
       const retryRequested = input.retryOf != null
@@ -97,7 +98,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (dropError || periodError) throw new MailError(503, 'Não foi possível conferir os dados do fechamento.')
     if (!drop || !period || period.label !== input.period || financialPartner(period) !== input.partner) throw new MailError(400, 'O DROP ou período não corresponde ao fechamento selecionado.')
     if (!emailAddress.test(drop.email ?? '')) throw new MailError(400, 'Cadastre um único e-mail válido no DROP antes de enviar.')
-    if (process.env.MAIL_TEST_RECIPIENT && drop.email.toLowerCase() !== process.env.MAIL_TEST_RECIPIENT.trim().toLowerCase()) throw new MailError(403, 'Modo de teste: destinatário não autorizado. Nenhum e-mail foi enviado.')
+    if (restrictedRecipient && drop.email.toLowerCase() !== restrictedRecipient) throw new MailError(403, 'Modo de teste ativo: envio para clientes bloqueado por MAIL_TEST_RECIPIENT. O administrador deve remover essa variável na Vercel e fazer redeploy para liberar os destinatários cadastrados. Nenhum e-mail foi enviado.')
     const membership = await Promise.all(['financial_drop_items', 'financial_payment_history'].map(table => admin.from(table).select('id').eq('financial_period_id', period.id).eq('drop_name_snapshot', drop.name).eq('is_active', true).limit(1)))
     if (membership.some(result => result.error)) throw new MailError(503, 'Não foi possível conferir os itens do DROP.')
     if (!membership.some(result => result.data?.length)) throw new MailError(400, 'O DROP não possui itens neste fechamento.')

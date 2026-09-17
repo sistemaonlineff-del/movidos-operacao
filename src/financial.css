@@ -14,12 +14,22 @@
 .loss-duplicates-filter input { width: 1rem; height: 1rem; margin: 0; flex: 0 0 auto; }
 .losses-table td.duplicate-waybill { background: #fff2bd; color: #694300; box-shadow: inset 3px 0 #bd8100; font-weight: 700; }
 .losses-table td.duplicate-waybill .table-subtitle { color: inherit; font-weight: 600; }
+.loss-selection-actions { margin-bottom: 1rem; }
+.losses-table .loss-selection-cell { width: 42px; min-width: 42px; text-align: center; }
+.losses-table .loss-selection-cell input { display: inline-block; width: 18px; height: 18px; margin: 0; padding: 0; }
+.bulk-loss-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.bulk-loss-field { min-width: 0; display: grid; gap: .5rem; align-content: start; }
+.bulk-loss-field > input:disabled, .bulk-loss-field > textarea:disabled { background: #edf1f1; color: #657277; }
+.financial-editor .bulk-field-toggle, .financial-editor .bulk-confirm { display: flex; align-items: center; gap: .5rem; }
+.financial-editor .bulk-field-toggle input, .financial-editor .bulk-confirm input { width: 18px; height: 18px; flex: 0 0 18px; }
+.bulk-confirm { grid-column: 1 / -1; }
+@media (max-width: 640px) { .bulk-loss-fields { grid-template-columns: minmax(0, 1fr); } .financial-editor .modal-actions { flex-wrap: wrap; } }
 @media (prefers-color-scheme: dark) { .losses-table td.duplicate-waybill { background: #493b13; color: #ffe395; } }
 .financial-hint { color: #637278; font-size: .82rem; line-height: 1.5; }
 .financial-editor { width: min(900px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 1px solid #c8dadc; border-radius: 16px; padding: 1.5rem; color: #172f35; background: white; }
 .financial-editor::backdrop { background: #101820b8; }
 .financial-editor fieldset { padding: 0; border: 0; margin: 0; min-width: 0; }
-.financial-editor input, .financial-editor textarea { width: 100%; min-width: 0; }
+.financial-editor input, .financial-editor textarea, .financial-editor select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
 .financial-editor .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .financial-editor .form-grid label { min-width: 0; }
 .financial-editor input { box-sizing: border-box; }

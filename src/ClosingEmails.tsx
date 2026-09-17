@@ -181,6 +181,9 @@ export default function ClosingEmails({
     try {
       const configuration = await requestMail();
       if (!configuration.ok) throw new Error(configuration.error || "Envio não configurado.");
+      if (configuration.testRecipient && groups.some(group => text(group[0].email).toLowerCase() !== text(configuration.testRecipient).toLowerCase())) {
+        throw new Error(`Modo de teste ativo: os fechamentos dos clientes estão bloqueados por MAIL_TEST_RECIPIENT. Remova essa variável em Production na Vercel e faça redeploy para liberar os e-mails cadastrados dos DROPs. Nenhum e-mail foi enviado.`);
+      }
       if (!window.confirm(`Enviar o fechamento ${period} de ${partner} para ${groups.length} DROP(s), usando ${configuration.from}?`)) return;
       setResults([]);
       for (const group of groups) {

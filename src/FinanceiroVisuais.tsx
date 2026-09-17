@@ -7,6 +7,8 @@ import {
   DataRow,
   date,
   key,
+  lossBatchPayloads,
+  lossEditableFields,
   lossEditorValues,
   lossEventPayload,
   money,
@@ -14,6 +16,7 @@ import {
   number,
   periodOrder,
   paymentTotalTarget,
+  paymentDetailFields as detailFields,
   round,
   text,
 } from "./financialData";
@@ -56,23 +59,6 @@ const totalColumns = [
   ["assumed", "Prejuízo que eu assumi e não descontei dos DROPs"],
   ["companyPayment", "Pagamento para Talita e Jorge"],
 ];
-const detailFields = [
-  ["referenceCnpj", "CNPJ de referência", "select"],
-  ["period", "Período", "text"],
-  ["drop", "DROP", "text"],
-  ["responsible", "Responsável", "text"],
-  ["partner", "Parceiro", "text"],
-  ["packages", "Total pacote", "number"],
-  ["unit", "Valor acordado", "number"],
-  ["subtotal", "Subtotal", "number"],
-  ["w2d", "Extravio W2D", "number"],
-  ["d2d", "Extravio D2D", "number"],
-  ["loss", "Total extravio", "number"],
-  ["reimbursement", "Reembolso iMile", "number"],
-  ["receivable", "Total a receber", "number"],
-  ["paymentDate", "Data pagamento", "date"],
-  ["pix", "PIX", "text"],
-];
 const cnabFields = [
   ["drop", "DROP", "text"],
   ["responsible", "RESPONSÁVEL", "text"],
@@ -93,6 +79,7 @@ export default function FinanceiroVisuais({ kind }: { kind: Kind }) {
 function FinanceiroVisualPage({ kind }: { kind: Kind }) {
   const { can, profile } = useAccess();
   const canEditTotal = profile?.is_active === true && can("financeiro_manage");
+  const detailSaving = useRef(false);
   const lossSaving = useRef(false);
   const lossOriginal = useRef<DataRow | null>(null);
   const lossInsertId = useRef("");
@@ -112,6 +99,12 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     [observationFilter, setObservationFilter] = useState("");
   const [lossColumnFilters, setLossColumnFilters] = useState<Record<string, string>>({});
   const [duplicatesOnly, setDuplicatesOnly] = useState(false);
+  const [selectedLossIds, setSelectedLossIds] = useState<Set<string>>(new Set());
+  const [bulkLosses, setBulkLosses] = useState<DataRow[] | null>(null);
+  const [bulkChanges, setBulkChanges] = useState<DataRow>({});
+  const [bulkConfirmed, setBulkConfirmed] = useState(false);
+  const [bulkAttempted, setBulkAttempted] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(0);
   const [editing, setEditing] = useState<DataRow | null>(null),
     [editingTotal, setEditingTotal] = useState<DataRow | null>(null),
     [editingLoss, setEditingLoss] = useState<DataRow | null>(null),
@@ -121,6 +114,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     [generatingCnab, setGeneratingCnab] = useState(false);
   const load = async () => {
     setLoading(true);
+    setSelectedLossIds(new Set());
     setError("");
     try {
       const [p, v, h, i, l, d] = await Promise.all(
@@ -155,6 +149,8 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     setEditing(null);
     setEditingTotal(null);
     setEditingLoss(null);
+    setBulkLosses(null);
+    setSelectedLossIds(new Set());
     setDropFilter("");
     setStatusFilter("");
     setObservationFilter("");
@@ -220,6 +216,14 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       waybillCounts,
     ],
   );
+  const selectedLosses = filteredLosses.filter(row => selectedLossIds.has(row.id));
+  useEffect(() => {
+    const visible = new Set(filteredLosses.map(row => row.id));
+    setSelectedLossIds(current => {
+      const next = new Set([...current].filter(id => canEditTotal && visible.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [filteredLosses, canEditTotal]);
   const totals = useMemo(
     () =>
       buildTotals(details, losses, periods, views, periodFilter, partnerFilter)
@@ -239,13 +243,12 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     (all, drop) => (all.has(key(drop)) ? all : all.set(key(drop), drop)),
     new Map<string, string>(),
   );
-  const report = async (rows: DataRow[]) => {
+  const report = async (rows: DataRow[], excel = false) => {
     setGenerating(true);
     setError("");
     try {
-      await (
-        await import("./financialReport")
-      ).downloadClosingPdf(rows, losses, periods);
+      if (excel) await (await import("./excelDownload")).downloadPaymentDetailsExcel(rows);
+      else await (await import("./financialReport")).downloadClosingPdf(rows, losses, periods);
       setMessage("Relatório de fechamento gerado.");
     } catch (caught) {
       setError(
@@ -311,9 +314,22 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       setEditError((caught as Error).message || "Não foi possível salvar o pagamento total.");
     } finally { setSaving(false); }
   };
+  const manualDetail = editing?.source === "new" || notes(editing?.raw?.observation).movidosClosing?.manualEntry === true;
+  const detailPeriods = [...periods].sort((first, second) => periodOrder(second.label) - periodOrder(first.label));
+  const detailDrops = drops.filter(drop => !drop.partner || financialPartner(drop) === editing?.partner);
+  const addDetail = () => {
+    if (!canEditTotal || detailSaving.current) return;
+    const matching = periods.filter(period => period.label === periodFilter && (!partnerFilter || financialPartner(period) === partnerFilter));
+    const period = matching.length === 1 ? matching[0] : undefined;
+    const drop = drops.filter(drop => key(drop.name) === dropFilter && (!drop.partner || financialPartner(drop) === (period && financialPartner(period))));
+    const registration = drop.length === 1 ? drop[0] : undefined;
+    setEditError("");
+    setEditing({ id: crypto.randomUUID(), source: "new", raw: {}, periodId: period?.id ?? "", period: period?.label ?? "", partner: period ? financialPartner(period) : "", referenceCnpj: period?.reference_cnpj || "MOVIDOS", dropId: registration?.id ?? "", drop: registration?.name ?? "", responsible: registration?.responsible ?? "", pix: registration?.pix_key ?? "", paymentDate: text(period?.payment_date).slice(0, 10), packages: 0, unit: 0, subtotal: 0, w2d: 0, d2d: 0, loss: 0, reimbursement: 0, receivable: 0 });
+  };
   const saveDetail = async (event: FormEvent) => {
     event.preventDefault();
-    if (!editing || !supabase) return;
+    if (!editing || !supabase || detailSaving.current || !canEditTotal) return;
+    detailSaving.current = true;
     setSaving(true);
     setEditError("");
     try {
@@ -323,14 +339,21 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         )
       )
         throw new Error("Informe período, parceiro e DROP.");
+      for (const [field, label, type] of detailFields) {
+        if (type === "number" && (!/^[+-]?\d+(?:[.,]\d+)?$/.test(text(editing[field])) || !Number.isFinite(Number(text(editing[field]).replace(",", "."))) || Math.abs(number(editing[field])) >= 1e12)) throw new Error(`Informe um valor válido em ${label}.`);
+      }
+      const paymentDate = text(editing.paymentDate);
+      if (paymentDate && (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate) || !Number.isFinite(Date.parse(`${paymentDate}T12:00:00Z`)) || new Date(`${paymentDate}T12:00:00Z`).toISOString().slice(0, 10) !== paymentDate)) throw new Error("Informe uma data de pagamento válida.");
       if (
         !Number.isInteger(number(editing.packages)) ||
-        number(editing.packages) < 0
+        number(editing.packages) < 0 || number(editing.packages) > 2147483647
       )
         throw new Error(
           "A quantidade de pacotes deve ser um inteiro positivo ou zero.",
         );
       const originalPeriod = periodById.get(editing.periodId);
+      if (manualDetail && (!originalPeriod || originalPeriod.label !== text(editing.period) || financialPartner(originalPeriod) !== text(editing.partner))) throw new Error("Selecione um fechamento existente para este pagamento.");
+      if (manualDetail && !detailDrops.some(drop => drop.id === editing.dropId && drop.name === editing.drop)) throw new Error("Selecione um DROP cadastrado para o parceiro deste fechamento.");
       let period = originalPeriod && originalPeriod.label === text(editing.period) && financialPartner(originalPeriod) === text(editing.partner) ? originalPeriod : periods.find(
         (row) =>
           row.label === text(editing.period) &&
@@ -353,7 +376,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         if (result.error) throw result.error;
         period = result.data;
       }
-      if (period && period.reference_cnpj !== text(editing.referenceCnpj)) {
+      if (!manualDetail && period && period.reference_cnpj !== text(editing.referenceCnpj)) {
         const { data, error } = await supabase
           .from("financial_periods")
           .update({ reference_cnpj: text(editing.referenceCnpj) })
@@ -371,6 +394,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           (Object.keys(previous).length ? undefined : editing.raw.observation),
         movidosClosing: {
           ...previous.movidosClosing,
+          ...(manualDetail ? { manualEntry: true, referenceCnpj: text(editing.referenceCnpj) } : {}),
           sourceItemId: editing.sourceItemId,
           packageType: text(editing.packageType),
           w2d: number(editing.w2d),
@@ -378,6 +402,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         },
       });
       const payload = {
+        ...(manualDetail ? { drop_id: editing.dropId } : {}),
         financial_period_id: period!.id,
         period_label: text(editing.period),
         partner: text(editing.partner),
@@ -402,22 +427,26 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
               .from("financial_payment_history")
               .update(payload)
               .eq("id", editing.id)
+              .eq("is_active", true)
               .select("id")
               .single()
           : await supabase
               .from("financial_payment_history")
-              .insert(payload)
+              .insert({ ...payload, ...(editing.source === "new" ? { id: editing.id } : {}) })
               .select("id")
               .single();
+      if (result.error?.code === "23505") throw new Error("Este pagamento já pode ter sido salvo. Feche e atualize os dados antes de adicionar novamente.");
       if (result.error) throw result.error;
+      if (!result.data?.id) throw new Error("Não foi possível confirmar o pagamento. Feche e atualize os dados antes de tentar novamente.");
       setEditing(null);
-      setMessage("Fechamento atualizado.");
+      setMessage(editing.source === "new" ? "Pagamento adicionado." : "Fechamento atualizado.");
       await load();
     } catch (caught) {
       setEditError(
         (caught as Error).message || "Não foi possível salvar o fechamento.",
       );
     } finally {
+      detailSaving.current = false;
       setSaving(false);
     }
   };
@@ -459,6 +488,36 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     } finally {
       lossSaving.current = false;
       setSaving(false);
+    }
+  };
+  const openBulkLosses = () => {
+    if (!canEditTotal || !selectedLosses.length || lossSaving.current) return;
+    setBulkLosses(selectedLosses.map(row => ({ ...row })));
+    setBulkChanges({}); setBulkConfirmed(false); setBulkAttempted(false); setBulkProgress(0); setEditError("");
+  };
+  const saveBulkLosses = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!supabase || !bulkLosses || lossSaving.current || bulkAttempted) return;
+    if (!canEditTotal) { setEditError("Você não tem permissão para gerenciar extravios."); return; }
+    if (!bulkConfirmed) { setEditError("Confirme a quantidade de extravios antes de aplicar."); return; }
+    lossSaving.current = true; setSaving(true); setEditError("");
+    let attempted = false, completed = 0;
+    try {
+      const plan = lossBatchPayloads(bulkLosses, bulkChanges, periods, drops);
+      attempted = true; setBulkAttempted(true);
+      for (const { original, payload } of plan) {
+        const result = await supabase.from("loss_events").update(payload).eq("id", original.id).eq("is_active", true).eq("updated_at", original.updated_at).select("id").single();
+        if (result.error?.code === "PGRST116" || (!result.error && result.data?.id !== original.id)) throw new Error("Um extravio foi alterado ou não está mais disponível.");
+        if (result.error) throw result.error;
+        completed++; setBulkProgress(completed);
+      }
+      setMessage(`${completed} extravio(s) atualizado(s) em massa.`);
+    } catch (caught) {
+      const reason = text((caught as Error).message) || "Não foi possível confirmar a gravação.";
+      setEditError(attempted ? `${completed} de ${bulkLosses.length} gravações confirmadas. Lote interrompido: ${reason} Feche e confira os registros antes de selecionar novamente; a última tentativa pode ter sido gravada.` : reason);
+    } finally {
+      if (attempted) await load();
+      lossSaving.current = false; setSaving(false);
     }
   };
   const changeDetail = (field: string, value: string) =>
@@ -514,14 +573,15 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           </p>
         </div>
         <div className="financial-actions">
+          {kind === "details" && canEditTotal && <button type="button" className="primary" disabled={loading || !!error || saving || !periods.length} onClick={addDetail}><span aria-hidden="true">+</span> Adicionar pagamento</button>}
           {kind === "losses" && canEditTotal && <button type="button" className="primary" disabled={loading || !!error || saving} onClick={() => openLoss(null)}><span aria-hidden="true">+</span> Adicionar extravio</button>}
           {kind === "details" && (
             <button
               className="secondary"
               disabled={loading || generating || !filteredDetails.length}
-              onClick={() => void report(filteredDetails)}
+              onClick={() => void report(filteredDetails, true)}
             >
-              {generating ? "Gerando PDF…" : "Gerar relatório de fechamento"}
+              {generating ? "Gerando Excel…" : "Baixar Excel do fechamento"}
             </button>
           )}
           {kind === "cnab" && (
@@ -635,13 +695,13 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       ) : kind === "details" ? (
         <PaymentDetails
           rows={filteredDetails}
-          onEdit={(row) => {
+          onEdit={canEditTotal ? (row) => {
             setEditError("");
             setEditing({
               ...row,
               paymentDate: text(row.paymentDate).slice(0, 10),
             });
-          }}
+          } : undefined}
           onReport={(row) => void report([row])}
           generating={generating}
         />
@@ -654,6 +714,14 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           columnFilters={lossColumnFilters}
           onFilter={(field, value) => setLossColumnFilters(current => ({ ...current, [field]: value }))}
           waybillCounts={waybillCounts}
+          selectedIds={selectedLossIds}
+          onSelect={(id, checked) => setSelectedLossIds(current => {
+            const next = new Set(current);
+            if (checked) next.add(id); else next.delete(id);
+            return next;
+          })}
+          onSelectAll={checked => setSelectedLossIds(new Set(checked ? filteredLosses.map(row => row.id) : []))}
+          onBulkEdit={openBulkLosses}
           onEdit={canEditTotal ? openLoss : undefined}
         />
       )}
@@ -677,19 +745,38 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       )}
       {editing && (
         <Editor
-          title="Editar fechamento"
-          onClose={() => !saving && setEditing(null)}
+          title={editing.source === "new" ? "Adicionar pagamento" : "Editar fechamento"}
+          onClose={() => !detailSaving.current && setEditing(null)}
           onSubmit={saveDetail}
           saving={saving}
           error={editError}
+          submitLabel={editing.source === "new" ? "Adicionar pagamento" : "Salvar alterações"}
+          submitDisabled={!canEditTotal}
         >
           <div className="form-grid">
             {detailFields.map(
               ([field, label, type]) => (
                 <label key={field}>
                   {label}
-                  {type === "select" ? (
+                  {manualDetail && field === "period" ? (
+                    <select aria-label={label} required autoFocus value={editing.periodId ?? ""} onChange={event => {
+                      const period = periodById.get(event.target.value);
+                      setEditing({ ...editing, periodId: period?.id ?? "", period: period?.label ?? "", partner: period ? financialPartner(period) : "", referenceCnpj: period?.reference_cnpj || "MOVIDOS", paymentDate: text(period?.payment_date).slice(0, 10), drop: "", dropId: "", responsible: "", pix: "" });
+                    }}>
+                      <option value="">Selecionar fechamento</option>
+                      {detailPeriods.map(period => <option key={period.id} value={period.id}>{period.label} · {financialPartner(period)} · {period.partner} · {period.id.slice(0, 8)}</option>)}
+                    </select>
+                  ) : manualDetail && field === "drop" ? (
+                    <select aria-label={label} required value={editing.dropId ?? ""} onChange={event => {
+                      const drop = detailDrops.find(drop => drop.id === event.target.value);
+                      setEditing({ ...editing, dropId: drop?.id ?? "", drop: drop?.name ?? "", responsible: drop?.responsible ?? "", pix: drop?.pix_key ?? "" });
+                    }}>
+                      <option value="">Selecionar DROP</option>
+                      {detailDrops.map(drop => <option key={drop.id} value={drop.id}>{drop.name} · {drop.responsible}</option>)}
+                    </select>
+                  ) : type === "select" ? (
                     <select
+                      aria-label={label}
                       required
                       value={editing[field] ?? ""}
                       onChange={(event) => changeDetail(field, event.target.value)}
@@ -699,12 +786,14 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
                     </select>
                   ) : (
                     <input
+                    aria-label={label}
                     autoFocus={field === "period"}
                     required={
                       ["period", "drop", "partner"].includes(field) ||
                       type === "number"
                     }
                     type={type}
+                    readOnly={manualDetail && field === "partner"}
                     step={field === "packages" ? "1" : "0.01"}
                     min={field === "packages" ? 0 : undefined}
                     value={editing[field] ?? ""}
@@ -722,6 +811,29 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
             reembolso recalculam o total a receber. Você também pode ajustar os
             totais manualmente.
           </p>
+        </Editor>
+      )}
+      {bulkLosses && (
+        <Editor title="Editar extravios em massa" onClose={() => !lossSaving.current && setBulkLosses(null)} onSubmit={saveBulkLosses} saving={saving} error={editError}
+          submitLabel={`Aplicar em ${bulkLosses.length} extravios`} submitDisabled={bulkAttempted || !bulkConfirmed || !Object.keys(bulkChanges).length || !canEditTotal} cancelLabel={bulkAttempted ? "Fechar" : "Cancelar"}>
+          <p>{bulkLosses.length} extravio(s) selecionado(s)</p>
+          <fieldset disabled={bulkAttempted} className="bulk-loss-fields">
+            {lossEditableFields.map(([field, label, type]) => {
+              const enabled = Object.prototype.hasOwnProperty.call(bulkChanges, field);
+              const suggestions = field === "period_label" ? periodOptions : field === "partner" ? options([...PARTNERS, ...periods.map(row => row.partner)]) : field === "status" ? options(["PUDO Missing", "PUDO Missing - não cobrei", "D2D Missing", "D2D Missing - não cobrei", ...losses.map(row => row.status)]) : [];
+              return <div key={field} className="bulk-loss-field">
+                <label className="bulk-field-toggle"><input type="checkbox" checked={enabled} onChange={event => {
+                  setBulkChanges(current => { const next = { ...current }; if (event.target.checked) next[field] = ""; else delete next[field]; return next; });
+                  setBulkConfirmed(false); setEditError("");
+                }} />Alterar {label}</label>
+                {type === "textarea" ? <textarea aria-label={label} disabled={!enabled} value={bulkChanges[field] ?? ""} onChange={event => { setBulkChanges(current => ({ ...current, [field]: event.target.value })); setBulkConfirmed(false); setEditError(""); }} />
+                  : <input aria-label={label} disabled={!enabled} type={type} step={type === "datetime-local" ? "1" : "0.01"} required={enabled && ["period_label", "partner", "amount"].includes(field)} list={suggestions.length ? `bulk-${field}` : undefined} value={bulkChanges[field] ?? ""} onChange={event => { setBulkChanges(current => ({ ...current, [field]: event.target.value })); setBulkConfirmed(false); setEditError(""); }} />}
+                {suggestions.length > 0 && <datalist id={`bulk-${field}`}>{suggestions.map(value => <option key={value} value={value} />)}</datalist>}
+              </div>;
+            })}
+            <label className="bulk-confirm"><input type="checkbox" checked={bulkConfirmed} onChange={event => setBulkConfirmed(event.target.checked)} />Confirmo aplicar os campos marcados aos {bulkLosses.length} extravios selecionados</label>
+          </fieldset>
+          {bulkAttempted && <p role="status">{bulkProgress} de {bulkLosses.length} gravações confirmadas.</p>}
         </Editor>
       )}
       {editingLoss && (
@@ -808,6 +920,9 @@ function Editor({
   onSubmit,
   saving,
   error,
+  submitLabel = "Salvar alterações",
+  submitDisabled = false,
+  cancelLabel = "Cancelar",
 }: {
   title: string;
   children: React.ReactNode;
@@ -815,6 +930,9 @@ function Editor({
   onSubmit: (event: FormEvent) => void;
   saving: boolean;
   error: string;
+  submitLabel?: string;
+  submitDisabled?: boolean;
+  cancelLabel?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -852,10 +970,10 @@ function Editor({
         )}
         <div className="modal-actions">
           <button type="button" disabled={saving} onClick={onClose}>
-            Cancelar
+            {cancelLabel}
           </button>
-          <button className="primary compact" disabled={saving}>
-            {saving ? "Salvando…" : "Salvar alterações"}
+          <button className="primary compact" disabled={saving || submitDisabled}>
+            {saving ? "Salvando…" : submitLabel}
           </button>
         </div>
       </form>
@@ -932,7 +1050,7 @@ function PaymentDetails({
   generating,
 }: {
   rows: DataRow[];
-  onEdit: (row: DataRow) => void;
+  onEdit?: (row: DataRow) => void;
   onReport: (row: DataRow) => void;
   generating: boolean;
 }) {
@@ -946,7 +1064,7 @@ function PaymentDetails({
         </p>
       )}
       <div className="table-wrap">
-        <table>
+        <table className="payment-details-table">
           <thead>
             <tr>
               {detailFields.map(([field, title]) => (
@@ -1004,12 +1122,12 @@ function PaymentDetails({
                 ))}
                 <td>
                   <div className="financial-actions">
-                    <button
+                    {onEdit && <button
                       className="table-action"
                       onClick={() => onEdit(row)}
                     >
                       Editar
-                    </button>
+                    </button>}
                     <button
                       className="table-action"
                       disabled={generating}
@@ -1067,6 +1185,10 @@ function Losses({
   columnFilters,
   onFilter,
   waybillCounts,
+  selectedIds,
+  onSelect,
+  onSelectAll,
+  onBulkEdit,
   onEdit,
 }: {
   rows: DataRow[];
@@ -1074,18 +1196,29 @@ function Losses({
   columnFilters: Record<string, string>;
   onFilter: (field: string, value: string) => void;
   waybillCounts: Map<string, number>;
+  selectedIds: Set<string>;
+  onSelect: (id: string, checked: boolean) => void;
+  onSelectAll: (checked: boolean) => void;
+  onBulkEdit: () => void;
   onEdit?: (row: DataRow) => void;
 }) {
+  const selectedCount = rows.filter(row => selectedIds.has(row.id)).length;
   return (
     <section className="card financial-losses">
       <div className="financial-loss-total" role="status">
         <span>{rows.length} extravio(s) nos filtros selecionados</span>
         <strong>Total: {money(sum(rows, "amount"))}</strong>
       </div>
+      {onEdit && <div className="financial-actions loss-selection-actions">
+        <span role="status">{selectedCount} selecionado(s)</span>
+        <button type="button" className="secondary" disabled={!selectedCount} onClick={onBulkEdit}>Editar selecionados</button>
+        <button type="button" className="secondary" disabled={!selectedCount} onClick={() => onSelectAll(false)}>Limpar seleção</button>
+      </div>}
       <div className="table-wrap">
         <table className="losses-table">
           <thead>
             <tr>
+              {onEdit && <th className="loss-selection-cell" scope="col"><input type="checkbox" aria-label="Selecionar todos os extravios filtrados" disabled={!rows.length} checked={rows.length > 0 && selectedCount === rows.length} ref={element => { if (element) element.indeterminate = selectedCount > 0 && selectedCount < rows.length; }} onChange={event => onSelectAll(event.target.checked)} /></th>}
               {lossColumns.map(([field, title]) => (
                 <th key={field} scope="col">
                   {title}
@@ -1101,6 +1234,7 @@ function Losses({
               const duplicateCount = waybillCounts.get(key(row.waybill)) ?? 0;
               return (
                 <tr key={row.id}>
+                  {onEdit && <td className="loss-selection-cell"><input type="checkbox" aria-label={`Selecionar extravio ${row.waybill || row.id} de ${row.drop_name_snapshot || "DROP não informado"}`} checked={selectedIds.has(row.id)} onChange={event => onSelect(row.id, event.target.checked)} /></td>}
                   <td>{row.period_label ?? period?.label ?? "—"}</td>
                   <td>
                     <strong>{row.drop_name_snapshot ?? "—"}</strong>
@@ -1138,11 +1272,11 @@ function Losses({
                 </tr>
               );
             })}
-            {!rows.length && <EmptyRow columns={11} />}
+            {!rows.length && <EmptyRow columns={onEdit ? 12 : 11} />}
           </tbody>
           <tfoot>
             <tr className="financial-totals">
-              <th scope="row" colSpan={8}>
+              <th scope="row" colSpan={onEdit ? 9 : 8}>
                 Total filtrado
               </th>
               <td>{money(sum(rows, "amount"))}</td>

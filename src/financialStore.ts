@@ -5,7 +5,7 @@ const pending = new Map<string, Promise<DataRow[]>>()
 const columns: Record<string, string> = {
   drops: 'id,legacy_id,name,partner,responsible,status,cpf,cnpj,pix_key,pix_holder_name,email,is_active,created_at',
   financial_periods: 'id,label,partner,reference_cnpj,financial_view_id,payment_date,net_amount,status',
-  financial_payment_history: 'id,financial_period_id,period_label,partner,drop_name_snapshot,responsible,package_quantity,amount,subtotal,loss_amount,reimbursement,total_receivable,paid_at,pix_key,pix_holder_name,cnpj,observation',
+  financial_payment_history: 'id,drop_id,financial_period_id,period_label,partner,drop_name_snapshot,responsible,package_quantity,amount,subtotal,loss_amount,reimbursement,total_receivable,paid_at,pix_key,pix_holder_name,cnpj,observation',
   financial_drop_items: 'id,financial_period_id,drop_name_snapshot,quantity_packages,unit_value,reimbursement',
 }
 

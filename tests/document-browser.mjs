@@ -44,9 +44,15 @@ let rejectLossWrite = false
 let rejectClosingWrite = false
 let missingLogisticsColumn = false
 let rejectClosingItems = false
+let rejectPaymentWrite = false
+let holdPaymentWrite = false
+let losePaymentResponse = false
+const pendingPaymentWrites = []
+const paymentRequests = []
 let holdLossWrite = false
 const pendingLossWrites = []
 const lossRequests = []
+let loseLossResponseId = ''
 let activeReads = 0
 let maximumReads = 0
 let completedReads = 0
@@ -54,6 +60,7 @@ let allowReads = false
 const pendingReads = []
 const mailRequests = []
 let mailConfigured = true
+let mailPilotRecipient = null
 let mailUncertain = false
 let mailTestBlocked = false
 let mailRetryUncertain = false
@@ -86,6 +93,13 @@ await context.route('**/*', async route => {
       return true
     }))
     let output = filtered
+    if (table === 'financial_payment_history' && ['POST', 'PATCH'].includes(request.method())) {
+      const payload = request.postDataJSON()
+      paymentRequests.push({ method: request.method(), payload })
+      if (rejectPaymentWrite) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Permissão negada no teste de pagamento.' }) })
+      if (request.method() === 'POST' && source.some(row => row.id === payload.id)) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ code: '23505', message: 'Duplicate primary key' }) })
+      if (holdPaymentWrite) await new Promise(resolve => pendingPaymentWrites.push(resolve))
+    }
     if (table === 'financial_drop_items' && request.method() === 'POST' && rejectClosingItems) return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: '22003', message: 'Valor fora do limite no teste.' }) })
     if (table === 'financial_periods' && request.method() === 'GET' && missingLogisticsColumn && url.searchParams.get('select')?.includes('logistics_partner')) return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: '42703', message: 'column financial_periods.logistics_partner does not exist' }) })
     if (table === 'financial_views' && request.method() === 'POST' && rejectClosingWrite) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Permissão negada no teste de importação.' }) })
@@ -116,17 +130,19 @@ await context.route('**/*', async route => {
         return inserted
       })
       tables[table] = source
+      if (table === 'financial_payment_history' && losePaymentResponse) return route.abort('failed')
     } else if (request.method() === 'PATCH') {
       const payload = request.postDataJSON()
       writes.push({ table, payload })
       output.forEach(row => Object.assign(row, payload))
+      if (table === 'loss_events' && output.some(row => row.id === loseLossResponseId)) return route.abort('failed')
     }
     return json(request.headers().accept?.includes('application/vnd.pgrst.object+json') ? output[0] ?? null : output)
   }
   if (url.origin === 'http://127.0.0.1:5173') {
     if (url.pathname === '/api/financial/send-closing') {
       if (!mailConfigured) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Conta remetente não configurada no teste.' }) })
-      if (request.method() === 'GET') return json({ configured: true, from: 'sender@example.com' })
+      if (request.method() === 'GET') return json({ configured: true, from: 'sender@example.com', testRecipient: mailPilotRecipient })
       const payload = request.postDataJSON()
       assert.ok(request.headers().authorization.startsWith('Bearer '))
       if (payload.mode === 'verify') {
@@ -211,6 +227,12 @@ try {
   let mailDownloads = 0
   const countMailDownload = () => { mailDownloads++ }
   page.on('download', countMailDownload)
+  mailPilotRecipient = 'pilot@example.com'
+  await page.getByRole('button', { name: 'Enviar e-mails', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Modo de teste ativo: os fechamentos dos clientes estão bloqueados por MAIL_TEST_RECIPIENT.' }).waitFor()
+  assert.equal(mailRequests.length, 0)
+  assert.equal(mailDownloads, 0)
+  mailPilotRecipient = null
   page.once('dialog', dialog => dialog.dismiss())
   await page.getByRole('button', { name: 'Enviar e-mails', exact: true }).click()
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Enviar e-mails' && !button.disabled))
@@ -636,7 +658,7 @@ try {
   await page.goto('http://127.0.0.1:5173/financeiro/extravios')
   const lossRows = page.locator('.losses-table tbody tr').filter({ has: page.getByRole('button', { name: 'Editar', exact: true }) })
   await lossRows.nth(4).waitFor()
-  assert.equal(await page.locator('.losses-table thead input').count(), 10)
+  assert.equal(await page.locator('.losses-table thead input[type="search"]').count(), 10)
   assert.equal(await page.locator('.duplicate-waybill').count(), 2)
   assert.equal(await page.getByText('Duplicado (2)', { exact: true }).count(), 2)
   assert.equal(await page.locator('.duplicate-waybill').first().evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 242, 189)')
@@ -777,6 +799,274 @@ try {
   assert.equal(await page.locator('.losses-table').getByRole('button', { name: 'Editar', exact: true }).count(), 0)
   tables.user_profiles[0].role = 'admin'
   console.log('PASS: net-column separators, complete loss editing/creation, retained errors, timestamp/metadata preservation, stale-write rejection, one insert on repeat submit and read-only permissions')
+  }
+
+  {
+    const batchRows = [1, 2, 3].map(index => ({ id: `bulk${index}`, financial_period_id: index === 3 ? 'oldest' : 'latest', partner, period_label: index === 3 ? oldestPeriod.label : latestPeriod.label, drop_name_snapshot: `BULK DROP ${index}`, waybill: `BULK-WB-${index}`, label_code: `ETQ-${index}`, bag_code: `SACA-${index}`, status: 'PUDO Missing', seller: `Loja ${index}`, amount: index * 10, observation: `Manter ${index}`, received_at: `2026-09-${18 - index}T12:00:00Z`, updated_at: `2026-09-${18 - index}T13:00:00Z`, is_active: true, legacy_id: index + 100 }))
+    tables.loss_events = structuredClone(batchRows)
+    await page.goto('http://127.0.0.1:5173/financeiro/extravios')
+    const selectAll = page.getByRole('checkbox', { name: 'Selecionar todos os extravios filtrados', exact: true })
+    const selectLoss = index => page.locator('.losses-table tbody tr').filter({ hasText: `BULK-WB-${index}` }).getByRole('checkbox')
+    const batchDialog = page.getByRole('dialog', { name: 'Editar extravios em massa', exact: true })
+    const batchButton = page.getByRole('button', { name: 'Editar selecionados', exact: true })
+    await selectAll.waitFor()
+    assert.equal(await batchButton.isDisabled(), true)
+    await selectLoss(1).check()
+    assert.equal(await selectAll.evaluate(element => element.indeterminate), true)
+    await selectAll.check()
+    assert.equal(await page.locator('.losses-table tbody input:checked').count(), 3)
+    await page.getByRole('combobox', { name: 'Período', exact: true }).selectOption(latestPeriod.label)
+    assert.equal(await page.locator('.losses-table tbody input:checked').count(), 2)
+    await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click()
+    assert.equal(await selectLoss(3).isChecked(), false)
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport)
+      await selectAll.scrollIntoViewIfNeeded()
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+      await page.screenshot({ path: `tmp/browser-tests/loss-selection-${viewport.width}.png` })
+    }
+    await batchButton.click()
+    assert.equal(await batchDialog.getByRole('button', { name: 'Aplicar em 2 extravios', exact: true }).isDisabled(), true)
+    assert.equal(await batchDialog.getByRole('textbox', { name: 'Waybill nº', exact: true }).isDisabled(), true)
+    const requestCountBeforeInvalid = lossRequests.length
+    await batchDialog.getByRole('checkbox', { name: 'Alterar Período', exact: true }).check()
+    await batchDialog.getByRole('combobox', { name: 'Período', exact: true }).fill('INEXISTENTE')
+    await batchDialog.getByRole('checkbox', { name: /^Confirmo aplicar/ }).check()
+    await batchDialog.getByRole('button', { name: 'Aplicar em 2 extravios', exact: true }).click()
+    await batchDialog.getByRole('alert').filter({ hasText: 'fechamento existente' }).waitFor()
+    assert.equal(lossRequests.length, requestCountBeforeInvalid)
+    await batchDialog.getByRole('checkbox', { name: 'Alterar Período', exact: true }).uncheck()
+    assert.equal(await batchDialog.getByRole('alert').count(), 0)
+    await batchDialog.getByRole('checkbox', { name: 'Alterar Status', exact: true }).check()
+    await batchDialog.getByRole('combobox', { name: 'Status', exact: true }).fill('D2D Missing - não cobrei')
+    await batchDialog.getByRole('checkbox', { name: 'Alterar Observações', exact: true }).check()
+    await batchDialog.getByRole('checkbox', { name: /^Confirmo aplicar/ }).check()
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport)
+      assert.equal(await batchDialog.evaluate(element => element.scrollWidth <= element.clientWidth), true)
+      await batchDialog.getByRole('checkbox', { name: 'Alterar Status', exact: true }).scrollIntoViewIfNeeded()
+      await page.screenshot({ path: `tmp/browser-tests/loss-bulk-${viewport.width}.png` })
+    }
+    holdLossWrite = true
+    const firstBulkRequest = page.waitForRequest(request => request.method() === 'PATCH' && request.url().includes('/rest/v1/loss_events'))
+    await batchDialog.getByRole('button', { name: 'Aplicar em 2 extravios', exact: true }).click()
+    await firstBulkRequest
+    await batchDialog.locator('form').evaluate(form => { form.requestSubmit(); form.requestSubmit() })
+    assert.equal(pendingLossWrites.length, 1)
+    assert.equal(lossRequests.length, requestCountBeforeInvalid + 1)
+    holdLossWrite = false
+    pendingLossWrites.splice(0).forEach(resolve => resolve())
+    await batchDialog.getByRole('status').filter({ hasText: '2 de 2 gravações confirmadas.' }).waitFor()
+    await batchDialog.getByRole('button', { name: 'Fechar', exact: true }).click()
+    assert.equal(lossRequests.length, requestCountBeforeInvalid + 2)
+    assert.deepEqual(lossRequests.slice(-2).map(request => request.payload), [{ status: 'D2D Missing - não cobrei', observation: null }, { status: 'D2D Missing - não cobrei', observation: null }])
+    assert.deepEqual(tables.loss_events, batchRows.map((row, index) => index < 2 ? { ...row, status: 'D2D Missing - não cobrei', observation: null } : row))
+    assert.equal(await page.locator('.losses-table tbody input:checked').count(), 0)
+    await page.reload()
+    await selectLoss(1).check(); await selectLoss(2).check()
+    await batchButton.click()
+    await batchDialog.getByRole('checkbox', { name: 'Alterar Valor do extravio', exact: true }).check()
+    await batchDialog.getByRole('spinbutton', { name: 'Valor do extravio', exact: true }).fill('0')
+    await batchDialog.getByRole('checkbox', { name: /^Confirmo aplicar/ }).check()
+    tables.loss_events[1].updated_at = '2026-09-20T10:00:00Z'
+    await batchDialog.getByRole('button', { name: 'Aplicar em 2 extravios', exact: true }).click()
+    await batchDialog.getByRole('alert').filter({ hasText: '1 de 2 gravações confirmadas. Lote interrompido:' }).waitFor()
+    assert.equal(tables.loss_events[0].amount, 0); assert.equal(tables.loss_events[1].amount, 20); assert.equal(tables.loss_events[2].amount, 30)
+    assert.equal(await batchDialog.getByRole('button', { name: 'Aplicar em 2 extravios', exact: true }).isDisabled(), true)
+    await batchDialog.getByRole('button', { name: 'Fechar', exact: true }).click()
+    await selectAll.check(); await batchButton.click()
+    await batchDialog.getByRole('checkbox', { name: 'Alterar Seller', exact: true }).check()
+    await batchDialog.getByRole('textbox', { name: 'Seller', exact: true }).fill('Nova loja')
+    await batchDialog.getByRole('checkbox', { name: /^Confirmo aplicar/ }).check()
+    loseLossResponseId = 'bulk2'
+    const requestsBeforeUncertain = lossRequests.length
+    await batchDialog.getByRole('button', { name: 'Aplicar em 3 extravios', exact: true }).click()
+    await batchDialog.getByRole('alert').filter({ hasText: '1 de 3 gravações confirmadas. Lote interrompido:' }).waitFor()
+    assert.equal(lossRequests.length, requestsBeforeUncertain + 2)
+    assert.equal(tables.loss_events[0].seller, 'Nova loja'); assert.equal(tables.loss_events[1].seller, 'Nova loja'); assert.equal(tables.loss_events[2].seller, 'Loja 3')
+    loseLossResponseId = ''
+    await batchDialog.getByRole('button', { name: 'Fechar', exact: true }).click()
+    await selectLoss(3).check(); await batchButton.click()
+    await batchDialog.getByRole('checkbox', { name: 'Alterar Seller', exact: true }).check()
+    await batchDialog.getByRole('textbox', { name: 'Seller', exact: true }).fill('Bloqueado')
+    await batchDialog.getByRole('checkbox', { name: /^Confirmo aplicar/ }).check()
+    rejectLossWrite = true
+    await batchDialog.getByRole('button', { name: 'Aplicar em 1 extravios', exact: true }).click()
+    await batchDialog.getByRole('alert').filter({ hasText: '0 de 1 gravações confirmadas. Lote interrompido: Permissão negada' }).waitFor()
+    assert.equal(tables.loss_events[2].seller, 'Loja 3')
+    rejectLossWrite = false
+    await batchDialog.getByRole('button', { name: 'Fechar', exact: true }).click()
+    await selectLoss(3).check()
+    await page.getByRole('button', { name: 'Limpar seleção', exact: true }).click()
+    assert.equal(await selectLoss(3).isChecked(), false)
+    await selectLoss(3).check()
+    await page.getByRole('button', { name: 'Atualizar dados', exact: true }).click()
+    await selectLoss(3).waitFor()
+    assert.equal(await selectLoss(3).isChecked(), false)
+    tables.user_profiles[0].role = 'operador'
+    await page.reload()
+    await page.locator('.losses-table').waitFor()
+    assert.equal(await page.locator('.losses-table input[type="checkbox"]').count(), 0)
+    assert.equal(await batchButton.count(), 0)
+    tables.user_profiles[0].role = 'admin'
+    console.log('PASS: bulk selection respects filters, unchecked fields survive, confirmation/double-submit guard, zero, version conflict, uncertain response and permissions')
+  }
+
+  {
+    tables.loss_events = []
+    tables.financial_drop_items = [
+      { id: 'export1', financial_period_id: 'latest', drop_name_snapshot: 'DROP TESTE', quantity_packages: 10, unit_value: .13, reimbursement: .2, is_active: true },
+      { id: 'export2', financial_period_id: 'latest', drop_name_snapshot: 'OUTRO DROP', quantity_packages: 20, unit_value: .15, reimbursement: 0, is_active: true },
+      { id: 'export3', financial_period_id: 'oldest', drop_name_snapshot: 'DROP TESTE', quantity_packages: 30, unit_value: .2, reimbursement: 0, is_active: true },
+      { id: 'export4', financial_period_id: 'old-jt', drop_name_snapshot: 'DROP EDITADO', quantity_packages: 40, unit_value: .3, reimbursement: 0, is_active: true },
+    ]
+    tables.drops[0].pix_key = '00123456789'
+    tables.financial_periods.find(row => row.id === 'latest').payment_date = '2026-09-17'
+    const writesBeforeExport = writes.length
+    await page.goto('http://127.0.0.1:5173/financeiro/pagamento-detalhes')
+    const table = page.locator('.payment-details-table')
+    await table.waitFor()
+    const compareExport = async expectedCount => {
+      const downloaded = page.waitForEvent('download')
+      await page.getByRole('button', { name: 'Baixar Excel do fechamento', exact: true }).click()
+      const file = await downloaded
+      assert.equal(file.suggestedFilename(), 'pagamento-detalhes.xlsx')
+      const sheet = XLSX.read(await readFile(await file.path()), { type: 'buffer' }).Sheets['Pagamento Detalhes']
+      const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })
+      assert.deepEqual(matrix[0], (await table.locator('thead th').allTextContents()).slice(0, -1))
+      assert.equal(matrix.length, expectedCount + 2)
+      const displayed = await table.locator('tbody tr:not(.financial-totals)').evaluateAll(rows => rows.map(row => [...row.querySelectorAll('td')].slice(0, -1).map(cell => cell.textContent.trim())))
+      const asScreen = (value, index) => typeof value !== 'number' ? value : index === 5 ? value.toLocaleString('pt-BR') : value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+      assert.deepEqual(matrix.slice(2).map(row => row.map(asScreen)), displayed)
+      const screenTotals = await table.locator('.financial-totals td').allTextContents()
+      assert.equal(matrix[1][5].toLocaleString('pt-BR'), screenTotals[0])
+      for (const [index, column] of [7, 8, 9, 10, 11, 12].entries()) assert.equal(asScreen(matrix[1][column], column), screenTotals[index + 2])
+      return sheet
+    }
+    await compareExport(4)
+    await page.getByRole('combobox', { name: 'Parceiro', exact: true }).selectOption(partner)
+    await compareExport(3)
+    await page.getByRole('combobox', { name: 'Período', exact: true }).selectOption(latestPeriod.label)
+    await compareExport(2)
+    await page.getByRole('combobox', { name: 'DROP', exact: true }).selectOption('DROP TESTE')
+    const filteredSheet = await compareExport(1)
+    assert.equal(filteredSheet.O3.v, '00123456789'); assert.equal(filteredSheet.O3.t, 's')
+    assert.equal(filteredSheet.N3.v, '17/09/2026')
+    const pdfDownload = page.waitForEvent('download')
+    await table.getByRole('button', { name: 'Gerar PDF', exact: true }).click()
+    assert.match((await pdfDownload).suggestedFilename(), /\.pdf$/)
+    await page.getByRole('combobox', { name: 'Parceiro', exact: true }).selectOption('J&T EXPRESS LTDA')
+    assert.equal(await page.getByRole('button', { name: 'Baixar Excel do fechamento', exact: true }).isDisabled(), true)
+    assert.equal(writes.length, writesBeforeExport)
+    console.log('PASS: actual Excel downloads match all screen columns, rows, totals and period/partner/DROP filters; literal PIX and individual PDF retained')
+  }
+
+  {
+    await page.goto('http://127.0.0.1:5173/financeiro/pagamento-detalhes')
+    await page.getByRole('combobox', { name: 'Parceiro', exact: true }).selectOption(partner)
+    await page.getByRole('combobox', { name: 'Período', exact: true }).selectOption(latestPeriod.label)
+    await page.getByRole('combobox', { name: 'DROP', exact: true }).selectOption('DROP TESTE')
+    const table = page.locator('.payment-details-table')
+    const originalLine = await table.locator('tbody tr:not(.financial-totals)').innerText()
+    const before = structuredClone({ periods: tables.financial_periods, items: tables.financial_drop_items, losses: tables.loss_events, history: tables.financial_payment_history })
+    await page.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    const editor = page.getByRole('dialog')
+    assert.equal(await editor.getByLabel('Período', { exact: true }).inputValue(), 'latest')
+    assert.equal(await editor.getByLabel('DROP', { exact: true }).inputValue(), 'drop1')
+    assert.equal(await editor.getByLabel('Parceiro', { exact: true }).inputValue(), partner)
+    await editor.getByLabel('CNPJ de referência', { exact: true }).selectOption('BELLY')
+    await editor.getByLabel('Responsável', { exact: true }).fill('Pagamento proporcional')
+    await editor.getByLabel('Total pacote', { exact: true }).fill('-1')
+    await editor.locator('form').evaluate(form => { form.noValidate = true; form.requestSubmit() })
+    await editor.getByRole('alert').filter({ hasText: 'inteiro positivo ou zero' }).waitFor()
+    assert.equal(paymentRequests.length, 0)
+    await editor.getByLabel('Total pacote', { exact: true }).fill('10')
+    await editor.getByLabel('Valor acordado', { exact: true }).fill('0')
+    assert.equal(await editor.getByLabel('Subtotal', { exact: true }).inputValue(), '0')
+    await editor.getByLabel('Valor acordado', { exact: true }).fill('0.13')
+    assert.equal(await editor.getByLabel('Subtotal', { exact: true }).inputValue(), '1.3')
+    await editor.getByLabel('Subtotal', { exact: true }).fill('100')
+    await editor.getByLabel('Extravio W2D', { exact: true }).fill('2')
+    await editor.getByLabel('Extravio D2D', { exact: true }).fill('3')
+    await editor.getByLabel('Reembolso iMile', { exact: true }).fill('2')
+    assert.equal(await editor.getByLabel('Total a receber', { exact: true }).inputValue(), '97')
+    await editor.getByLabel('Total a receber', { exact: true }).fill('47.50')
+    await editor.getByLabel('PIX', { exact: true }).fill('00111222333')
+    await editor.getByLabel('Data pagamento', { exact: true }).evaluate(input => { input.type = 'text' })
+    await editor.getByLabel('Data pagamento', { exact: true }).fill('2026-02-30')
+    await editor.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await editor.getByRole('alert').filter({ hasText: 'data de pagamento válida' }).waitFor()
+    assert.equal(paymentRequests.length, 0)
+    await editor.getByLabel('Data pagamento', { exact: true }).evaluate(input => { input.type = 'date' })
+    await editor.getByLabel('Data pagamento', { exact: true }).fill('2026-09-20')
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport)
+      assert.equal(await editor.evaluate(element => element.scrollWidth <= element.clientWidth), true)
+      for (const input of await editor.locator('input, select').all()) {
+        const fits = await input.evaluate(element => { const box = element.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth })
+        assert.equal(fits, true)
+      }
+      await editor.getByLabel('Período', { exact: true }).scrollIntoViewIfNeeded()
+      await page.screenshot({ path: `tmp/browser-tests/payment-add-${viewport.width}.png` })
+    }
+    rejectPaymentWrite = true
+    await editor.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await editor.getByRole('alert').filter({ hasText: 'Permissão negada no teste de pagamento.' }).waitFor()
+    assert.equal(await editor.getByLabel('Total a receber', { exact: true }).inputValue(), '47.50')
+    assert.equal(tables.financial_payment_history.length, before.history.length)
+    rejectPaymentWrite = false; holdPaymentWrite = true
+    const requested = page.waitForRequest(request => request.method() === 'POST' && request.url().includes('/rest/v1/financial_payment_history'))
+    await editor.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await requested
+    await editor.locator('form').evaluate(form => { form.requestSubmit(); form.requestSubmit() })
+    assert.equal(pendingPaymentWrites.length, 1)
+    assert.equal(paymentRequests.at(-1).payload.id, paymentRequests.at(-2).payload.id)
+    holdPaymentWrite = false; pendingPaymentWrites.splice(0).forEach(resolve => resolve())
+    await editor.waitFor({ state: 'hidden' })
+    await page.getByRole('status').filter({ hasText: 'Pagamento adicionado.' }).waitFor()
+    assert.deepEqual({ periods: tables.financial_periods, items: tables.financial_drop_items, losses: tables.loss_events }, { periods: before.periods, items: before.items, losses: before.losses })
+    assert.equal(tables.financial_payment_history.length, before.history.length + 1)
+    const added = tables.financial_payment_history.at(-1)
+    assert.equal(added.financial_period_id, 'latest'); assert.equal(added.drop_id, 'drop1')
+    assert.equal(added.total_receivable, 47.5); assert.equal(added.paid_at, '2026-09-20T12:00:00-03:00')
+    assert.equal(JSON.parse(added.observation).movidosClosing.manualEntry, true)
+    assert.equal(JSON.parse(added.observation).movidosClosing.sourceItemId, undefined)
+    assert.ok((await table.locator('tbody tr:not(.financial-totals)').allInnerTexts()).includes(originalLine))
+    assert.match(await table.locator('.financial-totals').innerText(), /49,00/)
+    const excel = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'Baixar Excel do fechamento', exact: true }).click()
+    const workbook = XLSX.read(await readFile(await (await excel).path()), { type: 'buffer' })
+    const matrix = XLSX.utils.sheet_to_json(workbook.Sheets['Pagamento Detalhes'], { header: 1 })
+    assert.equal(matrix.length, 4); assert.equal(matrix[1][12], 49)
+    const exported = matrix.find(row => row[3] === 'Pagamento proporcional')
+    assert.equal(exported[0], 'BELLY'); assert.equal(exported[12], 47.5); assert.equal(exported[14], '00111222333')
+    await page.reload()
+    await table.getByRole('cell', { name: 'Pagamento proporcional', exact: true }).waitFor()
+    await table.locator('tr').filter({ has: page.getByRole('cell', { name: 'Pagamento proporcional', exact: true }) }).getByRole('button', { name: 'Editar', exact: true }).click()
+    assert.equal(await editor.getByLabel('DROP', { exact: true }).inputValue(), 'drop1')
+    assert.equal(await editor.getByLabel('CNPJ de referência', { exact: true }).inputValue(), 'BELLY')
+    await editor.getByLabel('Total a receber', { exact: true }).fill('0')
+    await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+    await editor.waitFor({ state: 'hidden' })
+    assert.equal(added.total_receivable, 0)
+    assert.equal(tables.financial_payment_history.length, before.history.length + 1)
+    await page.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await editor.getByLabel('Período', { exact: true }).selectOption('latest')
+    await editor.getByLabel('DROP', { exact: true }).selectOption('drop1')
+    losePaymentResponse = true
+    await editor.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await editor.getByRole('alert').waitFor()
+    losePaymentResponse = false
+    await editor.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await editor.getByRole('alert').filter({ hasText: 'já pode ter sido salvo' }).waitFor()
+    assert.equal(tables.financial_payment_history.length, before.history.length + 2)
+    await editor.getByRole('button', { name: 'Cancelar', exact: true }).click()
+    tables.user_profiles[0].role = 'operador'
+    await page.reload(); await table.waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Adicionar pagamento', exact: true }).count(), 0)
+    assert.equal(await table.getByRole('button', { name: 'Editar', exact: true }).count(), 0)
+    tables.user_profiles[0].role = 'admin'
+    console.log('PASS: proportional payment add/edit/reload/export, original rows and shared period preserved, numeric/date validation, zero, denied/uncertain writes, stable ID, double-submit guard, permissions and desktop/mobile layout')
   }
 
   await page.goto('http://127.0.0.1:5173/leitor-etiquetas')
