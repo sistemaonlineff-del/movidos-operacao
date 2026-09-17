@@ -7,6 +7,8 @@ import {
   DataRow,
   date,
   key,
+  lossEditorValues,
+  lossEventPayload,
   money,
   notes,
   number,
@@ -27,6 +29,19 @@ const options = (values: unknown[]) =>
     a.localeCompare(b, "pt-BR", { numeric: true }),
   );
 const referenceCnpjs = ["JOTA EXPRESS", "MOVIDOS", "BELLY"];
+const lossColumns = [
+  ["period", "Período"], ["drop", "Scan station / DROP"],
+  ["waybill", "Waybill nº"], ["label_code", "Código da etiqueta"],
+  ["bag_code", "Saca"], ["status", "Status"], ["seller", "Seller"],
+  ["received_at", "Recebimento"], ["amount", "Valor"], ["observation", "Observações"],
+];
+const lossColumnValue = (row: DataRow, field: string, period?: DataRow) => {
+  if (field === "period") return row.period_label ?? period?.label ?? "";
+  if (field === "drop") return `${text(row.drop_name_snapshot)} ${text(row.partner ?? period?.partner)}`;
+  if (field === "received_at") return row.received_at ? `${new Date(row.received_at).toLocaleString("pt-BR")} ${text(row.received_at)}` : "";
+  if (field === "amount") return `${money(row.amount)} ${number(row.amount).toFixed(2)} ${number(row.amount).toFixed(2).replace(".", ",")}`;
+  return text(row[field]);
+};
 const sum = (rows: DataRow[], field: string) =>
   round(rows.reduce((total, row) => total + number(row[field]), 0));
 const totalColumns = [
@@ -78,6 +93,9 @@ export default function FinanceiroVisuais({ kind }: { kind: Kind }) {
 function FinanceiroVisualPage({ kind }: { kind: Kind }) {
   const { can, profile } = useAccess();
   const canEditTotal = profile?.is_active === true && can("financeiro_manage");
+  const lossSaving = useRef(false);
+  const lossOriginal = useRef<DataRow | null>(null);
+  const lossInsertId = useRef("");
   const [periods, setPeriods] = useState<DataRow[]>([]),
     [views, setViews] = useState<DataRow[]>([]),
     [history, setHistory] = useState<DataRow[]>([]),
@@ -92,6 +110,8 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     [dropFilter, setDropFilter] = useState(""),
     [statusFilter, setStatusFilter] = useState(""),
     [observationFilter, setObservationFilter] = useState("");
+  const [lossColumnFilters, setLossColumnFilters] = useState<Record<string, string>>({});
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
   const [editing, setEditing] = useState<DataRow | null>(null),
     [editingTotal, setEditingTotal] = useState<DataRow | null>(null),
     [editingLoss, setEditingLoss] = useState<DataRow | null>(null),
@@ -138,6 +158,8 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     setDropFilter("");
     setStatusFilter("");
     setObservationFilter("");
+    setLossColumnFilters({});
+    setDuplicatesOnly(false);
   }, [kind]);
   const periodById = useMemo(
     () => new Map(periods.map((row) => [row.id, row])),
@@ -157,6 +179,14 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       ),
     [details, periodFilter, partnerFilter, dropFilter],
   );
+  const waybillCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of losses) {
+      const waybill = key(row.waybill);
+      if (waybill) counts.set(waybill, (counts.get(waybill) ?? 0) + 1);
+    }
+    return counts;
+  }, [losses]);
   const filteredLosses = useMemo(
     () =>
       losses
@@ -170,7 +200,10 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
             (!dropFilter || key(row.drop_name_snapshot) === dropFilter) &&
             (!statusFilter || row.status === statusFilter) &&
             (!observationFilter ||
-              key(row.observation).includes(key(observationFilter)))
+              key(row.observation).includes(key(observationFilter))) &&
+            (!duplicatesOnly || (waybillCounts.get(key(row.waybill)) ?? 0) > 1) &&
+            Object.entries(lossColumnFilters).every(([field, value]) =>
+              !key(value) || key(lossColumnValue(row, field, period)).includes(key(value)))
           );
         })
         .sort((a, b) => text(b.received_at).localeCompare(text(a.received_at))),
@@ -182,18 +215,22 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       dropFilter,
       statusFilter,
       observationFilter,
+      lossColumnFilters,
+      duplicatesOnly,
+      waybillCounts,
     ],
   );
   const totals = useMemo(
     () =>
-      buildTotals(details, losses, periods, views, periodFilter, partnerFilter),
+      buildTotals(details, losses, periods, views, periodFilter, partnerFilter)
+        .sort((first, second) => periodOrder(second.period) - periodOrder(first.period) || second.period.localeCompare(first.period, "pt-BR", { numeric: true })),
     [details, losses, periods, views, periodFilter, partnerFilter],
   );
   const periodOptions = options([
     ...periods.map((row) => row.label),
     ...details.map((row) => row.period),
     ...losses.map((row) => row.period_label),
-  ]).sort((a, b) => periodOrder(a) - periodOrder(b));
+  ]).sort((first, second) => periodOrder(second) - periodOrder(first) || second.localeCompare(first, "pt-BR", { numeric: true }));
   const partnerOptions = PARTNERS;
   const dropOptions = options([
     ...details.map((row) => row.drop),
@@ -384,30 +421,43 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       setSaving(false);
     }
   };
+  const openLoss = (row: DataRow | null) => {
+    if (!canEditTotal) return;
+    lossOriginal.current = row;
+    lossInsertId.current = row ? "" : crypto.randomUUID();
+    setEditError("");
+    setEditingLoss(lossEditorValues(row ?? { period_label: periodFilter, partner: partnerFilter, drop_name_snapshot: dropOptions.get(dropFilter) ?? "", status: "", amount: 0 }, periods));
+  };
   const saveLoss = async (event: FormEvent) => {
     event.preventDefault();
-    if (!editingLoss || !supabase) return;
+    if (!editingLoss || !supabase || lossSaving.current) return;
+    if (!canEditTotal) { setEditError("Você não tem permissão para gerenciar extravios."); return; }
+    lossSaving.current = true;
     setSaving(true);
     setEditError("");
     try {
-      const { error } = await supabase
-        .from("loss_events")
-        .update({
-          amount: number(editingLoss.amount),
-          observation: editingLoss.observation || null,
-        })
-        .eq("id", editingLoss.id)
-        .select("id")
-        .single();
-      if (error) throw error;
+      const original = lossOriginal.current;
+      const payload = lossEventPayload(editingLoss, original, periods, drops);
+      let query;
+      if (original) {
+        query = supabase.from("loss_events").update(payload).eq("id", original.id).eq("is_active", true);
+        if (original.updated_at) query = query.eq("updated_at", original.updated_at);
+      } else {
+        query = supabase.from("loss_events").insert({ ...payload, id: lossInsertId.current });
+      }
+      const result = await query.select("id").single();
+      if (result.error?.code === "23505") throw new Error("Este envio já pode ter sido salvo. Feche e atualize os dados antes de tentar adicionar novamente.");
+      if (result.error?.code === "PGRST116" || (!result.error && !result.data?.id)) throw new Error("O extravio foi alterado, ficou indisponível ou não pôde ser confirmado. Feche e atualize os dados antes de tentar novamente.");
+      if (result.error) throw result.error;
       setEditingLoss(null);
-      setMessage("Extravio atualizado.");
+      setMessage(original ? "Extravio atualizado." : "Extravio adicionado.");
       await load();
     } catch (caught) {
       setEditError(
         (caught as Error).message || "Não foi possível salvar o extravio.",
       );
     } finally {
+      lossSaving.current = false;
       setSaving(false);
     }
   };
@@ -464,6 +514,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           </p>
         </div>
         <div className="financial-actions">
+          {kind === "losses" && canEditTotal && <button type="button" className="primary" disabled={loading || !!error || saving} onClick={() => openLoss(null)}><span aria-hidden="true">+</span> Adicionar extravio</button>}
           {kind === "details" && (
             <button
               className="secondary"
@@ -540,13 +591,17 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
                 placeholder="Buscar nas observações"
               />
             </label>
+            <label className="loss-duplicates-filter">
+              <input type="checkbox" checked={duplicatesOnly} onChange={event => setDuplicatesOnly(event.target.checked)} />
+              Somente Waybills duplicados
+            </label>
           </>
         )}
         {(periodFilter ||
           partnerFilter ||
           dropFilter ||
           statusFilter ||
-          observationFilter) && (
+          observationFilter || duplicatesOnly || Object.values(lossColumnFilters).some(Boolean)) && (
           <button
             className="secondary"
             onClick={() => {
@@ -555,6 +610,8 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
               setDropFilter("");
               setStatusFilter("");
               setObservationFilter("");
+              setLossColumnFilters({});
+              setDuplicatesOnly(false);
             }}
           >
             Limpar filtros
@@ -594,10 +651,10 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         <Losses
           rows={filteredLosses}
           periodById={periodById}
-          onEdit={(row) => {
-            setEditError("");
-            setEditingLoss({ ...row });
-          }}
+          columnFilters={lossColumnFilters}
+          onFilter={(field, value) => setLossColumnFilters(current => ({ ...current, [field]: value }))}
+          waybillCounts={waybillCounts}
+          onEdit={canEditTotal ? openLoss : undefined}
         />
       )}
       {kind === "details" && (
@@ -669,17 +726,24 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       )}
       {editingLoss && (
         <Editor
-          title="Editar extravio"
+          title={lossOriginal.current ? "Editar extravio" : "Adicionar extravio"}
           onClose={() => !saving && setEditingLoss(null)}
           onSubmit={saveLoss}
           saving={saving}
           error={editError}
         >
           <div className="form-grid">
+            {[["period_label", "Período", "loss-periods"], ["partner", "Parceiro", "loss-partners"], ["drop_name_snapshot", "Scan station / DROP", "loss-drops"], ["waybill", "Waybill nº", ""], ["label_code", "Código da etiqueta", ""], ["bag_code", "Saca", ""], ["status", "Status", "loss-statuses"], ["seller", "Seller", ""]].map(([field, label, list]) => (
+              <label key={field}>{label}<input autoFocus={field === "period_label"} list={list || undefined} required={!lossOriginal.current && ["period_label", "partner", "drop_name_snapshot", "status"].includes(field)} value={editingLoss[field] ?? ""} onChange={event => setEditingLoss({ ...editingLoss, [field]: event.target.value })} /></label>
+            ))}
+            <datalist id="loss-periods">{periodOptions.map(value => <option key={value} value={value} />)}</datalist>
+            <datalist id="loss-partners">{options([...PARTNERS, ...periods.filter(period => key(period.label) === key(editingLoss.period_label)).map(period => period.partner), editingLoss.partner]).map(value => <option key={value} value={value} />)}</datalist>
+            <datalist id="loss-drops">{options([...drops.map(drop => drop.name), ...losses.map(loss => loss.drop_name_snapshot)]).map(value => <option key={value} value={value} />)}</datalist>
+            <datalist id="loss-statuses">{options(["PUDO Missing", "PUDO Missing - não cobrei", "D2D Missing", "D2D Missing - não cobrei", ...losses.map(loss => loss.status)]).map(value => <option key={value} value={value} />)}</datalist>
+            <label>Recebimento<input type="datetime-local" step="1" value={editingLoss.received_at} onChange={event => setEditingLoss({ ...editingLoss, received_at: event.target.value })} /></label>
             <label>
               Valor do extravio
               <input
-                autoFocus
                 type="number"
                 step="0.01"
                 required
@@ -692,6 +756,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
             <label>
               Observações
               <textarea
+                aria-label="Observações"
                 value={editingLoss.observation ?? ""}
                 onChange={(event) =>
                   setEditingLoss({
@@ -807,7 +872,7 @@ function PaymentTotal({ rows, onEdit }: { rows: DataRow[]; onEdit?: (row: DataRo
             <tr>
               <th>Período</th>
               {totalColumns.map(([field, title]) => (
-                <th key={field}>{title}</th>
+                <th key={field} className={field === "net" ? "financial-net-column" : undefined}>{title}</th>
               ))}
               <th>Data do pagamento</th>
               {onEdit && <th>Ações</th>}
@@ -817,7 +882,7 @@ function PaymentTotal({ rows, onEdit }: { rows: DataRow[]; onEdit?: (row: DataRo
             <tr className="financial-totals">
               <th scope="row">Total filtrado</th>
               {totalColumns.map(([field]) => (
-                <td key={field}>{rows.some(row => row[field] == null) ? "—" : money(sum(rows, field))}</td>
+                <td key={field} className={field === "net" ? "financial-net-column" : undefined}>{rows.some(row => row[field] == null) ? "—" : money(sum(rows, field))}</td>
               ))}
               <td />
               {onEdit && <td />}
@@ -833,14 +898,14 @@ function PaymentTotal({ rows, onEdit }: { rows: DataRow[]; onEdit?: (row: DataRo
                 {totalColumns.map(([field]) => (
                   <td
                     key={field}
-                    className={
+                    className={`${field === "net" ? "financial-net-column " : ""}${
                       ["loss", "assumed"].includes(field) ||
                       number(row[field]) < 0
                         ? "loss-value"
                         : field === "companyPayment"
                           ? "positive-value"
                           : ""
-                    }
+                    }`}
                   >
                     {row[field] == null ? "—" : money(row[field])}
                   </td>
@@ -999,42 +1064,41 @@ function CnabDetails({ rows }: { rows: DataRow[] }) {
 function Losses({
   rows,
   periodById,
+  columnFilters,
+  onFilter,
+  waybillCounts,
   onEdit,
 }: {
   rows: DataRow[];
   periodById: Map<string, DataRow>;
-  onEdit: (row: DataRow) => void;
+  columnFilters: Record<string, string>;
+  onFilter: (field: string, value: string) => void;
+  waybillCounts: Map<string, number>;
+  onEdit?: (row: DataRow) => void;
 }) {
   return (
-    <section className="card">
+    <section className="card financial-losses">
       <div className="financial-loss-total" role="status">
         <span>{rows.length} extravio(s) nos filtros selecionados</span>
         <strong>Total: {money(sum(rows, "amount"))}</strong>
       </div>
       <div className="table-wrap">
-        <table>
+        <table className="losses-table">
           <thead>
             <tr>
-              {[
-                "Período",
-                "Scan station / DROP",
-                "Waybill nº",
-                "Código da etiqueta",
-                "Saca",
-                "Status",
-                "Seller",
-                "Recebimento",
-                "Valor",
-                "Observações",
-                "Ação",
-              ].map((title) => (
-                <th key={title}>{title}</th>
+              {lossColumns.map(([field, title]) => (
+                <th key={field} scope="col">
+                  {title}
+                  <input type="search" aria-label={`Filtrar ${title}`} placeholder="Filtrar" value={columnFilters[field] ?? ""} onChange={event => onFilter(field, event.target.value)} />
+                </th>
               ))}
+              <th scope="col">Ação</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => {
               const period = periodById.get(row.financial_period_id);
+              const duplicateCount = waybillCounts.get(key(row.waybill)) ?? 0;
               return (
                 <tr key={row.id}>
                   <td>{row.period_label ?? period?.label ?? "—"}</td>
@@ -1051,7 +1115,10 @@ function Losses({
                     "status",
                     "seller",
                   ].map((field) => (
-                    <td key={field}>{row[field] || "—"}</td>
+                    <td key={field} className={field === "waybill" && duplicateCount > 1 ? "duplicate-waybill" : undefined}>
+                      {row[field] || "—"}
+                      {field === "waybill" && duplicateCount > 1 && <small className="table-subtitle" title={`${duplicateCount} ocorrências deste Waybill na base de extravios carregada`}>Duplicado ({duplicateCount})</small>}
+                    </td>
                   ))}
                   <td>
                     {row.received_at
@@ -1061,12 +1128,12 @@ function Losses({
                   <td className="loss-value">{money(row.amount)}</td>
                   <td>{row.observation || "—"}</td>
                   <td>
-                    <button
+                    {onEdit && <button
                       className="table-action"
                       onClick={() => onEdit(row)}
                     >
                       Editar
-                    </button>
+                    </button>}
                   </td>
                 </tr>
               );

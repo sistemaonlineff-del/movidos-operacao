@@ -40,6 +40,10 @@ let rejectDropWrite = false
 let unchangedDropWrite = false
 let holdDropWrite = false
 const pendingDropWrites = []
+let rejectLossWrite = false
+let holdLossWrite = false
+const pendingLossWrites = []
+const lossRequests = []
 let activeReads = 0
 let maximumReads = 0
 let completedReads = 0
@@ -79,6 +83,13 @@ await context.route('**/*', async route => {
       return true
     }))
     let output = filtered
+    if (table === 'loss_events' && ['POST', 'PATCH'].includes(request.method())) {
+      const payload = request.postDataJSON()
+      lossRequests.push({ method: request.method(), payload })
+      if (rejectLossWrite || (tables.user_profiles[0].role !== 'admin' && !tables.user_module_permissions[0].financeiro_manage)) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Permissão negada no teste de extravios.' }) })
+      if (request.method() === 'POST' && source.some(row => row.id === payload.id)) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ code: '23505', message: 'Duplicate primary key' }) })
+      if (holdLossWrite) await new Promise(resolve => pendingLossWrites.push(resolve))
+    }
     if (table === 'drops' && ['POST', 'PATCH'].includes(request.method())) {
       const payload = request.postDataJSON()
       if (payload.status != null) assert.ok(allowedDropStatuses.includes(payload.status), `Status rejected by SQL constraint: ${payload.status}`)
@@ -539,15 +550,203 @@ try {
 
   await page.goto('http://127.0.0.1:5173/financeiro')
   await page.getByLabel('Período do fechamento').fill('NOVO PERIODO')
+  const templateDownload = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Baixar modelo', exact: true }).click()
+  const downloadedTemplate = await templateDownload
+  assert.equal(downloadedTemplate.suggestedFilename(), 'modelo-fechamento-financeiro.xlsx')
+  const downloadedWorkbook = XLSX.read(await readFile(await downloadedTemplate.path()), { type: 'buffer' })
+  assert.deepEqual(XLSX.utils.sheet_to_json(downloadedWorkbook.Sheets['Pagamento Total'], { header: 1 })[0], ['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'])
+  assert.equal(downloadedWorkbook.Sheets['Pagamento Total'].A2.v, 'NOVO PERIODO')
   const workbook = createClosingTemplate()
   workbook.Sheets.Fechamento = XLSX.utils.aoa_to_sheet([['Periodo', 'Parceiro', 'Drop', 'QuantidadePacote', 'CNPJReferencia'], ['', partner, 'DROP TESTE', 100, 'MOVIDOS']])
-  workbook.Sheets['Pagamento Total'] = XLSX.utils.aoa_to_sheet([['Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'], [partner, 999.99, 46280]])
+  workbook.Sheets['Pagamento Total'] = XLSX.utils.aoa_to_sheet([['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'], ['OUTRO PERIODO', partner, 999.99, 46280]])
+  const writesBeforeWrongPeriod = writes.length
+  await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'periodo-divergente.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
+  await page.getByText('Pagamento Total: o período OUTRO PERIODO não corresponde ao fechamento NOVO PERIODO.', { exact: true }).waitFor()
+  assert.equal(writes.length, writesBeforeWrongPeriod)
+  workbook.Sheets['Pagamento Total'].A2.v = 'NOVO PERIODO'
+  workbook.Sheets.Fechamento.A2.v = 'OUTRO PERIODO'
+  await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'fechamento-divergente.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
+  await page.getByText('O período OUTRO PERIODO da planilha não corresponde ao fechamento NOVO PERIODO.', { exact: true }).waitFor()
+  assert.equal(writes.length, writesBeforeWrongPeriod)
+  workbook.Sheets.Fechamento.A2.v = ''
   await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'fechamento-teste.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
   await page.getByText('View de NOVO PERIODO importada com sucesso e consolidado geral atualizado.', { exact: true }).waitFor()
   const imported = tables.financial_periods.find(row => row.label === 'NOVO PERIODO')
   assert.equal(imported.net_amount, 999.99)
   assert.equal(imported.payment_date, '2026-09-15')
-  console.log('PASS: uploaded closing stores net and payment date once per partner')
+  console.log('PASS: downloaded template includes selected period, mismatches write nothing and imported closing stores net/date once per partner')
+
+  const oldestPeriod = { id: 'oldest', label: '01. 1Q DE ABRIL', partner, net_amount: 100, is_active: true }
+  const latestPeriod = { id: 'latest', label: '33. 1Q DE AGOSTO', partner, net_amount: 200, is_active: true }
+  tables.financial_periods = [oldestPeriod, latestPeriod, { id: 'middle9', label: '09. 1Q DE AGOSTO', partner, net_amount: 90, is_active: true }, { id: 'middle10', label: '10. 2Q DE AGOSTO', partner, net_amount: 100, is_active: true }]
+  tables.financial_payment_history = []; tables.financial_drop_items = []; tables.financial_views = []
+  tables.loss_events = [
+    { id: 'loss1', financial_period_id: 'latest', drop_name_snapshot: 'DROP ALFA', partner, waybill: 'WB-001', label_code: 'ETQ-ALFA', bag_code: 'SACA-A', status: 'D2D Missing', seller: 'Loja Árvore', received_at: '2026-09-15T12:00:00Z', amount: 10.5, observation: 'Conferência urgente', is_active: true },
+    { id: 'loss2', financial_period_id: 'oldest', period_label: oldestPeriod.label, drop_name_snapshot: 'DROP BETA', partner, waybill: ' wb-001 ', label_code: 'ETQ-BETA', bag_code: 'SACA-B', status: 'PUDO Missing', seller: 'Loja Beta', received_at: '2026-09-14T12:00:00Z', amount: 20, observation: 'Aguardar análise', is_active: true },
+    { id: 'loss3', financial_period_id: 'latest', drop_name_snapshot: 'DROP GAMA', partner: 'J&T EXPRESS LTDA', waybill: 'WB-UNICO', label_code: 'ETQ-GAMA', bag_code: 'SACA-C', status: 'Outro', seller: 'Loja Gama', received_at: null, amount: 30, observation: '', is_active: true },
+    { id: 'loss4', financial_period_id: 'oldest', drop_name_snapshot: 'DROP DELTA', partner, waybill: null, amount: 0, is_active: true },
+    { id: 'loss5', financial_period_id: 'oldest', drop_name_snapshot: 'DROP EPSILON', partner, waybill: '', amount: 0, is_active: true },
+  ]
+  const lossesSnapshot = structuredClone(tables.loss_events)
+  const writesBeforeFilters = writes.length
+  await page.goto('http://127.0.0.1:5173/financeiro/pagamento-total')
+  await page.getByRole('cell', { name: latestPeriod.label, exact: true }).waitFor()
+  const expectedPeriods = [latestPeriod.label, '10. 2Q DE AGOSTO', '09. 1Q DE AGOSTO', oldestPeriod.label]
+  assert.deepEqual(await page.getByRole('combobox', { name: 'Período', exact: true }).locator('option').evaluateAll(options => options.map(option => option.value).filter(Boolean)), expectedPeriods)
+  assert.deepEqual(await page.locator('.finance-visual-page tbody tr:not(.financial-totals) td:first-child strong').allTextContents(), expectedPeriods)
+  assert.equal(await page.locator('.financial-net-column').count(), 6)
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await page.locator('thead .financial-net-column').scrollIntoViewIfNeeded()
+    for (const cell of await page.locator('.financial-net-column').all()) assert.deepEqual(await cell.evaluate(element => { const style = getComputedStyle(element); return [style.borderLeftWidth, style.borderRightWidth, style.borderLeftStyle] }), ['2px', '2px', 'solid'])
+    await page.screenshot({ path: `tmp/browser-tests/net-column-${viewport.width}.png` })
+  }
+  await page.goto('http://127.0.0.1:5173/financeiro/extravios')
+  const lossRows = page.locator('.losses-table tbody tr').filter({ has: page.getByRole('button', { name: 'Editar', exact: true }) })
+  await lossRows.nth(4).waitFor()
+  assert.equal(await page.locator('.losses-table thead input').count(), 10)
+  assert.equal(await page.locator('.duplicate-waybill').count(), 2)
+  assert.equal(await page.getByText('Duplicado (2)', { exact: true }).count(), 2)
+  assert.equal(await page.locator('.duplicate-waybill').first().evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 242, 189)')
+  await page.getByRole('checkbox', { name: 'Somente Waybills duplicados', exact: true }).check()
+  assert.equal(await lossRows.count(), 2)
+  assert.match(await page.locator('.financial-loss-total').innerText(), /30,50/)
+  await page.getByRole('combobox', { name: 'Período', exact: true }).selectOption(latestPeriod.label)
+  assert.equal(await lossRows.count(), 1)
+  assert.equal(await page.getByText('Duplicado (2)', { exact: true }).count(), 1)
+  assert.match(await page.locator('.financial-loss-total').innerText(), /10,50/)
+  await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click()
+  for (const [column, value] of [['Período', '33.'], ['Scan station / DROP', 'alfa'], ['Waybill nº', 'wb-001'], ['Código da etiqueta', 'etq-alfa'], ['Saca', 'saca-a'], ['Status', 'd2d'], ['Seller', 'arvore'], ['Recebimento', '15/09/2026'], ['Valor', '10,50'], ['Observações', 'conferencia']]) {
+    await page.getByRole('searchbox', { name: `Filtrar ${column}`, exact: true }).fill(value)
+    assert.equal(await lossRows.count(), column === 'Período' || column === 'Waybill nº' ? 2 : 1, column)
+    await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click()
+    assert.equal(await lossRows.count(), 5)
+  }
+  await page.getByRole('searchbox', { name: 'Filtrar Recebimento', exact: true }).fill('2026-09-15')
+  await page.getByRole('searchbox', { name: 'Filtrar Valor', exact: true }).fill('10.50')
+  await page.getByRole('searchbox', { name: 'Filtrar Seller', exact: true }).fill('ARVORE')
+  assert.equal(await lossRows.count(), 1)
+  await page.getByRole('searchbox', { name: 'Filtrar Waybill nº', exact: true }).fill('INEXISTENTE')
+  assert.equal(await lossRows.count(), 0)
+  assert.match(await page.locator('.financial-loss-total').innerText(), /0,00/)
+  await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click()
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    await page.getByRole('searchbox', { name: 'Filtrar Waybill nº', exact: true }).scrollIntoViewIfNeeded()
+    await page.screenshot({ path: `tmp/browser-tests/loss-filters-${viewport.width}.png` })
+    await page.getByRole('searchbox', { name: 'Filtrar Observações', exact: true }).scrollIntoViewIfNeeded()
+    await page.getByRole('searchbox', { name: 'Filtrar Observações', exact: true }).fill('urgente')
+    assert.equal(await lossRows.count(), 1)
+    await page.getByRole('button', { name: 'Limpar filtros', exact: true }).click()
+  }
+  await page.emulateMedia({ colorScheme: 'dark' })
+  assert.equal(await page.locator('.duplicate-waybill').first().evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(73, 59, 19)')
+  await page.emulateMedia({ colorScheme: 'light' })
+  assert.equal(writes.length, writesBeforeFilters)
+  assert.deepEqual(tables.loss_events, lossesSnapshot)
+  console.log('PASS: newest periods first, all ten loss columns filter, duplicate Waybills stay highlighted across filters and totals preserve every record')
+
+  {
+  tables.financial_periods.push({ id: 'old-jt', label: oldestPeriod.label, partner: 'J&T EXPRESS LTDA', net_amount: 50, is_active: true })
+  tables.drops.push({ id: 'jt-edit', name: 'DROP EDITADO', partner: 'J&T EXPRESS LTDA', is_active: true })
+  Object.assign(tables.loss_events[0], { updated_at: '2026-09-15T12:00:00Z', legacy_id: 99, created_by: 'original-user', drop_id: 'original-drop' })
+  await page.reload()
+  await lossRows.nth(4).waitFor()
+  const otherLosses = structuredClone(tables.loss_events.slice(1))
+  const financialBeforeLossEdit = structuredClone({ periods: tables.financial_periods, history: tables.financial_payment_history, items: tables.financial_drop_items })
+  const editor = page.getByRole('dialog')
+  const editLoss = waybill => page.locator('.losses-table tbody tr').filter({ has: page.getByRole('cell', { name: waybill, exact: true }) }).getByRole('button', { name: 'Editar', exact: true }).click()
+  await page.locator('.losses-table tbody tr').filter({ hasText: 'DROP ALFA' }).getByRole('button', { name: 'Editar', exact: true }).click()
+  await editor.getByRole('heading', { name: 'Editar extravio', exact: true }).waitFor()
+  assert.equal(await editor.locator('input, textarea').count(), 11)
+  const originalReceived = tables.loss_events[0].received_at
+  await editor.getByLabel('Observações', { exact: true }).fill('Somente observação')
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.waitFor({ state: 'hidden' })
+  assert.equal(tables.loss_events[0].received_at, originalReceived)
+  assert.equal(tables.loss_events[0].drop_id, 'original-drop')
+  await page.locator('.losses-table tbody tr').filter({ hasText: 'DROP ALFA' }).getByRole('button', { name: 'Editar', exact: true }).click()
+  const changedLossFields = { 'Período': oldestPeriod.label, 'Parceiro': 'J&T EXPRESS LTDA', 'Scan station / DROP': 'DROP EDITADO', 'Waybill nº': 'WB-EDITADO', 'Código da etiqueta': 'ETQ-EDITADA', 'Saca': 'SACA-EDITADA', 'Status': 'D2D Missing - não cobrei', 'Seller': 'Loja Editada', 'Recebimento': '2026-09-16T17:20:30', 'Valor do extravio': '12.34', 'Observações': 'Todos os campos editados' }
+  for (const [label, value] of Object.entries(changedLossFields)) await editor.getByLabel(label, { exact: true }).fill(value)
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    for (const input of await editor.locator('input, textarea').all()) {
+      await input.scrollIntoViewIfNeeded()
+      const fits = await input.evaluate(element => { const box = element.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth && element.clientWidth >= 100 })
+      assert.equal(fits, true)
+    }
+    await editor.getByLabel('Período', { exact: true }).scrollIntoViewIfNeeded()
+    await page.screenshot({ path: `tmp/browser-tests/loss-editor-${viewport.width}.png` })
+  }
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.waitFor({ state: 'hidden' })
+  const editedLoss = tables.loss_events.find(row => row.id === 'loss1')
+  assert.equal(editedLoss.financial_period_id, 'old-jt'); assert.equal(editedLoss.drop_id, 'jt-edit')
+  assert.equal(editedLoss.amount, 12.34); assert.equal(editedLoss.legacy_id, 99); assert.equal(editedLoss.created_by, 'original-user')
+  assert.equal(editedLoss.is_active, true)
+  assert.deepEqual(tables.loss_events.slice(1), otherLosses)
+  assert.deepEqual({ periods: tables.financial_periods, history: tables.financial_payment_history, items: tables.financial_drop_items }, financialBeforeLossEdit)
+  await page.reload()
+  await editLoss('WB-EDITADO')
+  for (const [label, value] of Object.entries(changedLossFields)) assert.equal(await editor.getByLabel(label, { exact: true }).inputValue(), value, label)
+  editedLoss.updated_at = '2026-09-17T12:00:00Z'
+  await editor.getByLabel('Observações', { exact: true }).fill('Não sobrescrever versão mais recente')
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.getByRole('alert').filter({ hasText: 'O extravio foi alterado' }).waitFor()
+  assert.equal(editedLoss.observation, 'Todos os campos editados')
+  await editor.getByRole('button', { name: 'Cancelar', exact: true }).click()
+
+  const beforeCreateLoss = tables.loss_events.length
+  await page.getByRole('button', { name: 'Adicionar extravio', exact: true }).click()
+  const newLossFields = { ...changedLossFields, 'Período': latestPeriod.label, 'Parceiro': partner, 'Scan station / DROP': 'DROP TESTE', 'Waybill nº': 'WB-001', 'Status': 'PUDO Missing', 'Recebimento': '', 'Valor do extravio': '0', 'Observações': 'Novo extravio' }
+  for (const [label, value] of Object.entries(newLossFields)) await editor.getByLabel(label, { exact: true }).fill(value)
+  await editor.getByLabel('Período', { exact: true }).fill('INEXISTENTE')
+  const requestsBeforeInvalidLoss = lossRequests.length
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.getByRole('alert').filter({ hasText: 'fechamento existente' }).waitFor()
+  assert.equal(lossRequests.length, requestsBeforeInvalidLoss)
+  await editor.getByLabel('Período', { exact: true }).fill(latestPeriod.label)
+  rejectLossWrite = true
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.getByRole('alert').filter({ hasText: 'Permissão negada no teste de extravios.' }).waitFor()
+  assert.equal(tables.loss_events.length, beforeCreateLoss)
+  for (const [label, value] of Object.entries(newLossFields)) assert.equal(await editor.getByLabel(label, { exact: true }).inputValue(), value, label)
+  rejectLossWrite = false
+  holdLossWrite = true
+  const newLossRequest = page.waitForRequest(request => request.method() === 'POST' && request.url().includes('/rest/v1/loss_events'))
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await newLossRequest
+  assert.equal(await editor.getByRole('button', { name: 'Salvando…', exact: true }).isDisabled(), true)
+  await editor.locator('form').evaluate(form => { form.requestSubmit(); form.requestSubmit() })
+  assert.equal(pendingLossWrites.length, 1)
+  assert.equal(lossRequests.at(-1).payload.id, lossRequests.at(-2).payload.id)
+  holdLossWrite = false
+  pendingLossWrites.splice(0).forEach(resolve => resolve())
+  await editor.waitFor({ state: 'hidden' })
+  await page.getByRole('status').filter({ hasText: 'Extravio adicionado.' }).waitFor()
+  assert.equal(tables.loss_events.length, beforeCreateLoss + 1)
+  const addedLoss = tables.loss_events.at(-1)
+  assert.equal(addedLoss.financial_period_id, 'latest'); assert.equal(addedLoss.drop_id, 'drop1')
+  assert.equal(addedLoss.amount, 0); assert.equal(addedLoss.received_at, null)
+  await page.reload()
+  await lossRows.nth(5).waitFor()
+  assert.match(await page.locator('.financial-loss-total').innerText(), /62,34/)
+  assert.equal(await page.getByText('Duplicado (2)', { exact: true }).count(), 2)
+  await page.locator('.losses-table tbody tr').filter({ hasText: 'Novo extravio' }).getByRole('button', { name: 'Editar', exact: true }).click()
+  for (const [label, value] of Object.entries(newLossFields)) assert.equal(await editor.getByLabel(label, { exact: true }).inputValue(), value, label)
+  await editor.getByRole('button', { name: 'Cancelar', exact: true }).click()
+  tables.user_profiles[0].role = 'operador'
+  tables.user_module_permissions[0].financeiro_view = true
+  tables.user_module_permissions[0].financeiro_manage = false
+  await page.reload()
+  await page.locator('.losses-table').waitFor()
+  assert.equal(await page.getByRole('button', { name: 'Adicionar extravio', exact: true }).count(), 0)
+  assert.equal(await page.locator('.losses-table').getByRole('button', { name: 'Editar', exact: true }).count(), 0)
+  tables.user_profiles[0].role = 'admin'
+  console.log('PASS: net-column separators, complete loss editing/creation, retained errors, timestamp/metadata preservation, stale-write rejection, one insert on repeat submit and read-only permissions')
+  }
 
   await page.goto('http://127.0.0.1:5173/leitor-etiquetas')
   await page.getByRole('button', { name: 'Abrir leitura contínua sem pausa' }).click()
