@@ -40,6 +40,10 @@ let rejectDropWrite = false
 let unchangedDropWrite = false
 let holdDropWrite = false
 const pendingDropWrites = []
+let rejectLossWrite = false
+let holdLossWrite = false
+const pendingLossWrites = []
+const lossRequests = []
 let activeReads = 0
 let maximumReads = 0
 let completedReads = 0
@@ -79,6 +83,13 @@ await context.route('**/*', async route => {
       return true
     }))
     let output = filtered
+    if (table === 'loss_events' && ['POST', 'PATCH'].includes(request.method())) {
+      const payload = request.postDataJSON()
+      lossRequests.push({ method: request.method(), payload })
+      if (rejectLossWrite || (tables.user_profiles[0].role !== 'admin' && !tables.user_module_permissions[0].financeiro_manage)) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Permissão negada no teste de extravios.' }) })
+      if (request.method() === 'POST' && source.some(row => row.id === payload.id)) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ code: '23505', message: 'Duplicate primary key' }) })
+      if (holdLossWrite) await new Promise(resolve => pendingLossWrites.push(resolve))
+    }
     if (table === 'drops' && ['POST', 'PATCH'].includes(request.method())) {
       const payload = request.postDataJSON()
       if (payload.status != null) assert.ok(allowedDropStatuses.includes(payload.status), `Status rejected by SQL constraint: ${payload.status}`)
@@ -584,6 +595,13 @@ try {
   const expectedPeriods = [latestPeriod.label, '10. 2Q DE AGOSTO', '09. 1Q DE AGOSTO', oldestPeriod.label]
   assert.deepEqual(await page.getByRole('combobox', { name: 'Período', exact: true }).locator('option').evaluateAll(options => options.map(option => option.value).filter(Boolean)), expectedPeriods)
   assert.deepEqual(await page.locator('.finance-visual-page tbody tr:not(.financial-totals) td:first-child strong').allTextContents(), expectedPeriods)
+  assert.equal(await page.locator('.financial-net-column').count(), 6)
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await page.locator('thead .financial-net-column').scrollIntoViewIfNeeded()
+    for (const cell of await page.locator('.financial-net-column').all()) assert.deepEqual(await cell.evaluate(element => { const style = getComputedStyle(element); return [style.borderLeftWidth, style.borderRightWidth, style.borderLeftStyle] }), ['2px', '2px', 'solid'])
+    await page.screenshot({ path: `tmp/browser-tests/net-column-${viewport.width}.png` })
+  }
   await page.goto('http://127.0.0.1:5173/financeiro/extravios')
   const lossRows = page.locator('.losses-table tbody tr').filter({ has: page.getByRole('button', { name: 'Editar', exact: true }) })
   await lossRows.nth(4).waitFor()
@@ -629,6 +647,106 @@ try {
   assert.equal(writes.length, writesBeforeFilters)
   assert.deepEqual(tables.loss_events, lossesSnapshot)
   console.log('PASS: newest periods first, all ten loss columns filter, duplicate Waybills stay highlighted across filters and totals preserve every record')
+
+  {
+  tables.financial_periods.push({ id: 'old-jt', label: oldestPeriod.label, partner: 'J&T EXPRESS LTDA', net_amount: 50, is_active: true })
+  tables.drops.push({ id: 'jt-edit', name: 'DROP EDITADO', partner: 'J&T EXPRESS LTDA', is_active: true })
+  Object.assign(tables.loss_events[0], { updated_at: '2026-09-15T12:00:00Z', legacy_id: 99, created_by: 'original-user', drop_id: 'original-drop' })
+  await page.reload()
+  await lossRows.nth(4).waitFor()
+  const otherLosses = structuredClone(tables.loss_events.slice(1))
+  const financialBeforeLossEdit = structuredClone({ periods: tables.financial_periods, history: tables.financial_payment_history, items: tables.financial_drop_items })
+  const editor = page.getByRole('dialog')
+  const editLoss = waybill => page.locator('.losses-table tbody tr').filter({ has: page.getByRole('cell', { name: waybill, exact: true }) }).getByRole('button', { name: 'Editar', exact: true }).click()
+  await page.locator('.losses-table tbody tr').filter({ hasText: 'DROP ALFA' }).getByRole('button', { name: 'Editar', exact: true }).click()
+  await editor.getByRole('heading', { name: 'Editar extravio', exact: true }).waitFor()
+  assert.equal(await editor.locator('input, textarea').count(), 11)
+  const originalReceived = tables.loss_events[0].received_at
+  await editor.getByLabel('Observações', { exact: true }).fill('Somente observação')
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.waitFor({ state: 'hidden' })
+  assert.equal(tables.loss_events[0].received_at, originalReceived)
+  assert.equal(tables.loss_events[0].drop_id, 'original-drop')
+  await page.locator('.losses-table tbody tr').filter({ hasText: 'DROP ALFA' }).getByRole('button', { name: 'Editar', exact: true }).click()
+  const changedLossFields = { 'Período': oldestPeriod.label, 'Parceiro': 'J&T EXPRESS LTDA', 'Scan station / DROP': 'DROP EDITADO', 'Waybill nº': 'WB-EDITADO', 'Código da etiqueta': 'ETQ-EDITADA', 'Saca': 'SACA-EDITADA', 'Status': 'D2D Missing - não cobrei', 'Seller': 'Loja Editada', 'Recebimento': '2026-09-16T17:20:30', 'Valor do extravio': '12.34', 'Observações': 'Todos os campos editados' }
+  for (const [label, value] of Object.entries(changedLossFields)) await editor.getByLabel(label, { exact: true }).fill(value)
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    for (const input of await editor.locator('input, textarea').all()) {
+      await input.scrollIntoViewIfNeeded()
+      const fits = await input.evaluate(element => { const box = element.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth && element.clientWidth >= 100 })
+      assert.equal(fits, true)
+    }
+    await editor.getByLabel('Período', { exact: true }).scrollIntoViewIfNeeded()
+    await page.screenshot({ path: `tmp/browser-tests/loss-editor-${viewport.width}.png` })
+  }
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.waitFor({ state: 'hidden' })
+  const editedLoss = tables.loss_events.find(row => row.id === 'loss1')
+  assert.equal(editedLoss.financial_period_id, 'old-jt'); assert.equal(editedLoss.drop_id, 'jt-edit')
+  assert.equal(editedLoss.amount, 12.34); assert.equal(editedLoss.legacy_id, 99); assert.equal(editedLoss.created_by, 'original-user')
+  assert.equal(editedLoss.is_active, true)
+  assert.deepEqual(tables.loss_events.slice(1), otherLosses)
+  assert.deepEqual({ periods: tables.financial_periods, history: tables.financial_payment_history, items: tables.financial_drop_items }, financialBeforeLossEdit)
+  await page.reload()
+  await editLoss('WB-EDITADO')
+  for (const [label, value] of Object.entries(changedLossFields)) assert.equal(await editor.getByLabel(label, { exact: true }).inputValue(), value, label)
+  editedLoss.updated_at = '2026-09-17T12:00:00Z'
+  await editor.getByLabel('Observações', { exact: true }).fill('Não sobrescrever versão mais recente')
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.getByRole('alert').filter({ hasText: 'O extravio foi alterado' }).waitFor()
+  assert.equal(editedLoss.observation, 'Todos os campos editados')
+  await editor.getByRole('button', { name: 'Cancelar', exact: true }).click()
+
+  const beforeCreateLoss = tables.loss_events.length
+  await page.getByRole('button', { name: 'Adicionar extravio', exact: true }).click()
+  const newLossFields = { ...changedLossFields, 'Período': latestPeriod.label, 'Parceiro': partner, 'Scan station / DROP': 'DROP TESTE', 'Waybill nº': 'WB-001', 'Status': 'PUDO Missing', 'Recebimento': '', 'Valor do extravio': '0', 'Observações': 'Novo extravio' }
+  for (const [label, value] of Object.entries(newLossFields)) await editor.getByLabel(label, { exact: true }).fill(value)
+  await editor.getByLabel('Período', { exact: true }).fill('INEXISTENTE')
+  const requestsBeforeInvalidLoss = lossRequests.length
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.getByRole('alert').filter({ hasText: 'fechamento existente' }).waitFor()
+  assert.equal(lossRequests.length, requestsBeforeInvalidLoss)
+  await editor.getByLabel('Período', { exact: true }).fill(latestPeriod.label)
+  rejectLossWrite = true
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await editor.getByRole('alert').filter({ hasText: 'Permissão negada no teste de extravios.' }).waitFor()
+  assert.equal(tables.loss_events.length, beforeCreateLoss)
+  for (const [label, value] of Object.entries(newLossFields)) assert.equal(await editor.getByLabel(label, { exact: true }).inputValue(), value, label)
+  rejectLossWrite = false
+  holdLossWrite = true
+  const newLossRequest = page.waitForRequest(request => request.method() === 'POST' && request.url().includes('/rest/v1/loss_events'))
+  await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+  await newLossRequest
+  assert.equal(await editor.getByRole('button', { name: 'Salvando…', exact: true }).isDisabled(), true)
+  await editor.locator('form').evaluate(form => { form.requestSubmit(); form.requestSubmit() })
+  assert.equal(pendingLossWrites.length, 1)
+  assert.equal(lossRequests.at(-1).payload.id, lossRequests.at(-2).payload.id)
+  holdLossWrite = false
+  pendingLossWrites.splice(0).forEach(resolve => resolve())
+  await editor.waitFor({ state: 'hidden' })
+  await page.getByRole('status').filter({ hasText: 'Extravio adicionado.' }).waitFor()
+  assert.equal(tables.loss_events.length, beforeCreateLoss + 1)
+  const addedLoss = tables.loss_events.at(-1)
+  assert.equal(addedLoss.financial_period_id, 'latest'); assert.equal(addedLoss.drop_id, 'drop1')
+  assert.equal(addedLoss.amount, 0); assert.equal(addedLoss.received_at, null)
+  await page.reload()
+  await lossRows.nth(5).waitFor()
+  assert.match(await page.locator('.financial-loss-total').innerText(), /62,34/)
+  assert.equal(await page.getByText('Duplicado (2)', { exact: true }).count(), 2)
+  await page.locator('.losses-table tbody tr').filter({ hasText: 'Novo extravio' }).getByRole('button', { name: 'Editar', exact: true }).click()
+  for (const [label, value] of Object.entries(newLossFields)) assert.equal(await editor.getByLabel(label, { exact: true }).inputValue(), value, label)
+  await editor.getByRole('button', { name: 'Cancelar', exact: true }).click()
+  tables.user_profiles[0].role = 'operador'
+  tables.user_module_permissions[0].financeiro_view = true
+  tables.user_module_permissions[0].financeiro_manage = false
+  await page.reload()
+  await page.locator('.losses-table').waitFor()
+  assert.equal(await page.getByRole('button', { name: 'Adicionar extravio', exact: true }).count(), 0)
+  assert.equal(await page.locator('.losses-table').getByRole('button', { name: 'Editar', exact: true }).count(), 0)
+  tables.user_profiles[0].role = 'admin'
+  console.log('PASS: net-column separators, complete loss editing/creation, retained errors, timestamp/metadata preservation, stale-write rejection, one insert on repeat submit and read-only permissions')
+  }
 
   await page.goto('http://127.0.0.1:5173/leitor-etiquetas')
   await page.getByRole('button', { name: 'Abrir leitura contínua sem pausa' }).click()

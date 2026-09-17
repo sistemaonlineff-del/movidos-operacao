@@ -11,11 +11,38 @@ await build({ entryPoints: ['src/cnabSpreadsheet.ts'], outfile: 'tmp/financial-t
 await build({ entryPoints: ['src/closingSpreadsheet.ts'], outfile: 'tmp/financial-tests/closing.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
 const { createClosingTemplate, readClosingSummary, readHistoricalPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/closing.cjs`).href)
 const { readCnabSpreadsheet } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/spreadsheet.mjs`).href)
-const { buildDetails, buildTotals, paymentTotalTarget, lossClass, lossesFor, number, splitLosses } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
+const { buildDetails, buildTotals, paymentTotalTarget, lossClass, lossesFor, number, splitLosses, lossEditorValues, lossEventPayload } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
 const { createCnabInter, pixKeyType, prepareCnabPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/cnab.mjs`).href)
 const periods = [{ id: 'p1', label: '33. 1Q DE AGOSTO', partner: 'IMILE DELIVERY BRAZIL LTDA', financial_view_id: 'v1', net_amount: null }, { id: 'p2', label: '33. 1Q DE AGOSTO', partner: 'J&T EXPRESS LTDA', financial_view_id: 'v1', net_amount: null }]
 const item = { id: 'i1', financial_period_id: 'p1', drop_name_snapshot: 'VNM', quantity_packages: 2168, unit_value: .13, reimbursement: 0 }
 const loss = (id, status, amount, period = 'p1') => ({ id, financial_period_id: period, period_label: periods[0].label, drop_name_snapshot: 'VNM', status, amount })
+
+test('loss editor preserves metadata and timestamps, rebinds changed identities and validates new occurrences', () => {
+  const original = { ...loss('loss1', 'PUDO Missing', 10), partner: null, period_label: null, drop_id: 'original-drop', waybill: ' WB-1 ', received_at: '2026-09-16T23:30:42.123-03:00', legacy_id: 42, is_active: true, created_by: 'creator', updated_at: 'version-1' }
+  const draft = lossEditorValues(original, periods)
+  const unchanged = lossEventPayload(draft, original, periods, [])
+  for (const field of ['financial_period_id', 'partner', 'period_label', 'drop_id', 'received_at', 'waybill']) assert.equal(unchanged[field], original[field], field)
+  assert.equal(unchanged.amount, 10)
+  for (const field of ['id', 'legacy_id', 'created_by', 'updated_at', 'is_active']) assert.equal(Object.hasOwn(unchanged, field), false, field)
+  const dropRows = [{ id: 'drop-jt', name: 'NOVO', partner: periods[1].partner }, { id: 'drop-imile', name: 'NOVO', partner: periods[0].partner }]
+  const changed = lossEventPayload({ ...draft, partner: periods[1].partner, drop_name_snapshot: 'NOVO', waybill: 'WB-2', label_code: 'ETQ', bag_code: 'SACA', seller: 'LOJA', status: 'D2D Missing', amount: '23,45', observation: 'Revisto', received_at: '2026-09-15T14:35:20' }, original, periods, dropRows)
+  assert.equal(changed.financial_period_id, 'p2'); assert.equal(changed.drop_id, 'drop-jt')
+  assert.equal(changed.amount, 23.45); assert.equal(changed.received_at, new Date('2026-09-15T14:35:20').toISOString())
+  for (const [field, value] of Object.entries({ waybill: 'WB-2', label_code: 'ETQ', bag_code: 'SACA', seller: 'LOJA', status: 'D2D Missing', observation: 'Revisto' })) assert.equal(changed[field], value)
+  assert.equal(lossEventPayload({ ...draft, amount: 0, received_at: '' }, original, periods, []).received_at, null)
+  const newDraft = { ...draft, received_at: '', amount: 0 }
+  const added = lossEventPayload(newDraft, null, periods, [])
+  assert.equal(added.financial_period_id, 'p1'); assert.equal(added.drop_id, null); assert.equal(added.amount, 0)
+  assert.equal(lossesFor({ periodId: 'p1', drop: 'VNM' }, [added], periods).length, 1)
+  assert.equal(lossesFor({ periodId: 'p2', drop: 'VNM' }, [added], periods).length, 0)
+  assert.throws(() => lossEventPayload({ ...newDraft, period_label: '' }, null, periods, []), /Preencha/)
+  assert.throws(() => lossEventPayload({ ...newDraft, period_label: 'INEXISTENTE' }, null, periods, []), /fechamento existente/)
+  assert.throws(() => lossEventPayload(newDraft, null, [...periods, { ...periods[0], id: 'duplicate' }], []), /ambíguos/)
+  for (const amount of ['', 'abc', Infinity, '1000000000000']) assert.throws(() => lossEventPayload({ ...newDraft, amount }, null, periods, []), /valor/)
+  assert.throws(() => lossEventPayload({ ...newDraft, received_at: 'invalid' }, null, periods, []), /data/)
+  const legacy = { ...original, financial_period_id: null, partner: 'Eduardo', period_label: 'HISTORICO' }
+  assert.equal(lossEventPayload({ ...lossEditorValues(legacy, []), observation: 'Nova' }, legacy, [], []).financial_period_id, null)
+})
 
 test('status rules distinguish deducted, assumed, waived and legacy losses', () => {
   const result = splitLosses([loss('1', 'PUDO Missing', 10.25), loss('2', ' d2d missing ', 20.15), loss('3', 'PUDO Missing - não cobrei', 5), loss('4', 'D2D Missing - não cobrei', 7), loss('5', 'PUDO Missing - não descontei 159,99', 159.99), loss('6', 'PUDO Extravio (Lost)', 8), loss('7', 'Outro', -2)])

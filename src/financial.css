@@ -6,6 +6,7 @@
 .financial-totals { background: #e5f3e0; color: #213d22; font-weight: 800; }
 .financial-totals td { white-space: nowrap; }
 .financial-totals th { color: inherit; letter-spacing: 0; }
+.finance-visual-page .financial-net-column { border-left: 2px solid #0c929b; border-right: 2px solid #0c929b; }
 .financial-loss-total { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; padding: .7rem 0 1.2rem; }
 .financial-loss-total strong { color: #a33b2f; font-size: 1.1rem; }
 .losses-table thead input { display: block; width: 9rem; max-width: 100%; margin-top: .6rem; padding: .45rem .55rem; border-radius: 6px; font-size: .8rem; font-weight: 400; letter-spacing: 0; text-transform: none; }
@@ -19,6 +20,10 @@
 .financial-editor::backdrop { background: #101820b8; }
 .financial-editor fieldset { padding: 0; border: 0; margin: 0; min-width: 0; }
 .financial-editor input, .financial-editor textarea { width: 100%; min-width: 0; }
+.financial-editor .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.financial-editor .form-grid label { min-width: 0; }
+.financial-editor input { box-sizing: border-box; }
+@media (max-width: 640px) { .financial-editor .form-grid { grid-template-columns: minmax(0, 1fr); } }
 .financial-editor textarea { min-height: 100px; padding: .75rem; font: inherit; border: 1px solid #d5e4e5; border-radius: 8px; }
 .financial-editor .modal-actions { position: sticky; bottom: -1.5rem; padding: 1rem 0; background: white; }
 .app:has(.finance-visual-page) .content, .finance-visual-page, .finance-visual-page > .card { min-width: 0; }

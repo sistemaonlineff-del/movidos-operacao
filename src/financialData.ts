@@ -35,6 +35,55 @@ export const date = (value: unknown) => {
 };
 export const periodOrder = (label: string) =>
   Number(label.match(/^\s*(\d+)/)?.[1] ?? 0);
+export function lossEditorValues(row: DataRow, periods: DataRow[]): DataRow {
+  const period = periods.find(candidate => candidate.id === row.financial_period_id);
+  const received = row.received_at ? new Date(row.received_at) : null;
+  const localDate = received && Number.isFinite(received.getTime())
+    ? `${received.getFullYear()}-${String(received.getMonth() + 1).padStart(2, "0")}-${String(received.getDate()).padStart(2, "0")}T${String(received.getHours()).padStart(2, "0")}:${String(received.getMinutes()).padStart(2, "0")}:${String(received.getSeconds()).padStart(2, "0")}`
+    : "";
+  return { ...row, period_label: row.period_label ?? period?.label ?? "", partner: row.partner ?? period?.partner ?? "", received_at: localDate, amount: row.amount ?? 0 };
+}
+export function lossEventPayload(draft: DataRow, original: DataRow | null, periods: DataRow[], drops: DataRow[]) {
+  const initial = lossEditorValues(original ?? {}, periods);
+  const payload: DataRow = {};
+  for (const field of ["period_label", "partner", "drop_name_snapshot", "waybill", "label_code", "bag_code", "status", "seller", "observation"]) {
+    payload[field] = original && text(draft[field]) === text(initial[field]) ? original[field] ?? null : text(draft[field]) || null;
+  }
+  if (!original && ["period_label", "partner", "drop_name_snapshot", "status"].some(field => !text(draft[field]))) {
+    throw new Error("Preencha período, parceiro, DROP e status.");
+  }
+  const rawAmount = text(draft.amount);
+  const amount = Number(rawAmount.includes(",") ? rawAmount.replace(/\./g, "").replace(",", ".") : rawAmount);
+  if (!rawAmount || !Number.isFinite(amount) || Math.abs(amount) >= 1e12) throw new Error("Informe um valor de extravio válido.");
+  payload.amount = round(amount);
+  if (original && text(draft.received_at) === text(initial.received_at)) {
+    payload.received_at = original.received_at ?? null;
+  } else {
+    const received = text(draft.received_at) ? new Date(draft.received_at) : null;
+    if (received && !Number.isFinite(received.getTime())) throw new Error("Informe uma data de recebimento válida.");
+    payload.received_at = received?.toISOString() ?? null;
+  }
+  const samePeriod = original && key(draft.period_label) === key(initial.period_label) && key(draft.partner) === key(initial.partner);
+  if (samePeriod) {
+    payload.financial_period_id = original.financial_period_id ?? null;
+  } else {
+    const matches = periods.filter(period => key(period.label) === key(draft.period_label) && key(period.partner) === key(draft.partner));
+    if (matches.length !== 1) throw new Error("Selecione período e parceiro de um fechamento existente, sem vínculos ambíguos.");
+    payload.financial_period_id = matches[0].id;
+    payload.period_label = matches[0].label;
+    payload.partner = matches[0].partner;
+  }
+  if (original && key(draft.drop_name_snapshot) === key(initial.drop_name_snapshot) && key(draft.partner) === key(initial.partner)) {
+    payload.drop_id = original.drop_id ?? null;
+  } else {
+    const period = periods.find(candidate => candidate.id === payload.financial_period_id);
+    const partner = period ? financialPartner(period) : financialPartner(draft);
+    const matches = drops.filter(drop => key(drop.name) === key(draft.drop_name_snapshot) && key(normalizePartner(drop.partner)) === key(partner));
+    if (matches.length > 1) throw new Error("Há mais de um cadastro para este DROP e parceiro. Confira o vínculo antes de salvar.");
+    payload.drop_id = matches[0]?.id ?? null;
+  }
+  return payload;
+}
 export function notes(value: unknown): DataRow {
   try {
     const result = JSON.parse(text(value) || "{}");
