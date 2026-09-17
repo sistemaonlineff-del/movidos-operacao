@@ -79,6 +79,7 @@ export default function FinanceiroVisuais({ kind }: { kind: Kind }) {
 function FinanceiroVisualPage({ kind }: { kind: Kind }) {
   const { can, profile } = useAccess();
   const canEditTotal = profile?.is_active === true && can("financeiro_manage");
+  const detailSaving = useRef(false);
   const lossSaving = useRef(false);
   const lossOriginal = useRef<DataRow | null>(null);
   const lossInsertId = useRef("");
@@ -313,9 +314,22 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       setEditError((caught as Error).message || "Não foi possível salvar o pagamento total.");
     } finally { setSaving(false); }
   };
+  const manualDetail = editing?.source === "new" || notes(editing?.raw?.observation).movidosClosing?.manualEntry === true;
+  const detailPeriods = [...periods].sort((first, second) => periodOrder(second.label) - periodOrder(first.label));
+  const detailDrops = drops.filter(drop => !drop.partner || financialPartner(drop) === editing?.partner);
+  const addDetail = () => {
+    if (!canEditTotal || detailSaving.current) return;
+    const matching = periods.filter(period => period.label === periodFilter && (!partnerFilter || financialPartner(period) === partnerFilter));
+    const period = matching.length === 1 ? matching[0] : undefined;
+    const drop = drops.filter(drop => key(drop.name) === dropFilter && (!drop.partner || financialPartner(drop) === (period && financialPartner(period))));
+    const registration = drop.length === 1 ? drop[0] : undefined;
+    setEditError("");
+    setEditing({ id: crypto.randomUUID(), source: "new", raw: {}, periodId: period?.id ?? "", period: period?.label ?? "", partner: period ? financialPartner(period) : "", referenceCnpj: period?.reference_cnpj || "MOVIDOS", dropId: registration?.id ?? "", drop: registration?.name ?? "", responsible: registration?.responsible ?? "", pix: registration?.pix_key ?? "", paymentDate: text(period?.payment_date).slice(0, 10), packages: 0, unit: 0, subtotal: 0, w2d: 0, d2d: 0, loss: 0, reimbursement: 0, receivable: 0 });
+  };
   const saveDetail = async (event: FormEvent) => {
     event.preventDefault();
-    if (!editing || !supabase) return;
+    if (!editing || !supabase || detailSaving.current || !canEditTotal) return;
+    detailSaving.current = true;
     setSaving(true);
     setEditError("");
     try {
@@ -325,14 +339,21 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         )
       )
         throw new Error("Informe período, parceiro e DROP.");
+      for (const [field, label, type] of detailFields) {
+        if (type === "number" && (!/^[+-]?\d+(?:[.,]\d+)?$/.test(text(editing[field])) || !Number.isFinite(Number(text(editing[field]).replace(",", "."))) || Math.abs(number(editing[field])) >= 1e12)) throw new Error(`Informe um valor válido em ${label}.`);
+      }
+      const paymentDate = text(editing.paymentDate);
+      if (paymentDate && (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate) || !Number.isFinite(Date.parse(`${paymentDate}T12:00:00Z`)) || new Date(`${paymentDate}T12:00:00Z`).toISOString().slice(0, 10) !== paymentDate)) throw new Error("Informe uma data de pagamento válida.");
       if (
         !Number.isInteger(number(editing.packages)) ||
-        number(editing.packages) < 0
+        number(editing.packages) < 0 || number(editing.packages) > 2147483647
       )
         throw new Error(
           "A quantidade de pacotes deve ser um inteiro positivo ou zero.",
         );
       const originalPeriod = periodById.get(editing.periodId);
+      if (manualDetail && (!originalPeriod || originalPeriod.label !== text(editing.period) || financialPartner(originalPeriod) !== text(editing.partner))) throw new Error("Selecione um fechamento existente para este pagamento.");
+      if (manualDetail && !detailDrops.some(drop => drop.id === editing.dropId && drop.name === editing.drop)) throw new Error("Selecione um DROP cadastrado para o parceiro deste fechamento.");
       let period = originalPeriod && originalPeriod.label === text(editing.period) && financialPartner(originalPeriod) === text(editing.partner) ? originalPeriod : periods.find(
         (row) =>
           row.label === text(editing.period) &&
@@ -355,7 +376,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         if (result.error) throw result.error;
         period = result.data;
       }
-      if (period && period.reference_cnpj !== text(editing.referenceCnpj)) {
+      if (!manualDetail && period && period.reference_cnpj !== text(editing.referenceCnpj)) {
         const { data, error } = await supabase
           .from("financial_periods")
           .update({ reference_cnpj: text(editing.referenceCnpj) })
@@ -373,6 +394,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           (Object.keys(previous).length ? undefined : editing.raw.observation),
         movidosClosing: {
           ...previous.movidosClosing,
+          ...(manualDetail ? { manualEntry: true, referenceCnpj: text(editing.referenceCnpj) } : {}),
           sourceItemId: editing.sourceItemId,
           packageType: text(editing.packageType),
           w2d: number(editing.w2d),
@@ -380,6 +402,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         },
       });
       const payload = {
+        ...(manualDetail ? { drop_id: editing.dropId } : {}),
         financial_period_id: period!.id,
         period_label: text(editing.period),
         partner: text(editing.partner),
@@ -404,22 +427,26 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
               .from("financial_payment_history")
               .update(payload)
               .eq("id", editing.id)
+              .eq("is_active", true)
               .select("id")
               .single()
           : await supabase
               .from("financial_payment_history")
-              .insert(payload)
+              .insert({ ...payload, ...(editing.source === "new" ? { id: editing.id } : {}) })
               .select("id")
               .single();
+      if (result.error?.code === "23505") throw new Error("Este pagamento já pode ter sido salvo. Feche e atualize os dados antes de adicionar novamente.");
       if (result.error) throw result.error;
+      if (!result.data?.id) throw new Error("Não foi possível confirmar o pagamento. Feche e atualize os dados antes de tentar novamente.");
       setEditing(null);
-      setMessage("Fechamento atualizado.");
+      setMessage(editing.source === "new" ? "Pagamento adicionado." : "Fechamento atualizado.");
       await load();
     } catch (caught) {
       setEditError(
         (caught as Error).message || "Não foi possível salvar o fechamento.",
       );
     } finally {
+      detailSaving.current = false;
       setSaving(false);
     }
   };
@@ -546,6 +573,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           </p>
         </div>
         <div className="financial-actions">
+          {kind === "details" && canEditTotal && <button type="button" className="primary" disabled={loading || !!error || saving || !periods.length} onClick={addDetail}><span aria-hidden="true">+</span> Adicionar pagamento</button>}
           {kind === "losses" && canEditTotal && <button type="button" className="primary" disabled={loading || !!error || saving} onClick={() => openLoss(null)}><span aria-hidden="true">+</span> Adicionar extravio</button>}
           {kind === "details" && (
             <button
@@ -667,13 +695,13 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       ) : kind === "details" ? (
         <PaymentDetails
           rows={filteredDetails}
-          onEdit={(row) => {
+          onEdit={canEditTotal ? (row) => {
             setEditError("");
             setEditing({
               ...row,
               paymentDate: text(row.paymentDate).slice(0, 10),
             });
-          }}
+          } : undefined}
           onReport={(row) => void report([row])}
           generating={generating}
         />
@@ -717,19 +745,38 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
       )}
       {editing && (
         <Editor
-          title="Editar fechamento"
-          onClose={() => !saving && setEditing(null)}
+          title={editing.source === "new" ? "Adicionar pagamento" : "Editar fechamento"}
+          onClose={() => !detailSaving.current && setEditing(null)}
           onSubmit={saveDetail}
           saving={saving}
           error={editError}
+          submitLabel={editing.source === "new" ? "Adicionar pagamento" : "Salvar alterações"}
+          submitDisabled={!canEditTotal}
         >
           <div className="form-grid">
             {detailFields.map(
               ([field, label, type]) => (
                 <label key={field}>
                   {label}
-                  {type === "select" ? (
+                  {manualDetail && field === "period" ? (
+                    <select aria-label={label} required autoFocus value={editing.periodId ?? ""} onChange={event => {
+                      const period = periodById.get(event.target.value);
+                      setEditing({ ...editing, periodId: period?.id ?? "", period: period?.label ?? "", partner: period ? financialPartner(period) : "", referenceCnpj: period?.reference_cnpj || "MOVIDOS", paymentDate: text(period?.payment_date).slice(0, 10), drop: "", dropId: "", responsible: "", pix: "" });
+                    }}>
+                      <option value="">Selecionar fechamento</option>
+                      {detailPeriods.map(period => <option key={period.id} value={period.id}>{period.label} · {financialPartner(period)} · {period.partner} · {period.id.slice(0, 8)}</option>)}
+                    </select>
+                  ) : manualDetail && field === "drop" ? (
+                    <select aria-label={label} required value={editing.dropId ?? ""} onChange={event => {
+                      const drop = detailDrops.find(drop => drop.id === event.target.value);
+                      setEditing({ ...editing, dropId: drop?.id ?? "", drop: drop?.name ?? "", responsible: drop?.responsible ?? "", pix: drop?.pix_key ?? "" });
+                    }}>
+                      <option value="">Selecionar DROP</option>
+                      {detailDrops.map(drop => <option key={drop.id} value={drop.id}>{drop.name} · {drop.responsible}</option>)}
+                    </select>
+                  ) : type === "select" ? (
                     <select
+                      aria-label={label}
                       required
                       value={editing[field] ?? ""}
                       onChange={(event) => changeDetail(field, event.target.value)}
@@ -739,12 +786,14 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
                     </select>
                   ) : (
                     <input
+                    aria-label={label}
                     autoFocus={field === "period"}
                     required={
                       ["period", "drop", "partner"].includes(field) ||
                       type === "number"
                     }
                     type={type}
+                    readOnly={manualDetail && field === "partner"}
                     step={field === "packages" ? "1" : "0.01"}
                     min={field === "packages" ? 0 : undefined}
                     value={editing[field] ?? ""}
@@ -1001,7 +1050,7 @@ function PaymentDetails({
   generating,
 }: {
   rows: DataRow[];
-  onEdit: (row: DataRow) => void;
+  onEdit?: (row: DataRow) => void;
   onReport: (row: DataRow) => void;
   generating: boolean;
 }) {
@@ -1073,12 +1122,12 @@ function PaymentDetails({
                 ))}
                 <td>
                   <div className="financial-actions">
-                    <button
+                    {onEdit && <button
                       className="table-action"
                       onClick={() => onEdit(row)}
                     >
                       Editar
-                    </button>
+                    </button>}
                     <button
                       className="table-action"
                       disabled={generating}

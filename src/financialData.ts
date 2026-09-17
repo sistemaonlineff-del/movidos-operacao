@@ -221,7 +221,7 @@ export function buildDetails(
   const source = history
     .map((row) => {
       const meta = notes(row.observation).movidosClosing ?? {};
-      const candidate = meta.sourceItemId
+      const candidate = meta.manualEntry ? undefined : meta.sourceItemId
         ? itemById.get(meta.sourceItemId)
         : itemGroups
             .get(`${row.financial_period_id}|${key(row.drop_name_snapshot)}`)
@@ -236,7 +236,7 @@ export function buildDetails(
         .map((row) => ({ row, item: row, history: false, meta: {} })),
     );
   const groupKey = (entry: (typeof source)[number]) =>
-    `${entry.row.financial_period_id}|${key(entry.row.drop_name_snapshot)}`;
+    `${entry.row.financial_period_id}|${key(entry.row.drop_name_snapshot)}${entry.meta.manualEntry ? `|manual:${entry.row.id}` : ""}`;
   const grouped = new Map<string, typeof source>();
   source.forEach((entry) =>
     grouped.set(groupKey(entry), [
@@ -252,7 +252,7 @@ export function buildDetails(
         periodId: row.financial_period_id,
         period: row.period_label ?? period?.label ?? "Sem período",
         partner: financialPartner({ ...period, ...row }),
-        referenceCnpj: period?.reference_cnpj || "MOVIDOS",
+        referenceCnpj: meta.manualEntry && meta.referenceCnpj ? meta.referenceCnpj : period?.reference_cnpj || "MOVIDOS",
         drop: row.drop_name_snapshot ?? "",
       };
       const exact = registrations.get(

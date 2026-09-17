@@ -91,6 +91,23 @@ test('new closings stay visible alongside history and persisted source links pre
   assert.equal(details.find(row => row.id === 'h1').drop, 'Renomeado')
   assert.equal(details.find(row => row.id === 'i2').receivable, 281.84)
 })
+test('manual proportional payments remain separate without replacing items or reallocating their losses', () => {
+  const occurrences = [loss('existing-loss', 'PUDO Missing', 20)]
+  const original = buildDetails([], [item], occurrences, periods)[0]
+  const history = [{ id: 'manual1', financial_period_id: 'p1', drop_name_snapshot: item.drop_name_snapshot, responsible: 'Nova pessoa', package_quantity: 50, amount: .13, subtotal: 6.5, loss_amount: 2, reimbursement: 0, total_receivable: 4.5, observation: JSON.stringify({ movidosClosing: { manualEntry: true, referenceCnpj: 'BELLY', w2d: 2, d2d: 0 } }) }]
+  const details = buildDetails(history, [item], occurrences, periods)
+  assert.equal(details.length, 2)
+  assert.deepEqual(details.find(row => row.id === item.id), original)
+  const added = details.find(row => row.id === 'manual1')
+  assert.equal(added.sourceItemId, undefined)
+  assert.equal(added.referenceCnpj, 'BELLY')
+  assert.equal(added.responsible, 'Nova pessoa')
+  assert.equal(added.receivable, 4.5)
+  assert.equal(added.w2d, 2)
+  const totals = buildTotals(details, occurrences, [{ ...periods[0], net_amount: 1000 }], [])
+  assert.equal(totals[0].net, 1000)
+  assert.equal(totals[0].payable, original.receivable + 4.5)
+})
 test('same DROP under different partners never shares losses', () => {
   const rows = [loss('1', 'PUDO Missing', 10), loss('2', 'D2D Missing', 100, 'p2'), loss('3', 'D2D Missing - não cobrei', 30)]
   const detail = buildDetails([], [item], rows, periods)[0]

@@ -29,7 +29,7 @@
 .financial-editor { width: min(900px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 1px solid #c8dadc; border-radius: 16px; padding: 1.5rem; color: #172f35; background: white; }
 .financial-editor::backdrop { background: #101820b8; }
 .financial-editor fieldset { padding: 0; border: 0; margin: 0; min-width: 0; }
-.financial-editor input, .financial-editor textarea { width: 100%; min-width: 0; }
+.financial-editor input, .financial-editor textarea, .financial-editor select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
 .financial-editor .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .financial-editor .form-grid label { min-width: 0; }
 .financial-editor input { box-sizing: border-box; }

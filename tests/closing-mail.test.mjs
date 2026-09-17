@@ -130,10 +130,10 @@ test('API checks permissions, uses registered recipient, reserves once and never
   let role = 'operador'
   let sends = 0, reservations = 0, log = null
   const payload = { dropId, periodId, period: 'SETEMBRO', partner, subject: 'Test', body: 'Message', to: 'untrusted@example.com', pdf: Buffer.from('%PDF-1.7\n%%EOF').toString('base64') }
-  const invoke = async (body = payload) => {
+  const invoke = async (body = payload, method = 'POST') => {
     let result
     const response = { setHeader() {}, status(status) { this.statusCode = status; return this }, json(value) { result = { status: this.statusCode, body: value }; return this } }
-    await handler({ method: 'POST', headers: { authorization: 'Bearer test-token' }, body }, response)
+    await handler({ method, headers: { authorization: 'Bearer test-token' }, body }, response)
     return result
   }
   try {
@@ -184,10 +184,18 @@ test('API checks permissions, uses registered recipient, reserves once and never
     active = true
     assert.equal((await invoke({ ...payload, pdf: 'invalid' })).status, 400)
     process.env.MAIL_TEST_RECIPIENT = 'another@example.com'
-    assert.equal((await invoke()).status, 403)
+    assert.deepEqual((await invoke(undefined, 'GET')).body, { configured: true, from: 'sender@example.com', testRecipient: 'another@example.com' })
+    const blocked = await invoke()
+    assert.equal(blocked.status, 403)
+    assert.match(blocked.body.error, /MAIL_TEST_RECIPIENT.*redeploy/)
+    assert.equal(sends, 0)
     assert.equal(reservations, 0)
     delete process.env.MAIL_TEST_RECIPIENT
+    assert.equal((await invoke(undefined, 'GET')).body.testRecipient, null)
+    process.env.MAIL_TEST_RECIPIENT = '   '
+    assert.equal((await invoke(undefined, 'GET')).body.testRecipient, null)
     const concurrent = await Promise.all([invoke(), invoke()])
+    delete process.env.MAIL_TEST_RECIPIENT
     assert.ok(concurrent.some(result => result.body.status === 'aceito'))
     assert.equal(sends, 1)
     assert.equal(reservations, 1)

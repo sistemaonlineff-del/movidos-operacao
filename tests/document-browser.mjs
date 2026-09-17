@@ -44,6 +44,11 @@ let rejectLossWrite = false
 let rejectClosingWrite = false
 let missingLogisticsColumn = false
 let rejectClosingItems = false
+let rejectPaymentWrite = false
+let holdPaymentWrite = false
+let losePaymentResponse = false
+const pendingPaymentWrites = []
+const paymentRequests = []
 let holdLossWrite = false
 const pendingLossWrites = []
 const lossRequests = []
@@ -55,6 +60,7 @@ let allowReads = false
 const pendingReads = []
 const mailRequests = []
 let mailConfigured = true
+let mailPilotRecipient = null
 let mailUncertain = false
 let mailTestBlocked = false
 let mailRetryUncertain = false
@@ -87,6 +93,13 @@ await context.route('**/*', async route => {
       return true
     }))
     let output = filtered
+    if (table === 'financial_payment_history' && ['POST', 'PATCH'].includes(request.method())) {
+      const payload = request.postDataJSON()
+      paymentRequests.push({ method: request.method(), payload })
+      if (rejectPaymentWrite) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Permissão negada no teste de pagamento.' }) })
+      if (request.method() === 'POST' && source.some(row => row.id === payload.id)) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ code: '23505', message: 'Duplicate primary key' }) })
+      if (holdPaymentWrite) await new Promise(resolve => pendingPaymentWrites.push(resolve))
+    }
     if (table === 'financial_drop_items' && request.method() === 'POST' && rejectClosingItems) return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: '22003', message: 'Valor fora do limite no teste.' }) })
     if (table === 'financial_periods' && request.method() === 'GET' && missingLogisticsColumn && url.searchParams.get('select')?.includes('logistics_partner')) return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: '42703', message: 'column financial_periods.logistics_partner does not exist' }) })
     if (table === 'financial_views' && request.method() === 'POST' && rejectClosingWrite) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Permissão negada no teste de importação.' }) })
@@ -117,6 +130,7 @@ await context.route('**/*', async route => {
         return inserted
       })
       tables[table] = source
+      if (table === 'financial_payment_history' && losePaymentResponse) return route.abort('failed')
     } else if (request.method() === 'PATCH') {
       const payload = request.postDataJSON()
       writes.push({ table, payload })
@@ -128,7 +142,7 @@ await context.route('**/*', async route => {
   if (url.origin === 'http://127.0.0.1:5173') {
     if (url.pathname === '/api/financial/send-closing') {
       if (!mailConfigured) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Conta remetente não configurada no teste.' }) })
-      if (request.method() === 'GET') return json({ configured: true, from: 'sender@example.com' })
+      if (request.method() === 'GET') return json({ configured: true, from: 'sender@example.com', testRecipient: mailPilotRecipient })
       const payload = request.postDataJSON()
       assert.ok(request.headers().authorization.startsWith('Bearer '))
       if (payload.mode === 'verify') {
@@ -213,6 +227,12 @@ try {
   let mailDownloads = 0
   const countMailDownload = () => { mailDownloads++ }
   page.on('download', countMailDownload)
+  mailPilotRecipient = 'pilot@example.com'
+  await page.getByRole('button', { name: 'Enviar e-mails', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Modo de teste ativo: os fechamentos dos clientes estão bloqueados por MAIL_TEST_RECIPIENT.' }).waitFor()
+  assert.equal(mailRequests.length, 0)
+  assert.equal(mailDownloads, 0)
+  mailPilotRecipient = null
   page.once('dialog', dialog => dialog.dismiss())
   await page.getByRole('button', { name: 'Enviar e-mails', exact: true }).click()
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Enviar e-mails' && !button.disabled))
@@ -939,6 +959,114 @@ try {
     assert.equal(await page.getByRole('button', { name: 'Baixar Excel do fechamento', exact: true }).isDisabled(), true)
     assert.equal(writes.length, writesBeforeExport)
     console.log('PASS: actual Excel downloads match all screen columns, rows, totals and period/partner/DROP filters; literal PIX and individual PDF retained')
+  }
+
+  {
+    await page.goto('http://127.0.0.1:5173/financeiro/pagamento-detalhes')
+    await page.getByRole('combobox', { name: 'Parceiro', exact: true }).selectOption(partner)
+    await page.getByRole('combobox', { name: 'Período', exact: true }).selectOption(latestPeriod.label)
+    await page.getByRole('combobox', { name: 'DROP', exact: true }).selectOption('DROP TESTE')
+    const table = page.locator('.payment-details-table')
+    const originalLine = await table.locator('tbody tr:not(.financial-totals)').innerText()
+    const before = structuredClone({ periods: tables.financial_periods, items: tables.financial_drop_items, losses: tables.loss_events, history: tables.financial_payment_history })
+    await page.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    const editor = page.getByRole('dialog')
+    assert.equal(await editor.getByLabel('Período', { exact: true }).inputValue(), 'latest')
+    assert.equal(await editor.getByLabel('DROP', { exact: true }).inputValue(), 'drop1')
+    assert.equal(await editor.getByLabel('Parceiro', { exact: true }).inputValue(), partner)
+    await editor.getByLabel('CNPJ de referência', { exact: true }).selectOption('BELLY')
+    await editor.getByLabel('Responsável', { exact: true }).fill('Pagamento proporcional')
+    await editor.getByLabel('Total pacote', { exact: true }).fill('-1')
+    await editor.locator('form').evaluate(form => { form.noValidate = true; form.requestSubmit() })
+    await editor.getByRole('alert').filter({ hasText: 'inteiro positivo ou zero' }).waitFor()
+    assert.equal(paymentRequests.length, 0)
+    await editor.getByLabel('Total pacote', { exact: true }).fill('10')
+    await editor.getByLabel('Valor acordado', { exact: true }).fill('0')
+    assert.equal(await editor.getByLabel('Subtotal', { exact: true }).inputValue(), '0')
+    await editor.getByLabel('Valor acordado', { exact: true }).fill('0.13')
+    assert.equal(await editor.getByLabel('Subtotal', { exact: true }).inputValue(), '1.3')
+    await editor.getByLabel('Subtotal', { exact: true }).fill('100')
+    await editor.getByLabel('Extravio W2D', { exact: true }).fill('2')
+    await editor.getByLabel('Extravio D2D', { exact: true }).fill('3')
+    await editor.getByLabel('Reembolso iMile', { exact: true }).fill('2')
+    assert.equal(await editor.getByLabel('Total a receber', { exact: true }).inputValue(), '97')
+    await editor.getByLabel('Total a receber', { exact: true }).fill('47.50')
+    await editor.getByLabel('PIX', { exact: true }).fill('00111222333')
+    await editor.getByLabel('Data pagamento', { exact: true }).evaluate(input => { input.type = 'text' })
+    await editor.getByLabel('Data pagamento', { exact: true }).fill('2026-02-30')
+    await editor.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await editor.getByRole('alert').filter({ hasText: 'data de pagamento válida' }).waitFor()
+    assert.equal(paymentRequests.length, 0)
+    await editor.getByLabel('Data pagamento', { exact: true }).evaluate(input => { input.type = 'date' })
+    await editor.getByLabel('Data pagamento', { exact: true }).fill('2026-09-20')
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport)
+      assert.equal(await editor.evaluate(element => element.scrollWidth <= element.clientWidth), true)
+      for (const input of await editor.locator('input, select').all()) {
+        const fits = await input.evaluate(element => { const box = element.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth })
+        assert.equal(fits, true)
+      }
+      await editor.getByLabel('Período', { exact: true }).scrollIntoViewIfNeeded()
+      await page.screenshot({ path: `tmp/browser-tests/payment-add-${viewport.width}.png` })
+    }
+    rejectPaymentWrite = true
+    await editor.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await editor.getByRole('alert').filter({ hasText: 'Permissão negada no teste de pagamento.' }).waitFor()
+    assert.equal(await editor.getByLabel('Total a receber', { exact: true }).inputValue(), '47.50')
+    assert.equal(tables.financial_payment_history.length, before.history.length)
+    rejectPaymentWrite = false; holdPaymentWrite = true
+    const requested = page.waitForRequest(request => request.method() === 'POST' && request.url().includes('/rest/v1/financial_payment_history'))
+    await editor.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await requested
+    await editor.locator('form').evaluate(form => { form.requestSubmit(); form.requestSubmit() })
+    assert.equal(pendingPaymentWrites.length, 1)
+    assert.equal(paymentRequests.at(-1).payload.id, paymentRequests.at(-2).payload.id)
+    holdPaymentWrite = false; pendingPaymentWrites.splice(0).forEach(resolve => resolve())
+    await editor.waitFor({ state: 'hidden' })
+    await page.getByRole('status').filter({ hasText: 'Pagamento adicionado.' }).waitFor()
+    assert.deepEqual({ periods: tables.financial_periods, items: tables.financial_drop_items, losses: tables.loss_events }, { periods: before.periods, items: before.items, losses: before.losses })
+    assert.equal(tables.financial_payment_history.length, before.history.length + 1)
+    const added = tables.financial_payment_history.at(-1)
+    assert.equal(added.financial_period_id, 'latest'); assert.equal(added.drop_id, 'drop1')
+    assert.equal(added.total_receivable, 47.5); assert.equal(added.paid_at, '2026-09-20T12:00:00-03:00')
+    assert.equal(JSON.parse(added.observation).movidosClosing.manualEntry, true)
+    assert.equal(JSON.parse(added.observation).movidosClosing.sourceItemId, undefined)
+    assert.ok((await table.locator('tbody tr:not(.financial-totals)').allInnerTexts()).includes(originalLine))
+    assert.match(await table.locator('.financial-totals').innerText(), /49,00/)
+    const excel = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'Baixar Excel do fechamento', exact: true }).click()
+    const workbook = XLSX.read(await readFile(await (await excel).path()), { type: 'buffer' })
+    const matrix = XLSX.utils.sheet_to_json(workbook.Sheets['Pagamento Detalhes'], { header: 1 })
+    assert.equal(matrix.length, 4); assert.equal(matrix[1][12], 49)
+    const exported = matrix.find(row => row[3] === 'Pagamento proporcional')
+    assert.equal(exported[0], 'BELLY'); assert.equal(exported[12], 47.5); assert.equal(exported[14], '00111222333')
+    await page.reload()
+    await table.getByRole('cell', { name: 'Pagamento proporcional', exact: true }).waitFor()
+    await table.locator('tr').filter({ has: page.getByRole('cell', { name: 'Pagamento proporcional', exact: true }) }).getByRole('button', { name: 'Editar', exact: true }).click()
+    assert.equal(await editor.getByLabel('DROP', { exact: true }).inputValue(), 'drop1')
+    assert.equal(await editor.getByLabel('CNPJ de referência', { exact: true }).inputValue(), 'BELLY')
+    await editor.getByLabel('Total a receber', { exact: true }).fill('0')
+    await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+    await editor.waitFor({ state: 'hidden' })
+    assert.equal(added.total_receivable, 0)
+    assert.equal(tables.financial_payment_history.length, before.history.length + 1)
+    await page.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await editor.getByLabel('Período', { exact: true }).selectOption('latest')
+    await editor.getByLabel('DROP', { exact: true }).selectOption('drop1')
+    losePaymentResponse = true
+    await editor.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await editor.getByRole('alert').waitFor()
+    losePaymentResponse = false
+    await editor.getByRole('button', { name: 'Adicionar pagamento', exact: true }).click()
+    await editor.getByRole('alert').filter({ hasText: 'já pode ter sido salvo' }).waitFor()
+    assert.equal(tables.financial_payment_history.length, before.history.length + 2)
+    await editor.getByRole('button', { name: 'Cancelar', exact: true }).click()
+    tables.user_profiles[0].role = 'operador'
+    await page.reload(); await table.waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Adicionar pagamento', exact: true }).count(), 0)
+    assert.equal(await table.getByRole('button', { name: 'Editar', exact: true }).count(), 0)
+    tables.user_profiles[0].role = 'admin'
+    console.log('PASS: proportional payment add/edit/reload/export, original rows and shared period preserved, numeric/date validation, zero, denied/uncertain writes, stable ID, double-submit guard, permissions and desktop/mobile layout')
   }
 
   await page.goto('http://127.0.0.1:5173/leitor-etiquetas')
