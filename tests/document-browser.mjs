@@ -41,6 +41,9 @@ let unchangedDropWrite = false
 let holdDropWrite = false
 const pendingDropWrites = []
 let rejectLossWrite = false
+let rejectClosingWrite = false
+let missingLogisticsColumn = false
+let rejectClosingItems = false
 let holdLossWrite = false
 const pendingLossWrites = []
 const lossRequests = []
@@ -83,6 +86,9 @@ await context.route('**/*', async route => {
       return true
     }))
     let output = filtered
+    if (table === 'financial_drop_items' && request.method() === 'POST' && rejectClosingItems) return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: '22003', message: 'Valor fora do limite no teste.' }) })
+    if (table === 'financial_periods' && request.method() === 'GET' && missingLogisticsColumn && url.searchParams.get('select')?.includes('logistics_partner')) return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: '42703', message: 'column financial_periods.logistics_partner does not exist' }) })
+    if (table === 'financial_views' && request.method() === 'POST' && rejectClosingWrite) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Permissão negada no teste de importação.' }) })
     if (table === 'loss_events' && ['POST', 'PATCH'].includes(request.method())) {
       const payload = request.postDataJSON()
       lossRequests.push({ method: request.method(), payload })
@@ -570,12 +576,37 @@ try {
   await page.getByText('O período OUTRO PERIODO da planilha não corresponde ao fechamento NOVO PERIODO.', { exact: true }).waitFor()
   assert.equal(writes.length, writesBeforeWrongPeriod)
   workbook.Sheets.Fechamento.A2.v = ''
-  await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'fechamento-teste.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
+  missingLogisticsColumn = true
+  const importFile = { name: 'fechamento-teste.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) }
+  await page.locator('.finance-upload input[type="file"]').setInputFiles(importFile)
+  await page.getByText(/Erro ao importar \(verificar a estrutura do banco\).*logistics_partner.*20260917130000_prepare_financial_logistics_columns.sql/).waitFor()
+  assert.equal(writes.length, writesBeforeWrongPeriod)
+  assert.equal(await page.locator('.finance-upload input[type="file"]').inputValue(), '')
+  missingLogisticsColumn = false
+  rejectClosingWrite = true
+  await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'fechamento-negado.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
+  await page.getByText('Erro ao importar (criar a View): Permissão negada no teste de importação. (código 42501)', { exact: true }).waitFor()
+  assert.equal(writes.length, writesBeforeWrongPeriod)
+  rejectClosingWrite = false
+  await page.locator('.finance-upload input[type="file"]').setInputFiles(importFile)
   await page.getByText('View de NOVO PERIODO importada com sucesso e consolidado geral atualizado.', { exact: true }).waitFor()
   const imported = tables.financial_periods.find(row => row.label === 'NOVO PERIODO')
   assert.equal(imported.net_amount, 999.99)
   assert.equal(imported.payment_date, '2026-09-15')
   console.log('PASS: downloaded template includes selected period, mismatches write nothing and imported closing stores net/date once per partner')
+
+  await page.getByLabel('Período do fechamento').fill('TESTE PARCIAL')
+  workbook.Sheets['Pagamento Total'].A2.v = 'TESTE PARCIAL'
+  rejectClosingItems = true
+  const writesBeforePartial = writes.length
+  await page.locator('.finance-upload input[type="file"]').setInputFiles({ ...importFile, buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
+  await page.getByText(/Erro ao importar \(gravar os itens do fechamento\).*22003.*Não reenvie a planilha/).waitFor()
+  const partialView = tables.financial_views.find(row => row.title === 'TESTE PARCIAL')
+  assert.equal(partialView.import_status, 'rascunho')
+  assert.deepEqual(writes.slice(writesBeforePartial).map(write => write.table), ['financial_views', 'financial_periods'])
+  assert.equal(tables.financial_periods.some(row => row.financial_view_id === partialView.id), true)
+  rejectClosingItems = false
+  console.log('PASS: missing logistics column stops before writes; structured errors expose stage/code and partial imports are explicitly flagged without deleting records')
 
   const oldestPeriod = { id: 'oldest', label: '01. 1Q DE ABRIL', partner, net_amount: 100, is_active: true }
   const latestPeriod = { id: 'latest', label: '33. 1Q DE AGOSTO', partner, net_amount: 200, is_active: true }
