@@ -12,6 +12,26 @@ update public.user_profiles set role = 'admin' where email = 'seu-email@empresa.
 
 As tabelas estão protegidas por RLS. A chave `publishable` fica apenas no front-end; a chave `secret` fica apenas no processo de migração/backend.
 
+## Erro ao importar fechamento: coluna logística ausente
+
+Em 17/09/2026, a consulta somente leitura do incidente de **34. 2Q DE AGOSTO** confirmou `42703: column financial_periods.logistics_partner does not exist`. A coluna logística também estava ausente em `financial_payment_history`. As duas tentativas visíveis criaram Views em `rascunho`, sem períodos vinculados; a consulta não encontrou períodos 34. Nenhum dado de produção foi alterado no diagnóstico.
+
+Executar [migrations/20260917130000_prepare_financial_logistics_columns.sql](migrations/20260917130000_prepare_financial_logistics_columns.sql) no SQL Editor do Supabase. É uma correção aditiva: inclui as colunas logísticas previstas e `financial_periods.responsible` apenas se faltarem, e solicita recarga do schema PostgREST. Não atualiza parceiros, responsáveis, valores, referências, datas, Views ou políticas. Pode ser repetida e preserva valores já preenchidos. Não reaplicar a migração antiga `20260916011000_financial_logistics_partner.sql` apenas para resolver esse erro: ela também reescreve referências e complementa registros históricos.
+
+Conferência após o SQL:
+
+```sql
+select table_name, column_name, data_type
+from information_schema.columns
+where table_schema = 'public'
+	and ((table_name in ('financial_periods', 'financial_payment_history', 'loss_events')
+				and column_name = 'logistics_partner')
+			 or (table_name = 'financial_periods' and column_name = 'responsible'))
+order by table_name, column_name;
+```
+
+A interface confere as colunas de importação e consulta valores acordados antes de criar a View. Erros retornados como objetos do Supabase agora exibem mensagem, código e etapa. O mesmo arquivo pode ser selecionado de novo após uma falha. Se uma etapa posterior falhar, o aviso identifica a View possivelmente incompleta: conferir o que foi salvo antes de reenviar. A importação continua usando requisições separadas, não uma transação única; não há exclusão nem repetição automática. Os dois rascunhos antigos foram preservados e não são completados automaticamente pelo SQL. Aplicar a correção, conferir os registros e fazer uma única nova tentativa; a planilha real do incidente não foi fornecida para validação local. Merge/deploy não executam este SQL.
+
 ## Erro de RLS ao cadastrar funcionário
 
 `new row violates row-level security policy for table "employees"` significa que a política do banco negou a criação. As correções de campos vazios do formulário não removem esse bloqueio. Não desative RLS, não coloque a chave de serviço no navegador e não transforme a conta em administrador apenas para contornar o erro.

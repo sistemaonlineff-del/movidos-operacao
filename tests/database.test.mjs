@@ -5,6 +5,55 @@ import { PGlite } from '@electric-sql/pglite'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
 
+test('closing import schema repair adds missing logistics columns without rewriting financial records or policies', async () => {
+  const database = new PGlite()
+  try {
+    const schema = await readFile('supabase/schema.sql', 'utf8')
+    await database.exec(`
+      create role authenticated;
+      create table user_profiles (id uuid primary key);
+      create table drops (id uuid primary key);
+      create table financial_views (id uuid primary key, title text, import_status text);
+      create table financial_payment_history (id integer primary key, partner text, responsible text, total_receivable numeric, observation text);
+    `)
+    await database.exec(schema.slice(schema.indexOf('create table if not exists public.financial_periods'), schema.indexOf('create table if not exists public.drop_documents')))
+    const viewSchema = await readFile('supabase/03_financial_views.sql', 'utf8')
+    await database.exec(viewSchema.slice(viewSchema.indexOf('alter table public.financial_periods'), viewSchema.indexOf('drop trigger')))
+    await database.exec(`
+      insert into financial_views values ('11111111-1111-4111-8111-111111111111','Tentativa antiga','rascunho');
+      insert into financial_periods (id,label,partner,reference_cnpj,net_amount,payment_date) values ('22222222-2222-4222-8222-222222222222','33. 1Q DE AGOSTO','Responsavel legado','BELLY',123.45,'2026-09-16');
+      insert into financial_payment_history values (1,'J&T EXPRESS LTDA','Responsavel preservado',98.76,'Observacao preservada');
+      insert into loss_events (id,financial_period_id,partner,period_label,amount,observation) values ('33333333-3333-4333-8333-333333333333','22222222-2222-4222-8222-222222222222','Responsavel legado','33. 1Q DE AGOSTO',12.34,'Extravio preservado');
+    `)
+    for (const table of ['financial_periods', 'financial_payment_history', 'loss_events', 'financial_views']) {
+      await database.exec(`alter table ${table} enable row level security; create policy existing_access on ${table} for select to authenticated using (true);`)
+    }
+    const snapshot = async () => ({
+      periods: (await database.query('select id,label,partner,reference_cnpj,net_amount,payment_date,created_at,updated_at from financial_periods order by id')).rows,
+      history: (await database.query('select id,partner,responsible,total_receivable,observation from financial_payment_history order by id')).rows,
+      losses: (await database.query('select id,financial_period_id,partner,period_label,amount,observation,created_at,updated_at from loss_events order by id')).rows,
+      views: (await database.query('select * from financial_views order by id')).rows,
+      policies: (await database.query('select tablename,policyname,roles,cmd,qual,with_check from pg_policies order by tablename,policyname')).rows,
+    })
+    const before = await snapshot()
+    await assert.rejects(database.exec("insert into financial_periods (label,partner,logistics_partner) values ('34. 2Q DE AGOSTO','IMILE DELIVERY BRAZIL LTDA','IMILE DELIVERY BRAZIL LTDA')"), /logistics_partner.*does not exist/)
+    const migration = await readFile('supabase/migrations/20260917130000_prepare_financial_logistics_columns.sql', 'utf8')
+    await database.exec(migration)
+    await database.exec(migration)
+    assert.deepEqual(await snapshot(), before)
+    assert.equal((await database.query('select logistics_partner,responsible from financial_periods')).rows[0].logistics_partner, null)
+    assert.equal((await database.query('select logistics_partner,responsible from financial_periods')).rows[0].responsible, null)
+    assert.equal((await database.query('select logistics_partner from financial_payment_history')).rows[0].logistics_partner, null)
+    assert.equal((await database.query('select logistics_partner from loss_events')).rows[0].logistics_partner, null)
+    const inserted = (await database.query("insert into financial_periods (label,partner,logistics_partner,reference_cnpj,net_amount,payment_date,financial_view_id,status) values ('34. 2Q DE AGOSTO','J&T EXPRESS LTDA','J&T EXPRESS LTDA','MOVIDOS',999.99,'2026-09-17','11111111-1111-4111-8111-111111111111','aberto') returning id,logistics_partner")).rows[0]
+    await database.query('update financial_periods set responsible=$1 where id=$2', ['Novo responsavel', inserted.id])
+    await database.exec(migration)
+    assert.deepEqual((await database.query('select logistics_partner,responsible from financial_periods where id=$1', [inserted.id])).rows[0], { logistics_partner: 'J&T EXPRESS LTDA', responsible: 'Novo responsavel' })
+    assert.deepEqual((await snapshot()).policies, before.policies)
+    assert.ok((await database.query("select relrowsecurity from pg_class where relname in ('financial_periods','financial_payment_history','loss_events','financial_views')")).rows.every(row => row.relrowsecurity))
+  } finally { await database.close() }
+})
+
 test('Last Mile vehicle migration preserves PIX and partner constraints while allowing an unselected partner', async () => {
   const database = new PGlite()
   try {

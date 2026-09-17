@@ -134,7 +134,7 @@ export default function Financeiro(){
       setClosing(closingWithPayments);setLosses(lossesForPeriod);setTitle(period);setSourceFile(file.name)
       if(invalid){setMessage(`${invalid} linha(s) precisam ser corrigidas antes da importação.`);return}
       await importView(closingWithPayments,lossesForPeriod,period,file.name,summary)
-    }catch(error){setClosing([]);setLosses([]);setMessage(error instanceof Error?error.message:'Não foi possível ler a planilha.')}
+    }catch(error){setClosing([]);setLosses([]);setMessage(text(error?.message)||'Não foi possível ler a planilha.')}finally{event.target.value=''}
   }
   const chooseHistory=async(event:ChangeEvent<HTMLInputElement>)=>{
     const file=event.target.files?.[0]
@@ -177,23 +177,43 @@ export default function Financeiro(){
   const importView=async(sourceClosing=closing,sourceLosses=losses,sourceTitle=title,sourceFileName=sourceFile,summary=new Map())=>{
     if(!supabase||!sourceClosing.length||hasInvalidRows(sourceClosing,sourceLosses))return
     setBusy(true);setMessage('Importando View...')
+    let stage='verificar a estrutura do banco',createdViewId=''
     try{
+      for(const [table,columns] of [
+        ['financial_views','id,title,source_file_name,source_rows,import_status'],
+        ['financial_periods','id,label,partner,logistics_partner,reference_cnpj,net_amount,payment_date,financial_view_id,status'],
+        ['financial_drop_items','financial_period_id,drop_name_snapshot,quantity_packages,unit_value,reimbursement,is_active,created_at'],
+        ['loss_events','financial_period_id,partner,period_label,drop_name_snapshot,waybill,label_code,bag_code,status,seller,received_at,amount,observation'],
+      ]){
+        const {error}=await supabase.from(table).select(columns).limit(0)
+        if(error){
+          const migration=['42703','PGRST204'].includes(error.code)&&text(error.message).includes('logistics_partner')?' Execute no Supabase a migração 20260917130000_prepare_financial_logistics_columns.sql e tente novamente.':''
+          throw {message:`${text(error.message)||'Estrutura indisponível.'}${migration}`,code:error.code}
+        }
+      }
+      stage='consultar os valores acordados'
+      const agreedByDrop=await latestAgreedValues()
+      stage='criar a View'
       const {data:view,error:viewError}=await supabase.from('financial_views').insert({title:sourceTitle,source_file_name:sourceFileName||`${sourceTitle}.xlsx`,source_rows:sourceClosing.length+sourceLosses.length,import_status:'rascunho'}).select().single()
       if(viewError)throw viewError
+      createdViewId=view.id
+      stage='gravar os períodos'
       const groups=[...new Map([...sourceClosing,...sourceLosses].map(row=>[`${text(row.Periodo)}|${text(row.Parceiro)}`,{label:text(row.Periodo),partner:text(row.Parceiro),logistics_partner:text(row.Parceiro),reference_cnpj:referenceCnpj(row.CNPJReferencia),...(summary.get(text(row.Parceiro))??{})}])).values()]
       const {data:periods,error:periodError}=await supabase.from('financial_periods').insert(groups.map(group=>({...group,financial_view_id:view.id,status:'aberto'}))).select()
       if(periodError)throw periodError
       const periodIndex=new Map((periods??[]).map(period=>[`${period.label}|${period.partner}`,period.id]))
-      const agreedByDrop=await latestAgreedValues()
       const chunks=<T,>(rows:T[])=>Array.from({length:Math.ceil(rows.length/400)},(_,index)=>rows.slice(index*400,index*400+400))
+      stage='gravar os itens do fechamento'
       for(const part of chunks(sourceClosing)){const {error}=await supabase.from('financial_drop_items').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${text(row.Parceiro)}`),drop_name_snapshot:text(row.Drop),quantity_packages:number(row.QuantidadePacote),unit_value:agreedByDrop.get(dropKey(row.Drop))??0,reimbursement:0})));if(error)throw error}
+      stage='gravar os extravios'
       for(const part of chunks(sourceLosses)){const {error}=await supabase.from('loss_events').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${text(row.Parceiro)}`),partner:text(row.Parceiro),period_label:text(row.Periodo),drop_name_snapshot:text(row.Drop),waybill:text(row.Waybill),label_code:text(row.CodigoEtiqueta),bag_code:text(row.Saca),status:text(row.Status),seller:text(row.Seller),received_at:excelDate(row.DataRecebimento),amount:number(row.ValorExtravio),observation:text(row.Obs)})));if(error)throw error}
+      stage='concluir a View'
       const {error:completeError}=await supabase.from('financial_views').update({import_status:'importado'}).eq('id',view.id)
       if(completeError)throw completeError
       setClosing([]);setLosses([]);setSourceFile('');setUploadPeriod('');setSelected(view.id)
       setMessage(`View de ${sourceTitle} importada com sucesso e consolidado geral atualizado.`)
       await refresh()
-    }catch(error){setMessage(error instanceof Error?error.message:'Erro ao importar.')}finally{setBusy(false)}
+    }catch(error){setMessage(`Erro ao importar (${stage}): ${text(error?.message)||'Não foi possível confirmar a gravação.'}${text(error?.code)?` (código ${text(error.code)})`:''}${createdViewId?` A View ${createdViewId} pode estar incompleta. Não reenvie a planilha antes de conferir os registros já gravados.`:''}`)}finally{setBusy(false)}
   }
   const editLoss=async(loss:any)=>{
     if(!supabase)return
