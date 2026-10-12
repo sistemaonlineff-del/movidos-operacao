@@ -1,10 +1,14 @@
 .map-card { margin-top: 1.25rem; }
+.app:has(.map-card) > .content, .map-card { min-width: 0; }
+@media(max-width:850px) { .app:has(.map-card) { grid-template-columns: minmax(0,1fr); } }
 .map-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .map-heading h2 { margin: 0; }
 .map-heading > span { color: #637278; font-size: .85rem; }
 .map-controls { display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; margin: 0 0 .8rem; }
 .map-controls label { display: grid; gap: .35rem; font-size: .78rem; font-weight: 800; color: #415258; min-width: min(100%, 280px); }
 .map-controls input { border: 1px solid #d5e4e5; border-radius: 8px; padding: .68rem .75rem; background: #fff; }
+.map-controls label { max-width: 100%; min-width: 0; flex: 1 1 240px; }
+.map-controls input, .map-controls select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
 .map-controls .secondary { padding: .65rem .9rem; }
 .map-legend { display: flex; gap: .7rem 1rem; align-items: center; flex-wrap: wrap; margin: 0 0 .8rem; color: #526166; font-size: .78rem; font-weight: 700; }
 .map-legend span { display: inline-flex; align-items: center; gap: .35rem; }

@@ -30,7 +30,7 @@ type Filters = {
 const requests = new Map<string, Promise<{ rows: DropRow[]; count: number }>>();
 
 function readPage(filters: Filters, kind = "drop_off") {
-  const identity = JSON.stringify(filters);
+  const identity = JSON.stringify([kind, filters]);
   const pending = requests.get(identity);
   if (pending) return pending;
   const request = (async () => {
@@ -286,6 +286,8 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
         "Motivo do distrato": drop.termination_reason ?? "",
         "Data da assinatura": drop.signed_at ?? "",
         "Data do distrato": drop.terminated_at ?? "",
+        "Início da operação": drop.operation_started_at ?? "",
+        "Fim da operação": drop.operation_ended_at ?? "",
         "Data do cadastro": drop.created_at ?? "",
         "Última atualização": drop.updated_at ?? "",
         Ativo: drop.is_active === false ? "NÃO" : "SIM",
@@ -338,6 +340,8 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
           <label>
             Busca
             <input
+              autoFocus
+              aria-label="Busca"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="ID, DROP, responsável ou zona…"

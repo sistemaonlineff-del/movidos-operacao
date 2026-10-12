@@ -5,6 +5,109 @@ import { PGlite } from '@electric-sql/pglite'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
 
+test('financial view controls rename atomically, isolate references, reject duplicates and deactivate without deleting', async () => {
+  const database = new PGlite()
+  try {
+    await database.exec(`create role authenticated; create role anon; create schema auth;
+      create function auth.uid() returns uuid language sql as $$select '11111111-1111-4111-8111-111111111111'::uuid$$;
+      create function is_active_user() returns boolean language sql as $$select true$$;
+      create function is_admin() returns boolean language sql as $$select current_setting('test.allowed',true)='yes'$$;
+      create function has_module_permission(text) returns boolean language sql as $$select false$$;
+      create table user_profiles(id uuid primary key); insert into user_profiles values(auth.uid());
+      create table financial_views(id uuid primary key,title text,is_active boolean default true,deactivated_reason text,deactivated_at timestamptz,deactivated_by uuid);
+      create table financial_periods(id uuid primary key,financial_view_id uuid, label text,partner text,logistics_partner text,reference_cnpj text,net_amount numeric,is_active boolean default true,deactivated_reason text,deactivated_at timestamptz,deactivated_by uuid);
+      create unique index financial_periods_view_label_partner_key on financial_periods(financial_view_id,label,partner) nulls not distinct;
+      create table financial_drop_items(id uuid primary key,financial_period_id uuid,amount numeric,is_active boolean default true,deactivated_reason text,deactivated_at timestamptz,deactivated_by uuid);
+      create table financial_payment_history(like financial_drop_items including all); alter table financial_payment_history add period_label text;
+      create table loss_events(like financial_payment_history including all);
+      create table email_logs(financial_period_id uuid,status text);
+      insert into financial_views(id,title) values('22222222-2222-4222-8222-222222222222','35. 2Q DE SETEMBRO'),('33333333-3333-4333-8333-333333333333','Outro');
+      insert into financial_periods(id,financial_view_id,label,partner,logistics_partner,reference_cnpj,net_amount) values('44444444-4444-4444-8444-444444444444','22222222-2222-4222-8222-222222222222','35. 2Q DE SETEMBRO','IMILE DELIVERY BRAZIL LTDA','IMILE DELIVERY BRAZIL LTDA','MOVIDOS',123);
+      insert into financial_drop_items(id,financial_period_id,amount) values('55555555-5555-4555-8555-555555555555','44444444-4444-4444-8444-444444444444',10);
+      insert into financial_payment_history select *, '35. 2Q DE SETEMBRO' from financial_drop_items;
+      insert into loss_events select * from financial_payment_history;`)
+    const migration = await readFile('supabase/migrations/20261012100000_financial_view_controls.sql','utf8')
+    await database.exec(migration); await database.exec(migration)
+    await database.exec("insert into financial_periods select '77777777-7777-4777-8777-777777777777',financial_view_id,label,partner,logistics_partner,'BELLY',200,true,null,null,null from financial_periods limit 1")
+    assert.equal((await database.query('select count(*) from financial_periods')).rows[0].count,2)
+    await database.exec("delete from financial_periods where id='77777777-7777-4777-8777-777777777777'")
+    const rename = "select change_financial_view('22222222-2222-4222-8222-222222222222','35. 2Q DE SETEMBRO','rename','Correcao de digitacao','35. 1Q DE SETEMBRO')"
+    await assert.rejects(database.exec(rename),/permissao/)
+    await database.exec("select set_config('test.allowed','yes',false)")
+    await assert.rejects(database.exec("select change_financial_view('22222222-2222-4222-8222-222222222222','35. 2Q DE SETEMBRO',null,'Motivo valido')"),/acao/)
+    await database.exec(rename)
+    assert.equal((await database.query('select label,net_amount from financial_periods')).rows[0].label,'35. 1Q DE SETEMBRO')
+    assert.equal((await database.query('select net_amount from financial_periods')).rows[0].net_amount,'123')
+    assert.equal((await database.query('select period_label from financial_payment_history')).rows[0].period_label,'35. 1Q DE SETEMBRO')
+    await assert.rejects(database.exec(rename),/mudou/)
+    await assert.rejects(database.exec("insert into financial_periods select '66666666-6666-4666-8666-666666666666','33333333-3333-4333-8333-333333333333',label,partner,logistics_partner,reference_cnpj,net_amount,true,null,null,null from financial_periods limit 1"),/duplicado/)
+    await database.exec("insert into financial_periods select '66666666-6666-4666-8666-666666666666','33333333-3333-4333-8333-333333333333',label,partner,logistics_partner,'BELLY',200,true,null,null,null from financial_periods limit 1")
+    await database.exec("select change_financial_view('22222222-2222-4222-8222-222222222222','35. 1Q DE SETEMBRO','deactivate','Importacao cancelada')")
+    for (const table of ['financial_drop_items','financial_payment_history','loss_events']) assert.equal((await database.query(`select is_active,amount from ${table}`)).rows[0].is_active,false)
+    assert.equal((await database.query("select is_active from financial_periods where reference_cnpj='BELLY'")).rows[0].is_active,true)
+    assert.equal((await database.query('select count(*) from financial_view_changes')).rows[0].count,2)
+  } finally { await database.close() }
+})
+
+test('registration and route guards reject new duplicates, preserve old data and audit CEP clearing', async () => {
+  const database = new PGlite()
+  try {
+    await database.exec(`create role authenticated;create role anon;create schema auth;
+      create function auth.uid() returns uuid language sql as $$select '11111111-1111-4111-8111-111111111111'::uuid$$;
+      create function can_manage_delivery_routes() returns boolean language sql as $$select current_setting('test.allowed',true)='yes'$$;
+      create table user_profiles(id uuid primary key);insert into user_profiles values(auth.uid());
+      create table drops(id uuid primary key default gen_random_uuid(),name text,partner text,municipality text,registration_type text,is_active boolean default true);
+      create table delivery_route_base(id uuid primary key default gen_random_uuid(),street text,neighborhood text,city text,postal_code text,zone text,route text,is_active boolean default true);
+      insert into drops(name,partner,municipality) values('Teste','IMILE','Suzano');
+      insert into delivery_route_base(street,neighborhood,city,zone,route,postal_code) values('Rua','Centro','Suzano','Leste','1','08600-000');`)
+    const migration = await readFile('supabase/migrations/20261012110000_registration_route_guards.sql','utf8')
+    await database.exec(migration);await database.exec(migration)
+    await assert.rejects(database.exec("insert into drops(name,partner,municipality) values(' teste ','imile','SUZANO')"),/duplicado/)
+    await database.exec("insert into drops(name,partner,municipality) values('Teste','OUTRO','Suzano')")
+    await assert.rejects(database.exec("update drops set operation_started_at='2026-10-12',operation_ended_at='2026-10-01'"),/drops_operation_dates_check/)
+    await database.exec("update drops set operation_started_at='2026-10-01',operation_ended_at='2026-10-12'")
+    await assert.rejects(database.exec("insert into delivery_route_base(street,neighborhood,city,zone,route,postal_code) values(' RUA ','centro','Suzano','leste','1','NOVO CEP')"),/duplicado/)
+    const clearing="select clear_route_postal_codes(array(select id from delivery_route_base),'Revisao dos CEPs') as count"
+    await assert.rejects(database.exec(clearing),/permissao/)
+    await database.exec("select set_config('test.allowed','yes',false)")
+    assert.equal((await database.query(clearing)).rows[0].count,1)
+    await assert.rejects(database.exec("select clear_route_postal_codes(null,'Motivo valido')"),/Selecione/)
+    assert.equal((await database.query('select postal_code from delivery_route_base')).rows[0].postal_code,null)
+    assert.equal((await database.query('select previous_values from route_postal_changes')).rows[0].previous_values[0].postal_code,'08600-000')
+    assert.equal((await database.query(clearing)).rows[0].count,0)
+  } finally {await database.close()}
+})
+
+test('invoice storage stays private and reservations preserve scope, duplicates and revoked links', async () => {
+  const database=new PGlite()
+  try{
+    await database.exec(`create role authenticated;create role anon;create role service_role;create schema storage;
+      create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
+      create table storage.objects(id uuid primary key,bucket_id text);alter table storage.objects enable row level security;
+      create policy legacy_wide_policy on storage.objects for all to authenticated using(true) with check(true);grant all on storage.objects to authenticated;grant usage on schema storage to authenticated;
+      create table drops(id uuid primary key);create table user_profiles(id uuid primary key);
+      create table financial_views(id uuid primary key,is_active boolean default true);
+      create table financial_periods(id uuid primary key,financial_view_id uuid,label text,reference_cnpj text,is_active boolean default true);
+      insert into drops values('11111111-1111-4111-8111-111111111111');
+      insert into financial_periods(id,label,reference_cnpj) values('22222222-2222-4222-8222-222222222222','35. 1Q','MOVIDOS');`)
+    const migration=await readFile('supabase/migrations/20261012120000_financial_invoices.sql','utf8')
+    await database.exec(migration);await database.exec(migration)
+    await database.exec(`insert into financial_invoice_requests(id,financial_period_id,drop_id,drop_name,period_label,partner,reference_cnpj,token_hash,expires_at) values('33333333-3333-4333-8333-333333333333','22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111','DROP','35. 1Q','IMILE','MOVIDOS',repeat('a',64),now()+interval '1 day');`)
+    const reserve=`insert into financial_invoice_files(request_id,client_upload_id,file_name,storage_path,content_hash,size_bytes,content_type) values('33333333-3333-4333-8333-333333333333',gen_random_uuid(),'nf.pdf','file.pdf',repeat('b',64),10,'application/pdf')`
+    await database.exec(reserve)
+    await assert.rejects(database.exec(reserve),/unique/)
+    await database.exec("set role authenticated")
+    await assert.rejects(database.exec('select * from financial_invoice_requests'),/permission denied/)
+    await assert.rejects(database.exec("insert into storage.objects values(gen_random_uuid(),'financial-invoices')"),/row-level security/)
+    await database.exec('reset role')
+    await database.exec("update financial_periods set label='35. 2Q'")
+    assert.ok((await database.query('select revoked_at from financial_invoice_requests')).rows[0].revoked_at)
+    await assert.rejects(database.exec(reserve),/revogado/)
+    assert.equal((await database.query('select count(*) from financial_invoice_files')).rows[0].count,1)
+    assert.equal((await database.query("select public from storage.buckets where id='financial-invoices'")).rows[0].public,false)
+  }finally{await database.close()}
+})
+
 test('closing import schema repair adds missing logistics columns without rewriting financial records or policies', async () => {
   const database = new PGlite()
   try {

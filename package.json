@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "tsc --noEmit",
-    "test": "node --test tests/financial.test.mjs tests/database.test.mjs tests/label-api.test.mjs tests/closing-mail.test.mjs tests/contract-templates.test.mjs",
+    "test": "node --test tests/financial.test.mjs tests/database.test.mjs tests/label-api.test.mjs tests/closing-mail.test.mjs tests/contract-templates.test.mjs tests/invoices.test.mjs",
     "test:browser": "node tests/document-browser.mjs",
     "test:cadastros": "node tests/cadastros-browser.mjs"
   },
@@ -16,6 +16,7 @@
     "@types/leaflet": "^1.9.22",
     "@vercel/node": "^5.5.20",
     "docxtemplater": "^3.69.3",
+    "fast-xml-parser": "^5.11.2",
     "file-saver": "^2.0.5",
     "jspdf": "^4.2.1",
     "leaflet": "^1.9.4",
@@ -33,6 +34,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.0.0",
+    "pdfjs-dist": "^6.4.299",
     "playwright": "^1.63.0",
     "typescript": "^5.0.0",
     "vite": "^6.0.0"

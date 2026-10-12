@@ -25,7 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { data: auth, error: authError } = await admin.auth.getUser(token)
   if (authError || !auth.user) return res.status(401).json({ error: 'Sessão inválida.' })
   const { data: profile } = await admin.from('user_profiles').select('role,is_active').eq('id', auth.user.id).maybeSingle()
-  if (!profile?.is_active || !['admin', 'financeiro'].includes(profile.role)) return res.status(403).json({ error: 'Apenas Financeiro ou Administrador pode substituir o histórico.' })
+  if (!profile?.is_active || profile.role !== 'admin') return res.status(403).json({ error: 'Apenas Administrador pode substituir toda a base histórica.' })
 
   const input = Array.isArray(req.body?.rows) ? req.body.rows : []
   const rows: HistoryRow[] = input.map((row: any) => ({

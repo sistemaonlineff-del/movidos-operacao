@@ -1,0 +1,20 @@
+.invoice-public{max-width:760px;min-height:100vh;margin:auto;padding:32px 24px;background:#fff;color:#21272b}
+.invoice-public>img{width:132px;height:auto;object-fit:contain}
+.invoice-public h1,.invoice-management h1{font-size:26px;letter-spacing:0;line-height:1.2}
+.invoice-public h2{font-size:19px;overflow-wrap:anywhere}
+.invoice-scope{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;border-block:1px solid #d9dfe2;padding:20px 0}
+.invoice-scope dt{font-size:13px;color:#56636b}.invoice-scope dd{margin:4px 0;overflow-wrap:anywhere}
+.invoice-public form{display:grid;gap:16px;margin:28px 0}.invoice-public form button{justify-self:start}
+.invoice-public label,.invoice-filters label,.invoice-link label{display:flex;flex-direction:column;gap:7px;min-width:0}
+.invoice-public input,.invoice-link input,.invoice-filters select{max-width:100%;min-width:0;box-sizing:border-box}
+.invoice-public li{padding:9px 0;overflow-wrap:anywhere}.invoice-public li small{display:block;color:#56636b}
+.invoice-management>header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.invoice-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:20px 0}
+.invoice-link{border-block:1px solid #cbd4d8;padding:18px 0;display:flex;flex-wrap:wrap;align-items:end;gap:12px}.invoice-link strong{flex-basis:100%;overflow-wrap:anywhere}.invoice-link label{flex:1 1 300px}
+.invoice-table{overflow:auto;max-width:100%}.invoice-table table{width:100%;min-width:880px}.invoice-table td{vertical-align:top}.invoice-table button{display:block;margin:3px 0;max-width:240px;overflow-wrap:anywhere;white-space:normal}.invoice-table small{display:block}
+.invoice-reconciliation,.invoice-archive{border-top:1px solid #cbd4d8;margin-top:24px;padding-top:16px}.invoice-reconciliation h2{font-size:19px}.invoice-reconciliation>div{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:8px 0}.invoice-reconciliation span,.invoice-archive h3{overflow-wrap:anywhere}.invoice-archive h3{font-size:16px}
+.app:has(.invoice-management)>.content,.invoice-management{min-width:0}
+@media(max-width:850px){.app:has(.invoice-management){grid-template-columns:minmax(0,1fr)}}
+.invoice-public [role=alert],.invoice-management [role=alert]{color:#a52324;background:#fff1f1;padding:12px;overflow-wrap:anywhere}
+@media(max-width:720px){.invoice-public{padding:24px 16px}.invoice-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.invoice-public h1,.invoice-management h1{font-size:23px}}
+@media(max-width:390px){.invoice-filters,.invoice-scope{grid-template-columns:minmax(0,1fr)}}

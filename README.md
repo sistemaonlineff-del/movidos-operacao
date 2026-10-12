@@ -2,6 +2,33 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Atualização operacional e financeira (12/10/2026)
+
+Implementada localmente; publicação não aplica SQL automaticamente. Antes do uso real, revisar backup e seguir a ordem em [supabase/README.md](supabase/README.md#atualização-de-12102026). Nenhuma View, NF, rota ou cadastro real foi alterado nesta entrega.
+
+- **Rotas:** Esvaziar CEPs filtrados exige motivo e guarda valores anteriores na auditoria. Limpa somente endereços-base ativos do filtro; não altera volumes. Importação ignora duplicados existentes e repetidos na planilha pela combinação rua, bairro, cidade, zona e rota, ignorando CEP/sequência. O banco também protege contra inserções concorrentes. Registros antigos não são apagados.
+- **Cadastros:** duplicidade bloqueada por nome, parceiro, município e tipo, normalizando caixa, acentos e espaços. Mesmo nome em parceiros/cidades diferentes continua permitido. CPF/CNPJ não vira chave única. Busca recebe foco ao abrir a lista. Início e fim da operação são independentes de contrato/distrato e não mudam status; fim não pode preceder início.
+- **Mapa:** filtros combináveis de cidade, status e situação cadastral (não desativados/desativados/todos), ajustados para celular. Somente coordenadas válidas já cadastradas são exibidas.
+- **Financeiro:** Pagamento Total e filtros separam MOVIDOS, BELLY e JOTA EXPRESS. O modelo inclui `CNPJReferencia` também em Pagamento Total, uma linha por parceiro/empresa. Modelo antigo sem referência só é aceito com uma empresa possível. Alterar referência de um pagamento não modifica o período compartilhado; pagamento manual de outra empresa sem líquido próprio fica pendente, sem usar o líquido da MOVIDOS.
+- **Views:** Corrigir período renomeia a View e rótulos vinculados em uma transação, sem reimportar valores. Excluir view desativa View/períodos/itens/pagamentos/extravios, preservando registros e auditoria. Exigem gerenciamento financeiro e motivo; correção bloqueia conflitos e e-mails já registrados. Alterações do período revogam links de NF, preservando arquivos. Substituição da base inteira fica separada em Administração da base histórica e exige administrador, inclusive na API.
+- **Anotações:** gerais do financeiro e específicas por View. Anotação da View e reembolso comparam o conteúdo anterior para não sobrescrever alterações concorrentes. Nova View não regrava as demais.
+- **Contratos/distratos:** dois modelos DOCX administrativos independentes, sem sobrescrever o outro modelo ou PDFs armazenados. PDFs com margens A4, alinhamento, negrito de parágrafo, paginação de textos longos e rodapé numerado. Não é conversão fiel de todo recurso do Word: imagens, tabelas complexas, estilos mistos e cabeçalhos personalizados exigem conferência. Modelo indisponível gera erro em vez de usar silenciosamente versão antiga.
+- **CNAB:** data e CPF/CNPJ opcionais na planilha, inclusive cabeçalhos. Data ausente usa a padrão editável; preenchida inválida bloqueia. Documento pode ser derivado de PIX CPF/CNPJ; caso ausente, usa tipo zero e documento zerado. Aceitação desse caso pelo Banco Inter ainda exige homologação; nenhum arquivo foi transmitido ou pagamento efetuado. Referência financeira identifica empresa, não substitui documento fiscal nem altera automaticamente a conta pagadora do CNAB.
+
+### Notas fiscais por DROP
+
+**Financeiro > Notas fiscais** parte dos pagamentos/itens do fechamento, incluindo quem não enviou. Filtros: quinzena, parceiro, empresa e recebimento. Uma solicitação por período interno e DROP; novos períodos nunca reutilizam a anterior.
+
+Gerentes geram/copiam links individuais e os enviam manualmente. `/enviar-nf#token=...` dispensa login e mostra apenas o escopo daquele link e nomes/datas dos arquivos recebidos. Validade de 30 dias; renovar invalida o anterior e mantém arquivos. Quem possuir o link pode enviar e consultar esse resumo: tratá-lo como confidencial. Não há envio automático por WhatsApp/e-mail.
+
+PDF/XML de até 3 MB, até 20 reservas por solicitação. API valida extensão/conteúdo, rejeita entidades XML externas, confere vínculo/período ativo e salva caminhos únicos em bucket privado. Hash impede repetição idêntica dentro da solicitação. Validação estrutural não comprova autenticidade fiscal nem substitui antivírus; revisão fiscal continua necessária. Recebida exige armazenamento e registro confirmados, não apenas geração do link.
+
+Falha de confirmação aparece em **Envios sem confirmação**. **Conferir armazenamento** exige gerenciamento financeiro e compara tamanho/hash antes de confirmar, sem reenviar. **Notas fora da base ativa** mantém downloads de fechamentos arquivados. Downloads autenticados usam URL assinada por 60 segundos; página pública não baixa NFs. Nomes ambíguos exigem vínculo explícito no pagamento. CNPJ do pagamento manual divergente do período bloqueia o link até regularizar o fechamento.
+
+Servidor Vercel reutiliza `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY`, somente no servidor. Não colocar chave de serviço em `VITE_*`. Vite simples não executa a nova API; testes de navegador usam respostas simuladas. Publicar frontend/API após SQL para homologar o fluxo em ambiente autorizado.
+
+Verificação: `npm test`, `npm run build`, TypeScript das APIs e `npm run test:browser`. Testes interceptam rede externa e cobrem NFs, permissões/recuperação, Views, datas, mapa, rotas, CNAB e PDFs renderizados; capturas em `tmp/browser-tests`. Homologação Supabase/Vercel, validade fiscal e aceitação bancária não foram executadas.
+
 ## Primeira entrega
 
 - Login seguro via Supabase Auth e recuperação de senha por e-mail.
@@ -29,7 +56,7 @@ A base Access foi inventariada e contém 1.102 Drops, 1.623 itens financeiros, 4
 - Contratos usam a data selecionada no cadastro. Distratos incluem as datas e o motivo preenchido; salvar o cadastro persiste esses campos. O rascunho em Mensagens prontas já possui salvamento e foi validado após recarregar a página.
 - A câmera aceita capturas consecutivas com até 20 fotos pendentes e três leituras simultâneas, em ordem de captura. A fila não pode ser apagada enquanto está processando. Falhas na gravação da pré-rota ficam visíveis; fotos da fila permanecem apenas na sessão da página.
 - Pagamento Detalhes separa Responsável e Parceiro. `logistics_partner` representa o parceiro logístico; o campo antigo `partner` dos períodos é preservado para não fundir períodos históricos nem alterar seus vínculos. A migração atribui IMILE aos registros existentes e MOVIDOS à referência financeira, sem modificar o CNPJ/CPF real dos drops.
-- O modelo baixado na importação inclui a aba **Pagamento Total**, com `Periodo`, `Parceiro`, `TotalLiquidoAReceber` e `DataPagamento`. O período da tela já vem preenchido no modelo baixado. Preencher uma linha por parceiro; cada arquivo pertence a um período. Zero é aceito; valores ausentes, datas inválidas e parceiros duplicados são rejeitados antes de importar. Um período preenchido em qualquer aba que divirja do período da tela bloqueia a importação antes de gravar. Modelos anteriores sem `Periodo` em Pagamento Total e células de período vazias continuam usando o período da tela. O resumo é salvo uma única vez por período/parceiro.
+- O modelo inclui **Pagamento Total**, com `Periodo`, `Parceiro`, `TotalLiquidoAReceber`, `DataPagamento` e `CNPJReferencia`. Uma linha por parceiro/empresa e um período por arquivo. Zero é aceito; valores ausentes, datas inválidas e resumos duplicados bloqueiam a importação. Período divergente em qualquer aba é recusado. Modelos anteriores sem período usam o da tela; sem CNPJ de referência só são aceitos se a empresa for inequívoca.
 - Os seletores de período das telas financeiras e as linhas de Pagamento Total usam a numeração dos fechamentos em ordem decrescente, com os mais recentes primeiro. As fórmulas e os registros históricos não são alterados.
 - **Total líquido a receber** tem separadores verticais no cabeçalho, no total filtrado e em todas as linhas, mantendo a cor de alerta para valores negativos.
 - **Pagamento Detalhes:** o botão superior **Baixar Excel do fechamento** baixa `pagamento-detalhes.xlsx` com as mesmas quinze colunas de dados, ordem das linhas, filtros de período/parceiro/DROP e total filtrado da tela. Não inclui botões de ação. Valores e quantidades são números; PIX e demais identificadores permanecem texto, incluindo zeros à esquerda. Datas são exibidas no formato brasileiro da tabela. O **Gerar PDF** individual e os anexos de e-mail continuam em PDF.

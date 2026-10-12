@@ -8,7 +8,7 @@ export function createClosingTemplate(period = '') {
   const sheets = [
     ['Fechamento', [['Periodo', 'Parceiro', 'Drop', 'QuantidadePacote', 'CNPJReferencia'], [period, PARTNERS[0], '', '', 'MOVIDOS']]],
     ['Extravios', [['Periodo', 'Parceiro', 'Drop', 'Waybill', 'CodigoEtiqueta', 'Saca', 'Status', 'Seller', 'DataRecebimento', 'ValorExtravio', 'Obs', 'CNPJReferencia']]],
-    ['Pagamento Total', [['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'], [period, PARTNERS[0], '', '']]],
+    ['Pagamento Total', [['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento', 'CNPJReferencia'], [period, PARTNERS[0], '', '', 'MOVIDOS']]],
   ] as const
   for (const [name, rows] of sheets) {
     const sheet = XLSX.utils.aoa_to_sheet(rows.map(row => [...row]))
@@ -42,7 +42,10 @@ export function readHistoricalPayments(workbook: XLSX.WorkBook) {
   return [...payments.values()]
 }
 
-export function readClosingSummary(workbook: XLSX.WorkBook, partners: string[], expectedPeriod?: string) {
+export const closingIdentity = (partner: unknown, reference: unknown) => `${normalizePartner(text(partner))}|${text(reference).toUpperCase() || 'MOVIDOS'}`
+
+export function readClosingSummary(workbook: XLSX.WorkBook, partners: Array<string | { partner: string; referenceCnpj: string }>, expectedPeriod?: string) {
+  const groups = partners.map(group => typeof group === 'string' ? { partner: group, referenceCnpj: 'MOVIDOS', identity: group } : { ...group, identity: closingIdentity(group.partner, group.referenceCnpj) })
   const sheet = workbook.Sheets['Pagamento Total']
   if (!sheet) throw new Error('Baixe o modelo atualizado e preencha a aba Pagamento Total.')
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
@@ -54,6 +57,10 @@ export function readClosingSummary(workbook: XLSX.WorkBook, partners: string[], 
       throw new Error(`Pagamento Total: o período ${period} não corresponde ao fechamento ${expectedPeriod.trim()}.`)
     }
     const partner = normalizePartner(text(row.Parceiro))
+    const candidates = groups.filter(group => group.partner === partner)
+    const reference = text(row.CNPJReferencia).toUpperCase() || (candidates.length === 1 ? candidates[0].referenceCnpj : '')
+    const group = candidates.find(group => group.referenceCnpj === reference)
+    if (!reference && candidates.length > 1) throw new Error(`Pagamento Total: informe CNPJReferencia para separar as empresas de ${partner}.`)
     const amount = text(row.TotalLiquidoAReceber).replace(/R\$\s*/g, '').replace(/\s/g, '')
     const numeric = amount.includes(',') ? amount.replace(/\./g, '').replace(',', '.') : amount
     let paymentDate = ''
@@ -64,12 +71,12 @@ export function readClosingSummary(workbook: XLSX.WorkBook, partners: string[], 
       const decoded = XLSX.SSF.parse_date_code(input, { date1904: workbook.Workbook?.WBProps?.date1904 })
       if (decoded) paymentDate = parsePaymentDate(`${decoded.y}-${decoded.m}-${decoded.d}`)
     } else paymentDate = parsePaymentDate(input)
-    if (!partners.includes(partner) || !amount || !Number.isFinite(Number(numeric)) || !paymentDate) {
+    if (!group || !amount || !Number.isFinite(Number(numeric)) || !paymentDate) {
       throw new Error(`Pagamento Total: confira parceiro, total líquido e data de pagamento (${partner || 'sem parceiro'}).`)
     }
-    if (result.has(partner)) throw new Error(`Pagamento Total: informe apenas uma linha para ${partner}.`)
-    result.set(partner, { net_amount: number(row.TotalLiquidoAReceber), payment_date: paymentDate })
+    if (result.has(group.identity)) throw new Error(`Pagamento Total: informe apenas uma linha para ${partner} / ${reference}.`)
+    result.set(group.identity, { net_amount: number(row.TotalLiquidoAReceber), payment_date: paymentDate })
   }
-  if (partners.some(partner => !result.has(partner))) throw new Error('Pagamento Total: informe total líquido e data para cada parceiro do fechamento.')
+  if (groups.some(group => !result.has(group.identity))) throw new Error('Pagamento Total: informe total líquido e data para cada parceiro e CNPJ do fechamento.')
   return result
 }

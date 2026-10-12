@@ -252,7 +252,7 @@ export function buildDetails(
         periodId: row.financial_period_id,
         period: row.period_label ?? period?.label ?? "Sem período",
         partner: financialPartner({ ...period, ...row }),
-        referenceCnpj: meta.manualEntry && meta.referenceCnpj ? meta.referenceCnpj : period?.reference_cnpj || "MOVIDOS",
+        referenceCnpj: meta.referenceCnpj || period?.reference_cnpj || "MOVIDOS",
         drop: row.drop_name_snapshot ?? "",
       };
       const exact = registrations.get(
@@ -365,17 +365,30 @@ export function buildDetails(
         a.drop.localeCompare(b.drop),
     );
 }
-export function paymentTotalTarget(periods: DataRow[], views: DataRow[], label: string, partner: string) {
-  const selected = periods.filter(period => period.label === label && financialPartner(period) === partner);
+export function paymentTotalTarget(periods: DataRow[], views: DataRow[], label: string, partner: string, referenceCnpj = "") {
+  const selected = periods.filter(period => period.label === label && financialPartner(period) === partner && (!referenceCnpj || (period.reference_cnpj || "MOVIDOS") === referenceCnpj));
   if (!selected.length) return null;
   if (selected.length === 1) return { table: "financial_periods", record: selected[0] };
   const view = views.find(view => view.id === selected[0].financial_view_id);
   if (!view || selected.some(period => period.financial_view_id !== view.id || period.net_amount != null) ||
-      periods.some(period => period.financial_view_id === view.id && (period.label !== label || financialPartner(period) !== partner))) return null;
+      periods.some(period => period.financial_view_id === view.id && (period.label !== label || financialPartner(period) !== partner || (referenceCnpj && (period.reference_cnpj || "MOVIDOS") !== referenceCnpj)))) return null;
   return { table: "financial_views", record: view };
 }
 
 export function buildTotals(
+  details: DataRow[], losses: DataRow[], periods: DataRow[], views: DataRow[], periodFilter = "", partnerFilter = "", referenceFilter = "",
+) {
+  const reference = (row: DataRow) => row.referenceCnpj || row.reference_cnpj || "MOVIDOS";
+  const references = [...new Set([...periods, ...details, ...losses.filter(row => !row.financial_period_id)].map(reference))];
+  return references.filter(value => !referenceFilter || value === referenceFilter).flatMap(value => {
+    const selectedPeriods = periods.filter(period => reference(period) === value);
+    const ids = new Set(selectedPeriods.map(period => period.id));
+    const selectedViews = views.filter(view => periods.filter(period => period.financial_view_id === view.id).every(period => reference(period) === value));
+    return buildReferenceTotals(details.filter(row => reference(row) === value), losses.filter(row => row.financial_period_id ? ids.has(row.financial_period_id) : reference(row) === value), selectedPeriods, selectedViews, periodFilter, partnerFilter).map(row => ({ ...row, referenceCnpj: value }));
+  });
+}
+
+function buildReferenceTotals(
   details: DataRow[],
   losses: DataRow[],
   periods: DataRow[],

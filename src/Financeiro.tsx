@@ -1,11 +1,13 @@
 // @ts-nocheck
-import { ChangeEvent, useEffect, useState } from 'react'
+import { ChangeEvent, useEffect, useRef, useState } from 'react'
+import { useAccess } from './access'
+import DashboardNotes from './DashboardNotes'
 import * as XLSX from 'xlsx'
-import { buildDetails, buildTotals, notes } from './financialData'
+import { buildDetails, buildTotals, financialPartner, notes } from './financialData'
 import { readFinancialRows } from './financialStore'
 import { supabase } from './lib/supabase'
 import { normalizePartner } from './dropOptions'
-import { downloadClosingTemplate, readClosingSummary } from './closingSpreadsheet'
+import { closingIdentity, downloadClosingTemplate, readClosingSummary } from './closingSpreadsheet'
 
 type Row = Record<string, unknown>
 type View = { id:string; title:string; source_file_name:string; source_rows:number; import_status:string; created_at:string; notes?:string|null }
@@ -41,6 +43,11 @@ const money=(value:unknown)=>number(value).toLocaleString('pt-BR',{style:'curren
 const reimbursementFromNotes=(notes:string|null|undefined)=>{try{const parsed=JSON.parse(notes??'{}');return number(parsed.reimbursement ?? parsed.summary?.reimbursement)}catch{return 0}}
 
 export default function Financeiro(){
+  const {can,isAdmin}=useAccess()
+  const canManage=can('financeiro_manage')
+  const actionRunning=useRef(false)
+  const [viewAction,setViewAction]=useState<'rename'|'deactivate'|null>(null)
+  const [newTitle,setNewTitle]=useState(''),[actionReason,setActionReason]=useState(''),[viewNote,setViewNote]=useState('')
   const [views,setViews]=useState<View[]>([])
   const [selected,setSelected]=useState('')
   const [closing,setClosing]=useState<Row[]>([])
@@ -90,6 +97,8 @@ export default function Financeiro(){
   useEffect(()=>{void refresh()},[])
   useEffect(()=>{
     if(!selected||!supabase)return
+    let current=true
+    setDetails([]);setViewPeriods([]);setViewLosses([]);setViewTotals([])
     const load=async()=>{
       try {
         const [allPeriods,allItems,allLosses,allHistory,allDrops]=await Promise.all(['financial_periods','financial_drop_items','loss_events','financial_payment_history','drops'].map(readFinancialRows))
@@ -97,15 +106,42 @@ export default function Financeiro(){
         const ids=new Set(periods.map(period=>period.id))
         const items=allItems.filter(item=>ids.has(item.financial_period_id)), loss=allLosses.filter(item=>ids.has(item.financial_period_id)), history=allHistory.filter(item=>ids.has(item.financial_period_id))
         const rows=buildDetails(history,items,loss,periods,allDrops)
+        if(!current)return
         setDetails(rows.map(row=>({...row,closingRow:row,period:periods.find(period=>period.id===row.periodId),drop_name_snapshot:row.drop,quantity_packages:row.packages,standard_total:row.packages*.25,agreed_value:row.unit,gross_amount:row.subtotal,loss_amount:row.loss,receivable_amount:row.receivable})))
         setViewPeriods(periods);setViewLosses(loss);setViewTotals(buildTotals(rows,loss,periods,views.filter(view=>view.id===selected)))
-      } catch(error) { setMessage(error?.message??'Não foi possível carregar o fechamento.');setDetails([]);setViewLosses([]);setViewTotals([]) }
+      } catch(error) { if(current){setMessage(error?.message??'Não foi possível carregar o fechamento.');setDetails([]);setViewLosses([]);setViewTotals([])} }
     }
     void load()
+    return ()=>{current=false}
   },[selected,views])
-  useEffect(()=>{setReimbursement(String(reimbursementFromNotes(views.find(view=>view.id===selected)?.notes)))},[selected,views])
+  useEffect(()=>{setReimbursement(String(reimbursementFromNotes(views.find(view=>view.id===selected)?.notes)));setViewNote(notes(views.find(view=>view.id===selected)?.notes).annotation??'');setViewAction(null)},[selected,views])
+  const changeView=async(event)=>{
+    event.preventDefault()
+    if(!supabase||!canManage||actionRunning.current)return
+    const view=views.find(view=>view.id===selected)
+    if(!view||!viewAction)return
+    actionRunning.current=true;setBusy(true)
+    try{
+      const {error}=await supabase.rpc('change_financial_view',{view_id:view.id,expected_title:view.title,action:viewAction,reason:actionReason,new_title:viewAction==='rename'?newTitle.trim():null})
+      if(error)throw error
+      setViewAction(null);setSelected('');setDetails([]);setViewPeriods([]);setViewLosses([]);setViewTotals([])
+      await refresh();setMessage(viewAction==='rename'?'Período corrigido sem reimportar valores.':'View excluída dos totais. Histórico preservado.')
+    }catch(error){setMessage(error?.message??'Não foi possível alterar a View.')}finally{actionRunning.current=false;setBusy(false)}
+  }
+  const saveViewNote=async()=>{
+    if(!supabase||!canManage||busy)return
+    const view=views.find(view=>view.id===selected);if(!view)return
+    setBusy(true)
+    let query=supabase.from('financial_views').update({notes:JSON.stringify({...notes(view.notes),annotation:viewNote})}).eq('id',view.id).eq('is_active',true)
+    query=view.notes==null?query.is('notes',null):query.eq('notes',view.notes)
+    const result=await query.select('id')
+    setBusy(false)
+    if(result.error||result.data?.length!==1){setMessage(result.error?.message??'A anotação mudou. Atualize antes de salvar.');return}
+    await refresh();setMessage('Anotação salva nesta View.')
+  }
 
   const choose=async(event:ChangeEvent<HTMLInputElement>)=>{
+    if(!canManage||busy)return
     const file=event.target.files?.[0]
     if(!file)return
     const period=uploadPeriod.trim()
@@ -127,10 +163,9 @@ export default function Financeiro(){
       const closingForPeriod=close.map(row=>({...row,Periodo:period,Parceiro:normalizePartner(text(row.Parceiro)),CNPJReferencia:referenceCnpj(row.CNPJReferencia)}) as Row)
       const lossesForPeriod=loss.map(row=>({...row,Periodo:period,Parceiro:normalizePartner(text(row.Parceiro)),CNPJReferencia:referenceCnpj(row.CNPJReferencia)}) as Row)
       const invalid=closingForPeriod.filter(row=>!required(row,['Periodo','Parceiro','Drop','CNPJReferencia'])||!validReferenceCnpj(row.CNPJReferencia)||!text(row.QuantidadePacote)||number(row.QuantidadePacote)<0).length+lossesForPeriod.filter(row=>!required(row,['Periodo','Parceiro','Drop','CNPJReferencia'])||!validReferenceCnpj(row.CNPJReferencia)||(text(row.DataRecebimento)&&!excelDate(row.DataRecebimento))).length
-      const references=new Map<string,string>()
-      for(const row of [...closingForPeriod,...lossesForPeriod]){const key=`${text(row.Periodo)}|${text(row.Parceiro)}`,value=referenceCnpj(row.CNPJReferencia),existing=references.get(key);if(existing&&existing!==value)throw new Error(`O parceiro ${text(row.Parceiro)} possui mais de um CNPJ de referÃªncia no mesmo fechamento.`);references.set(key,value)}
-      const summary=readClosingSummary(workbook,[...new Set([...closingForPeriod,...lossesForPeriod].map(row=>text(row.Parceiro)))],period)
-      const closingWithPayments=closingForPeriod.map(row=>({...row,...summary.get(text(row.Parceiro))}))
+      const references=[...new Map([...closingForPeriod,...lossesForPeriod].map(row=>[closingIdentity(row.Parceiro,row.CNPJReferencia),{partner:text(row.Parceiro),referenceCnpj:referenceCnpj(row.CNPJReferencia)}])).values()]
+      const summary=readClosingSummary(workbook,references,period)
+      const closingWithPayments=closingForPeriod.map(row=>({...row,...summary.get(closingIdentity(row.Parceiro,row.CNPJReferencia))}))
       setClosing(closingWithPayments);setLosses(lossesForPeriod);setTitle(period);setSourceFile(file.name)
       if(invalid){setMessage(`${invalid} linha(s) precisam ser corrigidas antes da importação.`);return}
       await importView(closingWithPayments,lossesForPeriod,period,file.name,summary)
@@ -138,8 +173,8 @@ export default function Financeiro(){
   }
   const chooseHistory=async(event:ChangeEvent<HTMLInputElement>)=>{
     const file=event.target.files?.[0]
-    if(!file||!supabase)return
-    if(!confirm('Esta ação apaga todas as Views financeiras, fechamentos e extravios atuais e substitui tudo pelos dados deste arquivo. Deseja continuar?')){event.target.value='';return}
+    if(!file||!supabase||!isAdmin||busy)return
+    if(!confirm('Esta ação desativa TODAS as Views financeiras, fechamentos e extravios atuais e substitui a base ativa pelos dados deste arquivo. Não use para um novo fechamento ou para corrigir somente uma quinzena. Deseja continuar?')){event.target.value='';return}
     setBusy(true);setMessage('Lendo e substituindo a base histórica...')
     try{
       const workbook=XLSX.read(await file.arrayBuffer(),{type:'array'})
@@ -175,7 +210,7 @@ export default function Financeiro(){
     }catch(error){setMessage(error instanceof Error?error.message:'Não foi possível importar o histórico.')}finally{setBusy(false);event.target.value=''}
   }
   const importView=async(sourceClosing=closing,sourceLosses=losses,sourceTitle=title,sourceFileName=sourceFile,summary=new Map())=>{
-    if(!supabase||!sourceClosing.length||hasInvalidRows(sourceClosing,sourceLosses))return
+    if(!supabase||!canManage||!sourceClosing.length||hasInvalidRows(sourceClosing,sourceLosses))return
     setBusy(true);setMessage('Importando View...')
     let stage='verificar a estrutura do banco',createdViewId=''
     try{
@@ -193,20 +228,23 @@ export default function Financeiro(){
       }
       stage='consultar os valores acordados'
       const agreedByDrop=await latestAgreedValues()
+      const existingPeriods=await readFinancialRows('financial_periods')
+      const repeated=[...sourceClosing,...sourceLosses].find(row=>existingPeriods.some(period=>dropKey(period.label)===dropKey(row.Periodo)&&closingIdentity(financialPartner(period),period.reference_cnpj)===closingIdentity(row.Parceiro,row.CNPJReferencia)))
+      if(repeated)throw new Error('Já existe fechamento ativo para este período, parceiro e CNPJ. Corrija o período ou exclua logicamente a View anterior antes de importar novamente.')
       stage='criar a View'
       const {data:view,error:viewError}=await supabase.from('financial_views').insert({title:sourceTitle,source_file_name:sourceFileName||`${sourceTitle}.xlsx`,source_rows:sourceClosing.length+sourceLosses.length,import_status:'rascunho'}).select().single()
       if(viewError)throw viewError
       createdViewId=view.id
       stage='gravar os períodos'
-      const groups=[...new Map([...sourceClosing,...sourceLosses].map(row=>[`${text(row.Periodo)}|${text(row.Parceiro)}`,{label:text(row.Periodo),partner:text(row.Parceiro),logistics_partner:text(row.Parceiro),reference_cnpj:referenceCnpj(row.CNPJReferencia),...(summary.get(text(row.Parceiro))??{})}])).values()]
+      const groups=[...new Map([...sourceClosing,...sourceLosses].map(row=>[`${text(row.Periodo)}|${closingIdentity(row.Parceiro,row.CNPJReferencia)}`,{label:text(row.Periodo),partner:text(row.Parceiro),logistics_partner:text(row.Parceiro),reference_cnpj:referenceCnpj(row.CNPJReferencia),...(summary.get(closingIdentity(row.Parceiro,row.CNPJReferencia))??{})}])).values()]
       const {data:periods,error:periodError}=await supabase.from('financial_periods').insert(groups.map(group=>({...group,financial_view_id:view.id,status:'aberto'}))).select()
       if(periodError)throw periodError
-      const periodIndex=new Map((periods??[]).map(period=>[`${period.label}|${period.partner}`,period.id]))
+      const periodIndex=new Map((periods??[]).map(period=>[`${period.label}|${closingIdentity(period.partner,period.reference_cnpj)}`,period.id]))
       const chunks=<T,>(rows:T[])=>Array.from({length:Math.ceil(rows.length/400)},(_,index)=>rows.slice(index*400,index*400+400))
       stage='gravar os itens do fechamento'
-      for(const part of chunks(sourceClosing)){const {error}=await supabase.from('financial_drop_items').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${text(row.Parceiro)}`),drop_name_snapshot:text(row.Drop),quantity_packages:number(row.QuantidadePacote),unit_value:agreedByDrop.get(dropKey(row.Drop))??0,reimbursement:0})));if(error)throw error}
+      for(const part of chunks(sourceClosing)){const {error}=await supabase.from('financial_drop_items').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${closingIdentity(row.Parceiro,row.CNPJReferencia)}`),drop_name_snapshot:text(row.Drop),quantity_packages:number(row.QuantidadePacote),unit_value:agreedByDrop.get(dropKey(row.Drop))??0,reimbursement:0})));if(error)throw error}
       stage='gravar os extravios'
-      for(const part of chunks(sourceLosses)){const {error}=await supabase.from('loss_events').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${text(row.Parceiro)}`),partner:text(row.Parceiro),period_label:text(row.Periodo),drop_name_snapshot:text(row.Drop),waybill:text(row.Waybill),label_code:text(row.CodigoEtiqueta),bag_code:text(row.Saca),status:text(row.Status),seller:text(row.Seller),received_at:excelDate(row.DataRecebimento),amount:number(row.ValorExtravio),observation:text(row.Obs)})));if(error)throw error}
+      for(const part of chunks(sourceLosses)){const {error}=await supabase.from('loss_events').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${closingIdentity(row.Parceiro,row.CNPJReferencia)}`),partner:text(row.Parceiro),period_label:text(row.Periodo),drop_name_snapshot:text(row.Drop),waybill:text(row.Waybill),label_code:text(row.CodigoEtiqueta),bag_code:text(row.Saca),status:text(row.Status),seller:text(row.Seller),received_at:excelDate(row.DataRecebimento),amount:number(row.ValorExtravio),observation:text(row.Obs)})));if(error)throw error}
       stage='concluir a View'
       const {error:completeError}=await supabase.from('financial_views').update({import_status:'importado'}).eq('id',view.id)
       if(completeError)throw completeError
@@ -216,7 +254,7 @@ export default function Financeiro(){
     }catch(error){setMessage(`Erro ao importar (${stage}): ${text(error?.message)||'Não foi possível confirmar a gravação.'}${text(error?.code)?` (código ${text(error.code)})`:''}${createdViewId?` A View ${createdViewId} pode estar incompleta. Não reenvie a planilha antes de conferir os registros já gravados.`:''}`)}finally{setBusy(false)}
   }
   const editLoss=async(loss:any)=>{
-    if(!supabase)return
+    if(!supabase||!canManage)return
     const amount=prompt('Valor do extravio (R$):',String(loss.amount??0));if(amount===null)return
     const observation=prompt('Observação / motivo da alteração:',loss.observation??'');if(observation===null)return
     const {error}=await supabase.from('loss_events').update({amount:number(amount),observation}).eq('id',loss.id)
@@ -224,19 +262,29 @@ export default function Financeiro(){
     if(!error){await loadGeneral();setSelected('');setTimeout(()=>setSelected(views.find(view=>view.id===selected)?.id??''),0)}
   }
   const saveReimbursement=async()=>{
-    if(!supabase||!selected)return
+    if(!supabase||!selected||!canManage||actionRunning.current)return
+    const view=views.find(view=>view.id===selected)
+    if(!view)return
+    actionRunning.current=true;setBusy(true)
     const amount=number(reimbursement)
-    const {error}=await supabase.from('financial_views').update({notes:JSON.stringify({...notes(views.find(view=>view.id===selected)?.notes),reimbursement:amount})}).eq('id',selected)
-    setMessage(error?error.message:'Reembolso salvo neste período.')
-    if(!error)await refresh()
+    try{
+      let query=supabase.from('financial_views').update({notes:JSON.stringify({...notes(view.notes),reimbursement:amount})}).eq('id',selected).eq('is_active',true)
+      query=view.notes==null?query.is('notes',null):query.eq('notes',view.notes)
+      const result=await query.select('id')
+      if(result.error||result.data?.length!==1)throw new Error(result.error?.message??'A View mudou. Atualize antes de salvar o reembolso.')
+      await refresh();setMessage('Reembolso salvo neste período.')
+    }catch(error){setMessage(error.message)}finally{actionRunning.current=false;setBusy(false)}
   }
   const reportFor=async(item:any)=>{
     try { await (await import('./financialReport')).downloadClosingPdf([item.closingRow],viewLosses,viewPeriods) }
     catch(error) { setMessage(error?.message??'Não foi possível gerar o relatório.') }
   }
   return <section className="finance-page">
+    <DashboardNotes financialOnly />
+    {selected&&canManage&&<section className="form-section"><div className="financial-actions"><button disabled={busy} onClick={()=>{setViewAction('rename');setNewTitle(views.find(view=>view.id===selected)?.title??'');setActionReason('')}}>Corrigir período</button><button disabled={busy} onClick={()=>{setViewAction('deactivate');setActionReason('')}}>Excluir view</button></div>{viewAction&&<form onSubmit={changeView}><h3>{viewAction==='rename'?'Corrigir período':'Excluir view dos totais'}</h3>{viewAction==='rename'&&<label>Novo período<input required minLength={3} maxLength={160} value={newTitle} onChange={event=>setNewTitle(event.target.value)}/></label>}<label>Motivo<input required minLength={5} value={actionReason} onChange={event=>setActionReason(event.target.value)}/></label><div className="financial-actions"><button type="button" disabled={busy} onClick={()=>setViewAction(null)}>Cancelar</button><button className="primary" disabled={busy}>{busy?'Salvando…':'Confirmar alteração'}</button></div></form>}</section>}
+    {selected&&<section className="form-section"><label>Anotações desta view<textarea aria-label="Anotações desta view" value={viewNote} readOnly={!canManage} onChange={event=>setViewNote(event.target.value)}/></label>{canManage&&<button disabled={busy} onClick={()=>void saveViewNote()}>Salvar anotação da view</button>}</section>}
     <section className="card finance-upload"><div><p className="eyebrow">FECHAMENTOS</p><h2>Novo fechamento quinzenal</h2><p>1. Informe o período. 2. Anexe a planilha. O sistema cria a View, registra o histórico e atualiza a base geral.</p></div><label className="finance-period">Período do fechamento<input value={uploadPeriod} onChange={event=>setUploadPeriod(event.target.value)} placeholder="Ex.: 33. 1Q DE AGOSTO" disabled={busy}/></label><button type="button" className="secondary" onClick={()=>downloadClosingTemplate(uploadPeriod.trim())}>Baixar modelo</button><label className={`upload-button ${!uploadPeriod.trim()||busy?'disabled':''}`}>Anexar planilha<input type="file" accept=".xlsx" onChange={choose} disabled={!uploadPeriod.trim()||busy}/></label></section>
-    <section className="card finance-history"><div><p className="eyebrow">BASE HISTÓRICA</p><h2>Substituir base financeira</h2><p>Importe o Controle Financeiro completo. A ação atualiza Cadastros, recria as Views, os Fechamentos e os Extravios.</p></div><label className={`history-upload ${busy?'disabled':''}`}>Importar base completa<input type="file" accept=".xlsx" onChange={chooseHistory} disabled={busy}/></label></section>
+    {isAdmin&&<details className="finance-history"><summary>Administração da base histórica</summary><section><h2>Substituir base financeira</h2><p>Esta operação desativa toda a base atual e invalida seus links de NF. Não use para importar uma nova quinzena ou corrigir um período.</p><label className={`history-upload ${busy?'disabled':''}`}>Importar base completa<input type="file" accept=".xlsx" onChange={chooseHistory} disabled={busy}/></label></section></details>}
     {message&&<p className="form-message">{message}</p>}
     <section className="finance-summary"><article className="metric"><span>Views salvas</span><strong>{views.length}</strong></article><article className="metric"><span>Itens na base geral</span><strong>{general.items}</strong></article><article className="metric"><span>Pacotes na base geral</span><strong>{general.packages.toLocaleString('pt-BR')}</strong></article><article className="metric red"><span>Extravios na base geral</span><strong>{general.losses} · R$ {general.lossAmount.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></article></section>
     <section className="card"><div className="finance-head"><div><p className="eyebrow">VIEWS SALVAS</p><h2>Consultar fechamento</h2></div><button className="secondary" onClick={()=>void refresh()}>Atualizar</button></div><select className="view-select" value={selected} onChange={event=>setSelected(event.target.value)}><option value="">Selecione uma View</option>{views.map(view=><option key={view.id} value={view.id}>{view.title} · {new Date(view.created_at).toLocaleString('pt-BR')}</option>)}</select></section>
