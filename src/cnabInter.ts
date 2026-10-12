@@ -95,8 +95,6 @@ export function prepareCnabPayments(rows: DataRow[]): CnabPayment[] {
 
 export function createCnabInter(payments: CnabPayment[], generatedAt = new Date()) {
   if (!payments.length) throw new Error('Nenhum pagamento encontrado para gerar o CNAB.')
-  const invalidDate = payments.find(payment => !payment.paymentDate)
-  if (invalidDate) throw new Error(`Informe a data de pagamento do DROP ${invalidDate.drop}.`)
   const lines: string[] = []
   lines.push(record([
     [1, 3, COMPANY.bank], [4, 4, '0000'], [8, 1, '0'], [18, 1, '2'], [19, 14, COMPANY.document],
@@ -117,14 +115,15 @@ export function createCnabInter(payments: CnabPayment[], generatedAt = new Date(
       [1, 3, COMPANY.bank], [4, 4, '0001'], [8, 1, '3'], [9, 5, numberField(sequence, 5)], [14, 1, 'A'],
       [15, 1, '0'], [16, 2, '00'], [18, 3, '000'], [21, 3, '000'], [24, 5, '00000'], [29, 1, '0'],
       [30, 12, '000000000000'], [42, 1, '0'], [44, 30, '000000000000000000000000000000'],
-      [94, 8, dateField(payment.paymentDate)], [102, 3, 'BRL'], [105, 15, '000000000000000'], [120, 15, valueField(payment.value, 15)],
+      [94, 8, dateField(payment.paymentDate || generatedAt)], [102, 3, 'BRL'], [105, 15, '000000000000000'], [120, 15, valueField(payment.value, 15)],
     ]))
     sequence += 1
     const type = pixKeyType(payment.pix)
-    const document = digits(payment.document)
+    const document = digits(payment.document || (type === '03' ? payment.pix : ''))
+    if (document && ![11, 14].includes(document.length)) throw new Error(`CPF/CNPJ inválido no DROP ${payment.drop}.`)
     lines.push(record([
       [1, 3, COMPANY.bank], [4, 4, '0001'], [8, 1, '3'], [9, 5, numberField(sequence, 5)], [14, 1, 'B'],
-      [15, 3, type], [18, 1, document.length === 11 ? '1' : '2'], [19, 14, numberField(document, 14)],
+      [15, 3, type], [18, 1, document ? document.length === 11 ? '1' : '2' : '0'], [19, 14, numberField(document, 14)],
       [128, 99, textField(type === '03' ? digits(payment.pix) : payment.pix, 99)], [233, 8, '00000000'],
     ]))
     sequence += 1

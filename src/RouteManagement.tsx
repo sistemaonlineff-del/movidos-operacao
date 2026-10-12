@@ -13,6 +13,7 @@ const cep = (value: unknown) => normalize(value).replace(/\D/g, '').slice(0, 8).
 const key = (value: unknown) => normalize(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '')
 const pick = (row: Record<string, unknown>, names: string[]) => { const entry = Object.entries(row).find(([name]) => names.includes(key(name))); return entry ? normalize(entry[1]) : '' }
 const planKey = (row: Volume) => `${row.delivery_date}|${row.zone}|${row.route}|${row.batch_number}`
+const routeIdentity = (row: BaseRow) => [row.street,row.neighborhood,row.city,row.zone,row.route].map(value=>normalize(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ')).join('|')
 const byDeliverySequence = (a: Volume, b: Volume) => (a.delivery_sequence ?? Number.MAX_SAFE_INTEGER) - (b.delivery_sequence ?? Number.MAX_SAFE_INTEGER) || a.postal_code.localeCompare(b.postal_code, 'pt-BR', { numeric: true }) || a.street.localeCompare(b.street, 'pt-BR')
 
 export default function RouteManagement() {
@@ -25,11 +26,15 @@ export default function RouteManagement() {
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const readBase = async () => {
+    const rows:BaseRow[]=[]
+    for(let start=0;;start+=1000){const result=await supabase!.from('delivery_route_base').select('*').order('id').range(start,start+999);if(result.error)return result;rows.push(...result.data);if(result.data.length<1000)return {data:rows,error:null}}
+  }
   const load = async () => {
     if (!supabase) return
     setLoading(true); setMessage('')
     const [baseResult, volumeResult] = await Promise.all([
-      supabase.from('delivery_route_base').select('*').order('zone').order('route').order('delivery_sequence').order('postal_code'),
+      readBase(),
       supabase.from('delivery_volumes').select('*').eq('delivery_date', date).order('zone').order('route').order('batch_number').order('delivery_sequence').order('postal_code'),
     ])
     if (baseResult.error || volumeResult.error) setMessage('A base de rotas ainda não foi preparada. Execute o arquivo supabase/06_delivery_routes.sql no SQL Editor do Supabase.')
@@ -45,22 +50,37 @@ export default function RouteManagement() {
   const filtered = useMemo(() => { const term = key(query); return term ? base.filter(row => key([row.street, row.neighborhood, row.city, row.postal_code, row.zone, row.route, row.delivery_sequence].join(' ')).includes(term)) : base }, [base, query])
   const saveBase = async (event: FormEvent) => {
     event.preventDefault(); if (!supabase || !baseValue.zone) { setMessage('Informe ao menos a zona.'); return }
+    if(base.some(row=>row.is_active!==false&&row.id!==baseValue.id&&routeIdentity(row)===routeIdentity(baseValue))){setMessage('Endereço-base duplicado nesta zona e rota. Edite o existente.');return}
     setSaving(true); const { id, ...payload } = baseValue
     const result = id ? await supabase.from('delivery_route_base').update(payload).eq('id', id) : await supabase.from('delivery_route_base').insert(payload)
     setSaving(false); if (result.error) setMessage(result.error.message); else { setBaseValue(blankBase()); setMessage('Endereço-base salvo.'); await load() }
   }
   const importBase = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; event.target.value = ''; if (!file || !supabase) return
+    let saved=0
     try {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' }); const sheet = workbook.Sheets[workbook.SheetNames[0]]
       const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' }).map(row => ({
         street: pick(row, ['rua', 'logradouro', 'endereco', 'endereço']), neighborhood: pick(row, ['bairro']), city: pick(row, ['cidade', 'municipio', 'município']), postal_code: cep(pick(row, ['cep', 'postalcode', 'codigopostal', 'código postal'])), zone: pick(row, ['zona', 'regiao', 'região', 'zone']), route: pick(row, ['rota', 'route']) || 'A definir', delivery_sequence: Number(pick(row, ['sequencia', 'sequência', 'ordem'])) || null, latitude: Number(pick(row, ['latitude', 'lat'])) || null, longitude: Number(pick(row, ['longitude', 'longitude', 'lng', 'lon'])) || null, is_active: true,
       })).filter(row => row.zone)
       if (!rows.length) throw new Error('Não encontrei linhas com a coluna Zona. Confira o cabeçalho do Excel.')
+      const known=new Set(base.filter(row=>row.is_active!==false).map(routeIdentity))
+      const unique=rows.filter(row=>{const identity=routeIdentity(row);if(known.has(identity))return false;known.add(identity);return true})
       setSaving(true)
-      for (let start = 0; start < rows.length; start += 250) { const result = await supabase.from('delivery_route_base').insert(rows.slice(start, start + 250)); if (result.error) throw result.error }
-      setMessage(`${rows.length} endereço(s) importado(s). Revise antes de usar na separação.`); await load()
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Não foi possível importar a planilha.') } finally { setSaving(false) }
+      for (let start = 0; start < unique.length; start += 250) { const part=unique.slice(start,start+250);const result = await supabase.from('delivery_route_base').insert(part); if (result.error) throw result.error;saved+=part.length }
+      await load();setMessage(`${saved} endereço(s) importado(s); ${rows.length-unique.length} duplicado(s) ignorado(s).`)
+    } catch (error) { setMessage(`${saved} endereço(s) confirmado(s). ${error?.message||'Não foi possível importar a planilha.'} Atualize os dados antes de repetir.`) } finally { setSaving(false) }
+  }
+  const clearPostalCodes=async()=>{
+    if(!supabase||saving)return
+    const ids=filtered.filter(row=>row.is_active!==false&&normalize(row.postal_code)).map(row=>row.id)
+    if(!ids.length)return
+    const reason=prompt(`Esvaziar os CEPs de ${ids.length} endereço(s) filtrado(s)? Informe o motivo (mínimo 5 caracteres).`)
+    if(!reason)return
+    setSaving(true)
+    const {data,error}=await supabase.rpc('clear_route_postal_codes',{route_ids:ids,reason})
+    if(!error)await load()
+    setMessage(error?.message??`${data} CEP(s) esvaziado(s). Valores anteriores preservados na auditoria.`);setSaving(false)
   }
   const saveVolume = async (event: FormEvent) => {
     event.preventDefault(); if (!supabase || !volumeValue.zone || !volumeValue.route) { setMessage('Informe zona e rota do volume.'); return }
@@ -97,7 +117,8 @@ export default function RouteManagement() {
     XLSX.writeFile(workbook, `pre-rotas-${date}.xlsx`)
   }
   if (loading) return <section className="card">Carregando base de rotas...</section>
-  return <section className="route-management"><div className="route-title"><div><p className="eyebrow">OPERAÇÃO DE ENTREGA</p><h2>Base e pré-rotas</h2><p>Importe e ajuste a base por bairro, cidade e CEP. Cada zona e rota é separada em lotes de até 100 volumes.</p></div><label className={`secondary route-import ${saving ? 'disabled' : ''}`}>Importar Excel<input type="file" accept=".xlsx,.xls,.csv" disabled={saving} onChange={event => void importBase(event)} hidden /></label></div><p className="route-source-note">Zona, rota e sequência seguem exatamente a planilha recebida. Em Guararema, alguns nomes de rota repetem o nome da zona e podem ser ajustados aqui depois.</p>{message && <p className="form-message">{message}</p>}
+  return <section className="route-management"><div className="route-title"><div><p className="eyebrow">OPERAÇÃO DE ENTREGA</p><h2>Base e pré-rotas</h2></div><label className={`secondary route-import ${saving ? 'disabled' : ''}`}>Importar Excel<input type="file" accept=".xlsx,.xls,.csv" disabled={saving} onChange={event => void importBase(event)} hidden /></label></div>{message && <p role="status" className="form-message">{message}</p>}
+    <button type="button" disabled={saving||!filtered.some(row=>row.is_active!==false&&normalize(row.postal_code))} onClick={()=>void clearPostalCodes()}>Esvaziar CEPs filtrados</button>
     <section className="card"><h3>Base de endereços</h3><form className="route-form" onSubmit={saveBase}><input placeholder="Rua (opcional)" value={baseValue.street} onChange={e => setBaseValue({ ...baseValue, street: e.target.value })}/><input placeholder="Bairro" value={baseValue.neighborhood} onChange={e => setBaseValue({ ...baseValue, neighborhood: e.target.value })}/><input placeholder="Cidade" value={baseValue.city} onChange={e => setBaseValue({ ...baseValue, city: e.target.value })}/><input placeholder="CEP" value={baseValue.postal_code} onChange={e => setBaseValue({ ...baseValue, postal_code: cep(e.target.value) })}/><input required placeholder="Zona" value={baseValue.zone} onChange={e => setBaseValue({ ...baseValue, zone: e.target.value })}/><input required placeholder="Rota" value={baseValue.route} onChange={e => setBaseValue({ ...baseValue, route: e.target.value })}/><input type="number" min="1" placeholder="Sequência" value={baseValue.delivery_sequence ?? ''} onChange={e => setBaseValue({ ...baseValue, delivery_sequence: e.target.value ? Number(e.target.value) : null })}/><button className="primary" disabled={saving}>{baseValue.id ? 'Salvar edição' : 'Adicionar endereço'}</button>{baseValue.id && <button type="button" onClick={() => setBaseValue(blankBase())}>Cancelar</button>}</form><input className="route-search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar CEP, bairro, cidade, zona, rota ou sequência"/><div className="table-wrap"><table><thead><tr><th>CEP</th><th>Bairro</th><th>Cidade</th><th>Zona</th><th>Rota</th><th>Sequência</th><th></th></tr></thead><tbody>{filtered.slice(0, 300).map(row => <tr key={row.id}><td>{row.postal_code}</td><td>{row.neighborhood}</td><td>{row.city}</td><td>{row.zone}</td><td>{row.route}</td><td>{row.delivery_sequence ?? '—'}</td><td><button className="table-action" onClick={() => setBaseValue(row)}>Editar</button></td></tr>)}</tbody></table></div>{filtered.length > 300 && <p className="label-muted">Mostrando os primeiros 300 resultados. Use a busca para reduzir a lista.</p>}</section>
     <section className="card"><h3>Volumes e pré-rota</h3><div className="route-toolbar"><label>Data<input type="date" value={date} onChange={e => setDate(e.target.value)} /></label><button onClick={() => void organizeBySequence()} disabled={saving || !volumes.length}>Organizar pela sequência</button><button className="secondary" onClick={exportPlans} disabled={!plans.length}>Exportar pré-rotas</button></div><form className="route-form" onSubmit={saveVolume}><input placeholder="Destinatário" value={volumeValue.recipient} onChange={e => setVolumeValue({ ...volumeValue, recipient: e.target.value })}/><input placeholder="Rua" value={volumeValue.street} onChange={e => setVolumeValue({ ...volumeValue, street: e.target.value })}/><input placeholder="Bairro" value={volumeValue.neighborhood} onChange={e => setVolumeValue({ ...volumeValue, neighborhood: e.target.value })}/><input placeholder="Cidade" value={volumeValue.city} onChange={e => setVolumeValue({ ...volumeValue, city: e.target.value })}/><input placeholder="CEP" value={volumeValue.postal_code} onChange={e => setVolumeValue({ ...volumeValue, postal_code: cep(e.target.value) })}/><input required placeholder="Zona" value={volumeValue.zone} onChange={e => setVolumeValue({ ...volumeValue, zone: e.target.value })}/><input required placeholder="Rota" value={volumeValue.route} onChange={e => setVolumeValue({ ...volumeValue, route: e.target.value })}/><input type="number" min="1" placeholder="Sequência" value={volumeValue.delivery_sequence ?? ''} onChange={e => setVolumeValue({ ...volumeValue, delivery_sequence: e.target.value ? Number(e.target.value) : null })}/><button className="primary" disabled={saving}>Salvar volume</button></form><div className="route-plans">{plans.map(plan => <article key={plan.id}><h4>{plan.zone} · Rota {plan.route} · Lote {plan.batch}</h4><strong>{plan.rows.length}/100 volumes</strong><label>Motorista<input defaultValue={plan.driver} onBlur={e => void setDriver(plan, e.target.value)} placeholder="Definir motorista" /></label><p>{plan.rows.slice(0, 4).map(row => row.delivery_sequence ? `Seq. ${row.delivery_sequence}` : row.postal_code).filter(Boolean).join(' · ')}{plan.rows.length > 4 && ' · ...'}</p></article>)}{!plans.length && <p>Os volumes do dia aparecerão aqui na sequência da planilha, em lotes de no máximo 100 entregas.</p>}</div></section>
   </section>

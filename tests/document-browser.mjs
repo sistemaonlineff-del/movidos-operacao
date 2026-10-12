@@ -34,6 +34,9 @@ const tables = {
 const photoBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jK1cAAAAASUVORK5CYII=', 'base64')
 const storagePaths = new Set()
 let serviceTemplatePath = ''
+let terminationTemplatePath = ''
+let invoiceRequests = []
+const invoiceActions = []
 const writes = []
 const failures = []
 let rejectDropWrite = false
@@ -84,6 +87,26 @@ await context.route('**/*', async route => {
     }
     if (!url.pathname.startsWith('/rest/v1/')) return json([])
     const table = url.pathname.split('/').pop()
+    if(url.pathname.includes('/rpc/')&&table==='clear_route_postal_codes'){
+      const payload=request.postDataJSON();writes.push({table,payload})
+      const selected=tables.delivery_route_base.filter(row=>payload.route_ids.includes(row.id)&&row.is_active!==false&&row.postal_code)
+      selected.forEach(row=>{row.postal_code=null})
+      return json(selected.length)
+    }
+    if(url.pathname.includes('/rpc/')&&table==='change_financial_view'){
+      const payload=request.postDataJSON();writes.push({table,payload})
+      const view=tables.financial_views.find(row=>row.id===payload.view_id)
+      assert.equal(view.title,payload.expected_title)
+      const periods=tables.financial_periods.filter(row=>row.financial_view_id===view.id),ids=new Set(periods.map(row=>row.id))
+      if(payload.action==='rename'){
+        view.title=payload.new_title;periods.forEach(row=>{row.label=payload.new_title})
+        for(const tableName of ['financial_payment_history','loss_events'])tables[tableName].filter(row=>ids.has(row.financial_period_id)).forEach(row=>{row.period_label=payload.new_title})
+      }else{
+        view.is_active=false;periods.forEach(row=>{row.is_active=false})
+        for(const tableName of ['financial_drop_items','financial_payment_history','loss_events'])tables[tableName].filter(row=>ids.has(row.financial_period_id)).forEach(row=>{row.is_active=false})
+      }
+      return json(null)
+    }
     const source = tables[table] ?? []
     const filtered = source.filter(row => [...url.searchParams].every(([field, value]) => {
       if (value.startsWith('eq.')) return String(row[field]) === value.slice(3)
@@ -172,9 +195,34 @@ await context.route('**/*', async route => {
     if (url.pathname === '/api/contract-templates') {
       if (request.method() === 'POST') {
         assert.equal(tables.user_profiles[0].role, 'admin')
-        serviceTemplatePath = request.postDataJSON().serviceTemplatePath
+        const payload=request.postDataJSON()
+        if(Object.hasOwn(payload,'serviceTemplatePath'))serviceTemplatePath = payload.serviceTemplatePath
+        if(Object.hasOwn(payload,'terminationTemplatePath'))terminationTemplatePath = payload.terminationTemplatePath
       }
-      return json({ serviceTemplatePath })
+      return json({ serviceTemplatePath,terminationTemplatePath })
+    }
+    if (url.pathname === '/api/financial/invoices') {
+      const token=request.headers()['x-invoice-token']
+      if(token){
+        if(token!=='a'.repeat(64))return route.fulfill({status:410,contentType:'application/json',body:JSON.stringify({error:'Link expirado ou revogado.'})})
+        if(request.method()==='POST'){
+          const payload=request.postDataJSON();invoiceActions.push(payload)
+          assert.equal(payload.mode,'upload');assert.equal(payload.fileName,'nf-teste.pdf')
+          invoiceRequests[0].financial_invoice_files.push({id:'file1',file_name:'nf-teste.pdf',status:'received',received_at:'2026-10-12T10:00:00Z'})
+          return json({status:'received'})
+        }
+        return json({drop:'DROP TESTE',period:'SETEMBRO',partner,referenceCnpj:'MOVIDOS',expiresAt:'2100-01-01',files:invoiceRequests[0]?.financial_invoice_files??[]})
+      }
+      assert.ok(request.headers().authorization.startsWith('Bearer '))
+      if(request.method()==='GET')return json({requests:invoiceRequests})
+      const payload=request.postDataJSON();invoiceActions.push(payload)
+      if(payload.mode==='create'){
+        invoiceRequests=[{id:'req1',financial_period_id:payload.periodId,drop_id:payload.dropId,drop_name:'DROP TESTE',period_label:'SETEMBRO',partner,reference_cnpj:'MOVIDOS',expires_at:'2100-01-01',revoked_at:null,financial_invoice_files:invoiceRequests[0]?.financial_invoice_files??[]}]
+        return json({token:'a'.repeat(64),requestId:'req1'})
+      }
+      if(payload.mode==='revoke'){invoiceRequests[0].revoked_at='2026-10-12T12:00:00Z';return json({revoked:true})}
+      if(payload.mode==='reconcile'){invoiceRequests[0].financial_invoice_files.find(file=>file.id===payload.fileId).status='received';return json({status:'received'})}
+      throw new Error(`Unexpected invoice action ${payload.mode}`)
     }
     if (url.pathname === '/api/label-routes') return json({ source: 'Teste local', summary: [], records: [{ id: 'route1', street: 'Rua das Flores', neighborhood: 'Centro', city: 'Suzano', postalCode: '08600-000', zone: 'Centro', route: '1', deliverySequence: 1, mapsUrl: '', routeUrl: '', sourceSheet: 'Teste', sourceRow: 1 }] })
     if (url.pathname === '/api/label-read') {
@@ -195,6 +243,52 @@ const page = await context.newPage()
 page.on('pageerror', error => failures.push(error.message))
 page.setDefaultTimeout(15000)
 try {
+  await page.goto('http://127.0.0.1:5173/financeiro/notas-fiscais')
+  await page.getByRole('cell',{name:'DROP TESTE',exact:true}).waitFor()
+  await page.getByRole('cell',{name:'Pendente',exact:true}).waitFor()
+  await page.getByRole('button',{name:'Gerar link',exact:true}).click()
+  const invoiceLink=await page.getByLabel('Link individual',{exact:true}).inputValue()
+  assert.equal(invoiceLink,'http://127.0.0.1:5173/enviar-nf#token='+'a'.repeat(64))
+  assert.deepEqual(invoiceActions[0],{mode:'create',periodId:'p1',dropId:'drop1'})
+  await page.goto(invoiceLink)
+  await page.getByRole('heading',{name:'DROP TESTE',exact:true}).waitFor()
+  await page.getByLabel('Nota fiscal (PDF ou XML, até 3 MB)',{exact:true}).setInputFiles({name:'nf-teste.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.7\nNF local\n%%EOF')})
+  await page.getByRole('button',{name:'Enviar nota fiscal',exact:true}).click()
+  await page.getByRole('status').filter({hasText:'Nota fiscal recebida e salva.'}).waitFor()
+  await page.getByRole('heading',{name:'Notas recebidas (1)',exact:true}).waitFor()
+  for(const viewport of [{width:1440,height:900},{width:390,height:844}]){
+    await page.setViewportSize(viewport)
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth))
+    await page.screenshot({path:`tmp/browser-tests/invoice-upload-${viewport.width}.png`,fullPage:true})
+  }
+  await page.goto('http://127.0.0.1:5173/financeiro/notas-fiscais')
+  await page.getByRole('cell',{name:'Recebida',exact:true}).waitFor()
+  await page.getByLabel('Recebimento',{exact:true}).selectOption('pending')
+  await page.getByRole('cell',{name:'Nenhum DROP neste filtro.',exact:true}).waitFor()
+  await page.getByLabel('Recebimento',{exact:true}).selectOption('received')
+  await page.getByRole('button',{name:'nf-teste.pdf',exact:true}).waitFor()
+  page.once('dialog',dialog=>dialog.accept())
+  await page.getByRole('button',{name:'Revogar',exact:true}).click()
+  await page.getByRole('status').filter({hasText:'Link revogado.'}).waitFor()
+  assert.equal(invoiceRequests[0].financial_invoice_files.length,1)
+  invoiceRequests[0].financial_invoice_files.push({id:'unconfirmed-file',file_name:'nf-sem-confirmacao.pdf',status:'uploading',received_at:null})
+  await page.reload()
+  await page.getByRole('button',{name:'Conferir armazenamento',exact:true}).click()
+  await page.getByRole('status').filter({hasText:'Arquivo conferido e recebimento confirmado.'}).waitFor()
+  await page.getByRole('button',{name:'nf-sem-confirmacao.pdf',exact:true}).waitFor()
+  const invoiceItems=tables.financial_drop_items
+  tables.financial_drop_items=[]
+  await page.reload()
+  await page.getByText('Notas fora da base ativa',{exact:true}).click()
+  await page.getByRole('button',{name:'nf-teste.pdf',exact:true}).waitFor()
+  assert.equal(invoiceRequests[0].financial_invoice_files.length,2)
+  tables.financial_drop_items=invoiceItems
+  await page.goto('http://127.0.0.1:5173/enviar-nf#token='+'b'.repeat(64))
+  await page.getByRole('alert').filter({hasText:'Link expirado ou revogado.'}).waitFor()
+  assert.equal(await page.getByRole('button',{name:'Enviar nota fiscal',exact:true}).count(),0)
+  await page.setViewportSize({width:1440,height:900})
+  console.log('PASS: pending DROP, scoped invoice link, upload receipt, filters and revocation preserve stored invoices')
+
   await page.goto('http://127.0.0.1:5173/mensagens')
   await page.getByLabel('Rascunho de mensagem').waitFor()
   await page.waitForFunction(() => document.querySelector('[aria-label="Rascunho de mensagem"]')?.value === 'Rascunho anterior')
@@ -211,6 +305,9 @@ try {
   await page.getByRole('cell', { name: 'Eduardo', exact: true }).waitFor()
   await page.getByRole('cell', { name: partner, exact: true }).waitFor()
   await page.getByRole('cell', { name: 'MOVIDOS', exact: true }).waitFor()
+  await page.getByLabel('CNPJ de referência',{exact:true}).selectOption('MOVIDOS')
+  await page.getByRole('button',{name:'Limpar filtros',exact:true}).click()
+  assert.equal(await page.getByLabel('CNPJ de referência',{exact:true}).inputValue(),'')
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport)
     const geometry = await page.locator('.email-template-grid textarea').evaluate(element => {
@@ -337,6 +434,31 @@ try {
       assert.ok(pdf.includes('15/09/2026'))
       assert.ok(pdf.includes('Encerramento solicitado'))
     }
+    const pdfPage=await context.newPage()
+    await pdfPage.goto('http://127.0.0.1:5173/enviar-nf')
+    const inspection=await pdfPage.evaluate(async bytes=>{
+      const pdfjs=await import('/node_modules/pdfjs-dist/build/pdf.mjs')
+      pdfjs.GlobalWorkerOptions.workerSrc='/node_modules/pdfjs-dist/build/pdf.worker.mjs'
+      const loading=pdfjs.getDocument({data:new Uint8Array(bytes),useSystemFonts:true})
+      const documentPdf=await loading.promise
+      const overflows=[]
+      for(let number=1;number<=documentPdf.numPages;number++){
+        const page=await documentPdf.getPage(number),content=await page.getTextContent(),viewport=page.getViewport({scale:1})
+        for(const item of content.items.filter(item=>item.str?.trim()&&!item.str.startsWith('MOVIDOS |'))){
+          if(item.transform[4]<61||item.transform[4]+item.width>535||viewport.height-item.transform[5]>769)overflows.push(item.str)
+        }
+        if(number===1){
+          const canvas=document.createElement('canvas')
+          canvas.width=viewport.width*1.5;canvas.height=viewport.height*1.5
+          document.body.replaceChildren(canvas);document.body.style.margin='0';document.body.style.background='white'
+          await page.render({canvasContext:canvas.getContext('2d'),viewport:page.getViewport({scale:1.5})}).promise
+        }
+      }
+      return {pages:documentPdf.numPages,overflows}
+    },[...await readFile(file)])
+    assert.deepEqual(inspection.overflows,[],`${kind}: text outside margins`)
+    await pdfPage.locator('canvas').screenshot({path:`tmp/browser-tests/${kind}-render.png`})
+    await pdfPage.close()
   }
   await page.locator('.cadastro-form').getByRole('button', { name: 'Salvar e sair', exact: true }).click()
   await page.waitForURL('**/cadastros')
@@ -540,12 +662,19 @@ try {
     assert.equal(await page.locator('.drop-photos img').evaluate(image => image.complete && image.naturalWidth > 0), true)
     await page.screenshot({ path: `tmp/browser-tests/last-mile-attachments-${viewport.width}.png`, fullPage: true })
   }
-  await page.getByLabel('Enviar modelo temporário', { exact: true }).setInputFiles({ name: 'modelo.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: await readFile('public/templates/modelo-contrato-prestacao-servico.docx') })
-  await page.getByText('Modelo temporário ativado. Os próximos contratos usarão esta versão.', { exact: true }).waitFor()
+  await page.getByLabel('Alterar modelo do contrato', { exact: true }).setInputFiles({ name: 'modelo.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: await readFile('public/templates/modelo-contrato-prestacao-servico.docx') })
+  await page.getByText('Modelo de contrato ativado para os próximos documentos.', { exact: true }).waitFor()
   assert.match(serviceTemplatePath, /^contract-templates\/service\//)
+  await page.getByLabel('Alterar modelo do distrato',{exact:true}).setInputFiles({name:'distrato.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:await readFile('public/templates/modelo-distrato-sociedade.docx')})
+  await page.getByText('Modelo de distrato ativado para os próximos documentos.',{exact:true}).waitFor()
+  assert.match(terminationTemplatePath,/^contract-templates\/termination\//)
   await page.getByRole('button', { name: 'Restaurar modelo padrão', exact: true }).click()
   await page.getByText('Modelo padrão restaurado para os próximos contratos.', { exact: true }).waitFor()
   assert.equal(serviceTemplatePath, '')
+  assert.match(terminationTemplatePath,/^contract-templates\/termination\//)
+  await page.getByRole('button',{name:'Restaurar modelo padrão do distrato',exact:true}).click()
+  await page.waitForFunction(()=>document.querySelector('[aria-label="Modelo de distrato"]')?.textContent.includes('Modelo padrão ativo.'))
+  assert.equal(terminationTemplatePath,'')
   await page.goto(`http://127.0.0.1:5173/cadastros/novo?edit=${lastMile.id}`)
   await page.getByRole('combobox', { name: 'Tipo de veículo', exact: true }).waitFor()
   assert.equal(await page.getByRole('combobox', { name: 'Tipo de veículo', exact: true }).inputValue(), 'Moto')
@@ -583,7 +712,7 @@ try {
   const downloadedTemplate = await templateDownload
   assert.equal(downloadedTemplate.suggestedFilename(), 'modelo-fechamento-financeiro.xlsx')
   const downloadedWorkbook = XLSX.read(await readFile(await downloadedTemplate.path()), { type: 'buffer' })
-  assert.deepEqual(XLSX.utils.sheet_to_json(downloadedWorkbook.Sheets['Pagamento Total'], { header: 1 })[0], ['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'])
+  assert.deepEqual(XLSX.utils.sheet_to_json(downloadedWorkbook.Sheets['Pagamento Total'], { header: 1 })[0], ['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento','CNPJReferencia'])
   assert.equal(downloadedWorkbook.Sheets['Pagamento Total'].A2.v, 'NOVO PERIODO')
   const workbook = createClosingTemplate()
   workbook.Sheets.Fechamento = XLSX.utils.aoa_to_sheet([['Periodo', 'Parceiro', 'Drop', 'QuantidadePacote', 'CNPJReferencia'], ['', partner, 'DROP TESTE', 100, 'MOVIDOS']])
@@ -1068,6 +1197,106 @@ try {
     tables.user_profiles[0].role = 'admin'
     console.log('PASS: proportional payment add/edit/reload/export, original rows and shared period preserved, numeric/date validation, zero, denied/uncertain writes, stable ID, double-submit guard, permissions and desktop/mobile layout')
   }
+
+  {
+    const snapshot=structuredClone(tables)
+    tables.drops=[{id:'operation-drop',name:'DROP OPERACAO',partner,status:'ATIVO',is_active:true,municipality:'Suzano',state:'SP',signed_at:'2026-09-01',latitude:-23.54,longitude:-46.31},{id:'inactive-drop',name:'DROP DESATIVADO',partner,status:'EXCLUIDO',is_active:false,municipality:'Suzano',latitude:-23.55,longitude:-46.30},{id:'frozen-drop',name:'DROP CONGELADO',partner,status:'CONGELADO',is_active:true,municipality:'Suzano',latitude:-23.56,longitude:-46.32}]
+    await page.goto('http://127.0.0.1:5173/cadastros')
+    await page.getByLabel('Busca',{exact:true}).waitFor()
+    assert.equal(await page.getByLabel('Busca',{exact:true}).evaluate(element=>document.activeElement===element),true)
+    await page.goto('http://127.0.0.1:5173/cadastros/novo?edit=operation-drop')
+    await page.getByRole('textbox',{name:'Nome do Drop',exact:true}).waitFor()
+    await page.getByLabel('Início da operação',{exact:true}).fill('2026-09-03')
+    await page.getByLabel('Fim da operação',{exact:true}).fill('2026-10-01')
+    await page.getByRole('button',{name:'Salvar e permanecer',exact:true}).click()
+    await page.getByText('Cadastro salvo com sucesso.',{exact:true}).waitFor()
+    assert.equal(tables.drops[0].operation_started_at,'2026-09-03');assert.equal(tables.drops[0].operation_ended_at,'2026-10-01')
+    assert.equal(tables.drops[0].signed_at,'2026-09-01');assert.equal(tables.drops[0].status,'ATIVO')
+    await page.reload();await page.getByLabel('Fim da operação',{exact:true}).waitFor()
+    await page.waitForFunction(()=>document.querySelector('input[type="date"][value="2026-10-01"]'))
+    await page.goto('http://127.0.0.1:5173/')
+    await page.locator('.leaflet-interactive').nth(1).waitFor()
+    assert.equal(await page.locator('.leaflet-interactive').count(),2)
+    await page.getByLabel('Status no mapa',{exact:true}).selectOption('ATIVO')
+    await page.waitForFunction(()=>document.querySelectorAll('.leaflet-interactive').length===1)
+    await page.getByLabel('Status no mapa',{exact:true}).selectOption('')
+    await page.getByLabel('Situação cadastral',{exact:true}).selectOption('disabled')
+    await page.waitForFunction(()=>document.querySelectorAll('.leaflet-interactive').length===1)
+    await page.locator('.leaflet-interactive').click()
+    await page.locator('.leaflet-popup-content').getByText('DROP DESATIVADO',{exact:true}).waitFor()
+    for(const viewport of [{width:1440,height:900},{width:390,height:844}]){
+      await page.setViewportSize(viewport)
+      const bounds=await page.getByLabel('Status no mapa',{exact:true}).evaluate(element=>({left:element.getBoundingClientRect().left,right:element.getBoundingClientRect().right,screen:innerWidth}))
+      assert.ok(bounds.left>=0&&bounds.right<=bounds.screen+1,JSON.stringify(bounds))
+      await page.locator('.map-card').screenshot({path:`tmp/browser-tests/map-filters-${viewport.width}.png`})
+    }
+    await page.getByRole('button',{name:'Limpar mapa',exact:true}).click()
+    await page.waitForFunction(()=>document.querySelectorAll('.leaflet-interactive').length===3)
+
+    tables.delivery_route_base=[{id:'route-test1',street:'Rua Um',neighborhood:'Centro',city:'Suzano',postal_code:'08600-000',zone:'LESTE',route:'1',is_active:true},{id:'route-test2',street:'Rua Dois',neighborhood:'Centro',city:'Suzano',postal_code:'08600-001',zone:'OESTE',route:'2',is_active:true}]
+    tables.delivery_volumes=[]
+    await page.goto('http://127.0.0.1:5173/rotas-entrega')
+    await page.getByPlaceholder('Buscar CEP, bairro, cidade, zona, rota ou sequência').fill('LESTE')
+    page.once('dialog',dialog=>dialog.dismiss())
+    const beforeClear=writes.length
+    await page.getByRole('button',{name:'Esvaziar CEPs filtrados',exact:true}).click()
+    assert.equal(writes.length,beforeClear)
+    page.once('dialog',dialog=>dialog.accept('Revisao autorizada dos CEPs'))
+    await page.getByRole('button',{name:'Esvaziar CEPs filtrados',exact:true}).click()
+    await page.getByRole('status').filter({hasText:'1 CEP(s) esvaziado(s)'}).waitFor()
+    assert.equal(tables.delivery_route_base[0].postal_code,null);assert.equal(tables.delivery_route_base[1].postal_code,'08600-001')
+    const routesWorkbook=XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(routesWorkbook,XLSX.utils.json_to_sheet([{Rua:'Rua Um',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-000',Zona:'LESTE',Rota:'1'},{Rua:'Rua Nova',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-001',Zona:'LESTE',Rota:'3'},{Rua:'Rua Nova',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-002',Zona:'LESTE',Rota:'3'}]),'Rotas')
+    await page.locator('.route-import input').setInputFiles({name:'rotas.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:XLSX.write(routesWorkbook,{type:'buffer',bookType:'xlsx'})})
+    await page.getByRole('status').filter({hasText:'1 endereço(s) importado(s); 2 duplicado(s) ignorado(s).'}).waitFor()
+    assert.equal(tables.delivery_route_base.length,3)
+
+    tables.financial_views=[{id:'view-test',title:'35. 2Q DE SETEMBRO',is_active:true,notes:JSON.stringify({annotation:'Anterior',summary:{invoice:100}}),created_at:'2026-10-12'}]
+    tables.financial_periods=[{id:'period-test',financial_view_id:'view-test',label:'35. 2Q DE SETEMBRO',partner,logistics_partner:partner,reference_cnpj:'MOVIDOS',net_amount:100,is_active:true}]
+    tables.financial_drop_items=[{id:'item-test',financial_period_id:'period-test',drop_name_snapshot:'DROP OPERACAO',quantity_packages:10,unit_value:1,is_active:true}]
+    tables.financial_payment_history=[];tables.loss_events=[]
+    await page.goto('http://127.0.0.1:5173/financeiro')
+    await page.locator('.view-select').selectOption('view-test')
+    await page.getByLabel('Anotações desta view',{exact:true}).fill('Somente nesta quinzena')
+    await page.getByRole('button',{name:'Salvar anotação da view',exact:true}).click()
+    await page.getByText('Anotação salva nesta View.',{exact:true}).waitFor()
+    assert.deepEqual(JSON.parse(tables.financial_views[0].notes),{annotation:'Somente nesta quinzena',summary:{invoice:100}})
+    tables.financial_views[0].notes=JSON.stringify({annotation:'Alterada por outra pessoa',summary:{invoice:100}})
+    await page.getByLabel('Anotações desta view',{exact:true}).fill('Tentativa antiga')
+    await page.getByRole('button',{name:'Salvar anotação da view',exact:true}).click()
+    await page.getByText('A anotação mudou. Atualize antes de salvar.',{exact:true}).waitFor()
+    assert.equal(JSON.parse(tables.financial_views[0].notes).annotation,'Alterada por outra pessoa')
+    await page.getByRole('button',{name:'Corrigir período',exact:true}).click()
+    await page.getByLabel('Novo período',{exact:true}).fill('35. 1Q DE SETEMBRO')
+    await page.getByLabel('Motivo',{exact:true}).fill('Periodo digitado incorretamente')
+    await page.getByRole('button',{name:'Confirmar alteração',exact:true}).click()
+    await page.getByText('Período corrigido sem reimportar valores.',{exact:true}).waitFor()
+    assert.equal(tables.financial_periods[0].label,'35. 1Q DE SETEMBRO');assert.equal(tables.financial_periods[0].net_amount,100)
+    await page.locator('.view-select').selectOption('view-test')
+    await page.getByRole('button',{name:'Excluir view',exact:true}).click()
+    await page.getByLabel('Motivo',{exact:true}).fill('Reimportar fechamento correto')
+    await page.getByRole('button',{name:'Confirmar alteração',exact:true}).click()
+    await page.getByText('View excluída dos totais. Histórico preservado.',{exact:true}).waitFor()
+    assert.equal(tables.financial_drop_items.length,1);assert.equal(tables.financial_drop_items[0].is_active,false)
+    for(const name of Object.keys(tables))delete tables[name]
+    Object.assign(tables,snapshot)
+    console.log('PASS: search autofocus, operation dates, map filters, selected CEP clearing, route deduplication, view notes CAS, rename and soft deletion')
+  }
+
+  await page.goto('http://127.0.0.1:5173/financeiro/cnab')
+  const cnabWorkbook=XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(cnabWorkbook,XLSX.utils.aoa_to_sheet([['DROP','RESPONSAVEL','TOTAL DROP','PIX'],['DROP TESTE','Eduardo',10,'drop@example.com']]),'Pagamentos')
+  await page.getByLabel('Anexar planilha Excel',{exact:true}).setInputFiles({name:'cnab-opcional.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:XLSX.write(cnabWorkbook,{type:'buffer',bookType:'xlsx'})})
+  await page.getByRole('cell',{name:'DROP TESTE',exact:true}).waitFor()
+  await page.getByLabel('Data padrão para pagamentos sem data',{exact:true}).fill('')
+  await page.getByRole('button',{name:'Gerar arquivo CNAB',exact:true}).click()
+  await page.getByRole('alert').filter({hasText:'Informe a data padrão'}).waitFor()
+  await page.getByLabel('Data padrão para pagamentos sem data',{exact:true}).fill('2026-10-12')
+  const optionalCnab=page.waitForEvent('download')
+  await page.getByRole('button',{name:'Gerar arquivo CNAB',exact:true}).click()
+  const cnabText=await readFile(await (await optionalCnab).path(),'utf8')
+  assert.ok(cnabText.includes('12102026'))
+  console.log('PASS: CNAB without date/document columns generates using corrected default date')
 
   await page.goto('http://127.0.0.1:5173/leitor-etiquetas')
   await page.getByRole('button', { name: 'Abrir leitura contínua sem pausa' }).click()

@@ -25,6 +25,7 @@ import CnabUpload from "./CnabUpload";
 import ClosingEmails from "./ClosingEmails";
 import { PARTNERS } from "./dropOptions";
 import { useAccess } from "./access";
+import DashboardNotes from "./DashboardNotes";
 
 type Kind = "total" | "details" | "losses" | "cnab";
 const options = (values: unknown[]) =>
@@ -93,6 +94,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     [error, setError] = useState(""),
     [message, setMessage] = useState("");
   const [periodFilter, setPeriodFilter] = useState(""),
+    [referenceFilter, setReferenceFilter] = useState(""),
     [partnerFilter, setPartnerFilter] = useState(""),
     [dropFilter, setDropFilter] = useState(""),
     [statusFilter, setStatusFilter] = useState(""),
@@ -171,9 +173,10 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         (row) =>
           (!periodFilter || row.period === periodFilter) &&
           (!partnerFilter || row.partner === partnerFilter) &&
+          (!referenceFilter || row.referenceCnpj === referenceFilter) &&
           (!dropFilter || key(row.drop) === dropFilter),
       ),
-    [details, periodFilter, partnerFilter, dropFilter],
+    [details, periodFilter, partnerFilter, referenceFilter, dropFilter],
   );
   const waybillCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -226,9 +229,9 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
   }, [filteredLosses, canEditTotal]);
   const totals = useMemo(
     () =>
-      buildTotals(details, losses, periods, views, periodFilter, partnerFilter)
+      buildTotals(details, losses, periods, views, periodFilter, partnerFilter, referenceFilter)
         .sort((first, second) => periodOrder(second.period) - periodOrder(first.period) || second.period.localeCompare(first.period, "pt-BR", { numeric: true })),
-    [details, losses, periods, views, periodFilter, partnerFilter],
+    [details, losses, periods, views, periodFilter, partnerFilter, referenceFilter],
   );
   const periodOptions = options([
     ...periods.map((row) => row.label),
@@ -282,7 +285,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     const partners = options(periods.filter(period => period.label === row.period).map(financialPartner));
     const partner = partnerFilter || (partners.length === 1 ? partners[0] : "");
     if (!partner) { setError("Selecione um parceiro para editar o total deste período."); return; }
-    const target = paymentTotalTarget(periods, views, row.period, partner);
+    const target = paymentTotalTarget(periods, views, row.period, partner, row.referenceCnpj);
     if (!target) { setError("Este total reúne origens sem um único registro editável. Confira os períodos importados antes de alterar o líquido."); return; }
     setError(""); setEditError("");
     setEditingTotal({ ...target, period: row.period, partner, net: row.net ?? "", paymentDate: row.paymentDate?.includes(",") ? "" : row.paymentDate || "" });
@@ -376,16 +379,6 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         if (result.error) throw result.error;
         period = result.data;
       }
-      if (!manualDetail && period && period.reference_cnpj !== text(editing.referenceCnpj)) {
-        const { data, error } = await supabase
-          .from("financial_periods")
-          .update({ reference_cnpj: text(editing.referenceCnpj) })
-          .eq("id", period.id)
-          .select()
-          .single();
-        if (error) throw error;
-        period = data;
-      }
       const previous = notes(editing.raw.observation);
       const observation = JSON.stringify({
         ...previous,
@@ -394,6 +387,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           (Object.keys(previous).length ? undefined : editing.raw.observation),
         movidosClosing: {
           ...previous.movidosClosing,
+          referenceCnpj: text(editing.referenceCnpj),
           ...(manualDetail ? { manualEntry: true, referenceCnpj: text(editing.referenceCnpj) } : {}),
           sourceItemId: editing.sourceItemId,
           packageType: text(editing.packageType),
@@ -602,7 +596,9 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           </button>
         </div>
       </section>
+      <DashboardNotes financialOnly />
       <section className="card visual-filters">
+        {kind !== "losses" && <Filter label="CNPJ de referência" value={referenceFilter} set={setReferenceFilter} values={referenceCnpjs} all="Todas as empresas" />}
         <Filter
           label="Período"
           value={periodFilter}
@@ -658,6 +654,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           </>
         )}
         {(periodFilter ||
+          referenceFilter ||
           partnerFilter ||
           dropFilter ||
           statusFilter ||
@@ -666,6 +663,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
             className="secondary"
             onClick={() => {
               setPeriodFilter("");
+              setReferenceFilter("");
               setPartnerFilter("");
               setDropFilter("");
               setStatusFilter("");
@@ -989,6 +987,7 @@ function PaymentTotal({ rows, onEdit }: { rows: DataRow[]; onEdit?: (row: DataRo
           <thead>
             <tr>
               <th>Período</th>
+              <th>CNPJ de referência</th>
               {totalColumns.map(([field, title]) => (
                 <th key={field} className={field === "net" ? "financial-net-column" : undefined}>{title}</th>
               ))}
@@ -999,6 +998,7 @@ function PaymentTotal({ rows, onEdit }: { rows: DataRow[]; onEdit?: (row: DataRo
           <tbody>
             <tr className="financial-totals">
               <th scope="row">Total filtrado</th>
+              <td />
               {totalColumns.map(([field]) => (
                 <td key={field} className={field === "net" ? "financial-net-column" : undefined}>{rows.some(row => row[field] == null) ? "—" : money(sum(rows, field))}</td>
               ))}
@@ -1006,13 +1006,14 @@ function PaymentTotal({ rows, onEdit }: { rows: DataRow[]; onEdit?: (row: DataRo
               {onEdit && <td />}
             </tr>
             {rows.map((row) => (
-              <tr key={row.period}>
+              <tr key={`${row.period}-${row.referenceCnpj}`}>
                 <td>
                   <strong>{row.period}</strong>
                   {row.missingNet && (
                     <small className="table-subtitle">Líquido não informado</small>
                   )}
                 </td>
+                <td>{row.referenceCnpj}</td>
                 {totalColumns.map(([field]) => (
                   <td
                     key={field}
@@ -1036,7 +1037,7 @@ function PaymentTotal({ rows, onEdit }: { rows: DataRow[]; onEdit?: (row: DataRo
                 {onEdit && <td><button type="button" className="table-action" onClick={() => onEdit(row)} title={`Editar líquido e data de ${row.period}`}>Editar</button></td>}
               </tr>
             ))}
-            {!rows.length && <EmptyRow columns={onEdit ? 13 : 12} />}
+            {!rows.length && <EmptyRow columns={onEdit ? 14 : 13} />}
           </tbody>
         </table>
       </div>

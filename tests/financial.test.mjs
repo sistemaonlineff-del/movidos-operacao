@@ -106,7 +106,9 @@ test('manual proportional payments remain separate without replacing items or re
   assert.equal(added.w2d, 2)
   const totals = buildTotals(details, occurrences, [{ ...periods[0], net_amount: 1000 }], [])
   assert.equal(totals[0].net, 1000)
-  assert.equal(totals[0].payable, original.receivable + 4.5)
+  assert.equal(totals[0].payable, original.receivable)
+  assert.equal(totals.find(row => row.referenceCnpj === 'BELLY').payable, 4.5)
+  assert.equal(totals.find(row => row.referenceCnpj === 'BELLY').net, null)
 })
 test('same DROP under different partners never shares losses', () => {
   const rows = [loss('1', 'PUDO Missing', 10), loss('2', 'D2D Missing', 100, 'p2'), loss('3', 'D2D Missing - não cobrei', 30)]
@@ -180,7 +182,7 @@ test('closing template imports one net amount and date per partner without dupli
   const XLSX = await import('xlsx')
   const workbook = createClosingTemplate()
   const partner = periods[0].partner
-  assert.deepEqual(XLSX.utils.sheet_to_json(workbook.Sheets['Pagamento Total'], { header: 1 })[0], ['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento'])
+  assert.deepEqual(XLSX.utils.sheet_to_json(workbook.Sheets['Pagamento Total'], { header: 1 })[0], ['Periodo', 'Parceiro', 'TotalLiquidoAReceber', 'DataPagamento', 'CNPJReferencia'])
   const populated = createClosingTemplate('33. 1Q DE AGOSTO')
   assert.equal(populated.Sheets['Pagamento Total'].A2.v, '33. 1Q DE AGOSTO')
   assert.equal(populated.Sheets.Fechamento.A2.v, '33. 1Q DE AGOSTO')
@@ -200,6 +202,20 @@ test('closing template imports one net amount and date per partner without dupli
   assert.deepEqual(readClosingSummary(workbook, [partner], '33. 1Q DE AGOSTO').get(partner), summary)
 })
 
+test('closing totals keep BELLY and MOVIDOS separate for the same fortnight and partner', async () => {
+  const XLSX = await import('xlsx')
+  const partner = periods[0].partner
+  const workbook = createClosingTemplate('35. 1Q DE SETEMBRO')
+  workbook.Sheets['Pagamento Total'] = XLSX.utils.aoa_to_sheet([['Parceiro','TotalLiquidoAReceber','DataPagamento','CNPJReferencia'],[partner,100,'12/10/2026','MOVIDOS'],[partner,200,'13/10/2026','BELLY']])
+  const groups = ['MOVIDOS','BELLY'].map(referenceCnpj => ({partner, referenceCnpj}))
+  const summary = readClosingSummary(workbook, groups)
+  const scoped = groups.map((group,index) => ({...periods[0],id:`ref${index}`,reference_cnpj:group.referenceCnpj,...summary.get(`${partner}|${group.referenceCnpj}`)}))
+  const totals = buildTotals([],[],scoped,[])
+  assert.deepEqual(totals.map(row => [row.referenceCnpj,row.net]), [['MOVIDOS',100],['BELLY',200]])
+  assert.equal(paymentTotalTarget(scoped,[],scoped[0].label,partner,'BELLY').record.id,'ref1')
+  workbook.Sheets['Pagamento Total'].D2.v = ''
+  assert.throws(()=>readClosingSummary(workbook,groups),/CNPJReferencia/)
+})
 test('historical complement preserves zero and dates, skips blank reimbursements and rejects duplicate net values', async () => {
   const XLSX = await import('xlsx')
   const rows = [['Vendors/PERÍODO'], ['PERÍODO', '', '', '', '', '', '', 'TOTAL LÍQUIDO A RECEBER'], ['PERIODO', '', '', '', '', '', '', 153227.50999999998, '', '', '', '', 46281], ['PERIODO', 'Reembolso', '', '', '', '', 500, '', '', '', '', '', ''], ['ZERO', '', '', '', '', '', '', 0, '', '', '', '', 46280], ['FUTURO', '', '', '', '', '', '', '', '', '', '', '', 46301]]
@@ -213,6 +229,20 @@ test('historical complement preserves zero and dates, skips blank reimbursements
   assert.throws(() => readHistoricalPayments(workbook), /Mais de um líquido/)
 })
 
+test('CNAB accepts absent date and document columns without accepting malformed supplied dates', async () => {
+  const XLSX = await import('xlsx')
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['DROP', 'RESPONSAVEL', 'TOTAL DROP', 'PIX'], ['DROP', 'Pessoa', 10, 'test@example.com']]), 'Pagamentos')
+  const result = await readCnabSpreadsheet({ arrayBuffer: async () => XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) })
+  assert.equal(result.errors.length, 0)
+  assert.equal(result.payments[0].paymentDate, '')
+  assert.equal(result.payments[0].document, '')
+  const lines = createCnabInter(result.payments, new Date(2026, 9, 12)).split('\r\n')
+  assert.equal(lines[2].slice(93, 101), '12102026')
+  assert.equal(lines[3].slice(17, 32), '000000000000000')
+  result.payments[0].pix = '12345678901'
+  assert.equal(createCnabInter(result.payments).split('\r\n')[3].slice(17, 32), '100012345678901')
+})
 test('CNAB reads native Excel dates independently of display format and rejects invalid dates', async () => {
   const XLSX = await import('xlsx')
   for (const date1904 of [false, true]) {

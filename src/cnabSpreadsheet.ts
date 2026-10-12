@@ -25,36 +25,37 @@ export async function readCnabSpreadsheet(file: File): Promise<CnabSpreadsheetRe
   const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false })
   for (const sheetName of workbook.SheetNames) {
     const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false })
-    const headerRow = rows.findIndex(row => labels.every(label => row.some(cell => normalize(cell) === label)))
+    const headerRow = rows.findIndex(row => labels.slice(0, 4).every(label => row.some(cell => normalize(cell) === label)))
     if (headerRow < 0) continue
     const indexes = new Map(rows[headerRow].map((cell, index) => [normalize(cell), index]))
     const payments: CnabPayment[] = [], errors: string[] = []
     rows.slice(headerRow + 1).forEach((row, offset) => {
       const line = headerRow + offset + 2
       const get = (label: typeof labels[number]) => row[indexes.get(label) ?? -1]
-      if (![...labels].some(label => String(get(label)).trim())) return
+      if (![...labels].some(label => String(get(label) ?? '').trim())) return
       const amount = value(get('TOTAL DROP'))
-      const dateCell = workbook.Sheets[sheetName][XLSX.utils.encode_cell({ r: line - 1, c: indexes.get('DATA PAGAMENTO')! })]
+      const dateIndex = indexes.get('DATA PAGAMENTO')
+      const dateCell = dateIndex == null ? undefined : workbook.Sheets[sheetName][XLSX.utils.encode_cell({ r: line - 1, c: dateIndex })]
       const excelDate = typeof dateCell?.v === 'number' ? XLSX.SSF.parse_date_code(dateCell.v, { date1904: workbook.Workbook?.WBProps?.date1904 }) : null
       const paymentDate = excelDate ? date(`${excelDate.y}-${excelDate.m}-${excelDate.d}`) : date(get('DATA PAGAMENTO'))
       const pix = String(get('PIX') ?? '').trim()
       const document = String(get('CPF CNPJ') ?? '').trim()
-      if (!String(get('DROP') ?? '').trim() || !Number.isFinite(amount) || amount <= 0 || !pix || !paymentDate || !document) {
-        errors.push(`Linha ${line}: preencha DROP, TOTAL DROP, PIX, DATA PAGAMENTO e CPF/CNPJ.`)
+      if (!String(get('DROP') ?? '').trim() || !Number.isFinite(amount) || amount <= 0 || !pix || (String(get('DATA PAGAMENTO') ?? '').trim() && !paymentDate)) {
+        errors.push(`Linha ${line}: confira DROP, TOTAL DROP e PIX; se informada, a data deve ser válida.`)
         return
       }
       payments.push({ drop: String(get('DROP')).trim(), responsible: String(get('RESPONSAVEL') ?? '').trim(), value: amount, pix, paymentDate, document, pixHolderName: String(get('RESPONSAVEL') ?? '').trim() })
     })
     return { payments, rowsFound: payments.length + errors.length, errors }
   }
-  throw new Error('Não encontrei as colunas obrigatórias: DROP, RESPONSÁVEL, TOTAL DROP, PIX, DATA PAGAMENTO e CPF/CNPJ.')
+  throw new Error('Não encontrei as colunas obrigatórias: DROP, RESPONSÁVEL, TOTAL DROP e PIX.')
 }
 
 export async function downloadCnabTemplate() {
   const XLSX = await import('xlsx')
   const sheet = XLSX.utils.aoa_to_sheet([
     ['DROP', 'RESPONSÁVEL', 'TOTAL DROP', 'PIX', 'DATA PAGAMENTO', 'CPF/CNPJ'],
-    ['Exemplo de DROP', 'Nome do responsável', 0, 'Chave PIX', 'dd/mm/aaaa', 'CPF ou CNPJ'],
+    ['Exemplo de DROP', 'Nome do responsável', 0, 'Chave PIX', '', ''],
   ])
   sheet['!cols'] = [22, 28, 16, 30, 18, 20].map(wch => ({ wch }))
   const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, sheet, 'Pagamentos')

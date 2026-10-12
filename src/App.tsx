@@ -14,6 +14,8 @@ import DropPhotos from "./DropPhotos";
 import DropDocuments from "./DropDocuments";
 import MunicipalityInput from "./MunicipalityInput";
 const Financeiro = lazy(() => import("./Financeiro"));
+const FinancialInvoices = lazy(() => import("./FinancialInvoices"));
+const InvoiceUpload = lazy(() => import("./FinancialInvoices").then(module => ({ default: module.InvoiceUpload })));
 const CnabUpload = lazy(() => import("./CnabUpload"));
 const ContractTemplateManager = lazy(() => import("./ContractTemplateManager"));
 const FinanceiroVisuais = lazy(() => import("./FinanceiroVisuais"));
@@ -126,6 +128,8 @@ const fields = [
   "saturday_scan_time",
   "signed_at",
   "terminated_at",
+  "operation_started_at",
+  "operation_ended_at",
   "termination_reason",
   "notes",
 ];
@@ -433,7 +437,6 @@ function useDrops() {
       const { data, error } = await supabase
         .from("drops")
         .select("id,name,status,municipality,state,latitude,longitude,is_active")
-        .eq("is_active", true)
         .order("legacy_id", { ascending: false, nullsFirst: false })
         .range(from, from + 999);
       if (error) {
@@ -454,7 +457,7 @@ function useDrops() {
 }
 function Home() {
   const { drops, loading, error } = useDrops();
-  const active = drops.filter((d) => d.status.startsWith("ATIVO")).length;
+  const active = drops.filter((d) => d.is_active !== false && d.status.startsWith("ATIVO")).length;
   return (
     <>
       <section className="metric-grid">
@@ -660,6 +663,7 @@ function Cadastro() {
       setMessage("Informe o Nome do Drop.");
       return;
     }
+    if (values.operation_started_at && values.operation_ended_at && values.operation_ended_at < values.operation_started_at) { setMessage("O fim da operação não pode ser anterior ao início."); return; }
     if (!statuses.includes(values.status)) {
       setMessage("Selecione um status válido para o cadastro.");
       return;
@@ -978,6 +982,8 @@ function Cadastro() {
           <div className="form-grid">
             <label>Data do contrato<input type="date" value={values.signed_at} onChange={(e) => put("signed_at", e.target.value)} /></label>
             <label>Data do distrato<input type="date" value={values.terminated_at} onChange={(e) => put("terminated_at", e.target.value)} /></label>
+            <label>Início da operação<input type="date" value={values.operation_started_at} onChange={(e) => put("operation_started_at", e.target.value)} /></label>
+            <label>Fim da operação<input type="date" min={values.operation_started_at || undefined} value={values.operation_ended_at} onChange={(e) => put("operation_ended_at", e.target.value)} /></label>
             <label className="full">Motivo do distrato<textarea value={values.termination_reason} onChange={(e) => put("termination_reason", e.target.value)} placeholder="Informe o motivo, se houver distrato." /></label>
           </div>
         </section>
@@ -1022,6 +1028,7 @@ function Empty({ title }: { title: string }) {
   );
 }
 function App() {
+  const location = useLocation();
   const [logged, setLogged] = useState(false);
   const [checking, setChecking] = useState(true);
   useEffect(() => {
@@ -1038,6 +1045,7 @@ function App() {
     );
     return () => listener.subscription.unsubscribe();
   }, []);
+  if (location.pathname === '/enviar-nf') return <Suspense fallback={<main>Carregando...</main>}><InvoiceUpload /></Suspense>;
   if (checking) return <main className="auth-page" />;
   if (!logged) return <Login onSuccess={() => setLogged(true)} />;
   const exit = async () => {
@@ -1066,6 +1074,7 @@ function App() {
         />
         <Route path="/cadastros/last-mile" element={<Guard permission="cadastros_view"><Lista kind="last_mile" /></Guard>} />
         <Route path="/cadastros/last-mile/novo" element={<Guard permission="cadastros_create"><LastMileCadastro /></Guard>} />
+        <Route path="/financeiro/notas-fiscais" element={<Guard permission="financeiro_view"><FinancialInvoices /></Guard>} />
         <Route
           path="/financeiro"
           element={
@@ -1173,6 +1182,7 @@ function SecureLayoutInner({
     "/cadastros/last-mile": "Cadastros Last Mile",
     "/cadastros/last-mile/novo": "Novo cadastro Last Mile",
     "/financeiro": "Financeiro",
+    "/financeiro/notas-fiscais": "Notas fiscais",
     "/financeiro/pagamento-total": "Pagamento Total",
     "/financeiro/pagamento-detalhes": "Pagamento Detalhes",
     "/financeiro/cnab": "Gerar CNAB",
@@ -1300,6 +1310,7 @@ function SecureLayoutInner({
                   >
                     Gerar CNAB
                   </button>
+                  <button className={loc.pathname === '/financeiro/notas-fiscais' ? 'sub-active' : ''} onClick={() => nav('/financeiro/notas-fiscais')}>Notas fiscais</button>
                 </div>
               )}
             </>
