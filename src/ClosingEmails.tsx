@@ -81,9 +81,10 @@ export default function ClosingEmails({
 
   const groups = useMemo(() => {
     const grouped = new Map<string, DataRow[]>();
-    rows.forEach((row) =>
-      grouped.set(key(row.drop), [...(grouped.get(key(row.drop)) ?? []), row]),
-    );
+    rows.forEach((row) => {
+      const identity = JSON.stringify([row.periodId, row.dropId, key(row.drop), row.referenceCnpj, text(row.email).toLowerCase(), row.responsible]);
+      grouped.set(identity, [...(grouped.get(identity) ?? []), row]);
+    });
     return [...grouped.values()];
   }, [rows]);
 
@@ -203,7 +204,7 @@ export default function ClosingEmails({
         }
         setMessage(`Enviando ${next.length + 1} de ${groups.length}: ${text(row.drop)}`);
         try {
-          const result = await requestMail({ dropId: row.dropId, periodId: row.periodId, period, partner, subject, body, pdf });
+          const result = await requestMail({ dropId: row.dropId, periodId: row.periodId, detailIds: group.map(detail => detail.id), period, partner, subject, body, pdf });
           const status = result.status === "aceito" ? "ACEITO" : result.status === "incerto" ? "INCERTO" : "ERRO";
           next.push({ drop: text(row.drop), status, error: result.error || (result.duplicate ? "Já aceito anteriormente; não reenviado." : "") });
           setResults([...next]);

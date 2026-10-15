@@ -327,7 +327,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
     const drop = drops.filter(drop => key(drop.name) === dropFilter && (!drop.partner || financialPartner(drop) === (period && financialPartner(period))));
     const registration = drop.length === 1 ? drop[0] : undefined;
     setEditError("");
-    setEditing({ id: crypto.randomUUID(), source: "new", raw: {}, periodId: period?.id ?? "", period: period?.label ?? "", partner: period ? financialPartner(period) : "", referenceCnpj: period?.reference_cnpj || "MOVIDOS", dropId: registration?.id ?? "", drop: registration?.name ?? "", responsible: registration?.responsible ?? "", pix: registration?.pix_key ?? "", paymentDate: text(period?.payment_date).slice(0, 10), packages: 0, unit: 0, subtotal: 0, w2d: 0, d2d: 0, loss: 0, reimbursement: 0, receivable: 0 });
+    setEditing({ id: crypto.randomUUID(), source: "new", raw: {}, periodId: period?.id ?? "", period: period?.label ?? "", partner: period ? financialPartner(period) : "", referenceCnpj: period?.reference_cnpj || "MOVIDOS", dropId: registration?.id ?? "", drop: registration?.name ?? "", responsible: registration?.responsible ?? "", pix: registration?.pix_key ?? "", email: registration?.email ?? "", document: registration?.cnpj || registration?.cpf || "", pixHolderName: registration?.pix_holder_name ?? "", paymentDate: text(period?.payment_date).slice(0, 10), packages: 0, unit: 0, subtotal: 0, w2d: 0, d2d: 0, loss: 0, reimbursement: 0, receivable: 0 });
   };
   const saveDetail = async (event: FormEvent) => {
     event.preventDefault();
@@ -356,7 +356,8 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         );
       const originalPeriod = periodById.get(editing.periodId);
       if (manualDetail && (!originalPeriod || originalPeriod.label !== text(editing.period) || financialPartner(originalPeriod) !== text(editing.partner))) throw new Error("Selecione um fechamento existente para este pagamento.");
-      if (manualDetail && !detailDrops.some(drop => drop.id === editing.dropId && drop.name === editing.drop)) throw new Error("Selecione um DROP cadastrado para o parceiro deste fechamento.");
+      const sameSavedDrop = editing.source === "history" && editing.dropId === editing.raw.drop_id && editing.drop === editing.raw.drop_name_snapshot && editing.periodId === editing.raw.financial_period_id;
+      if (manualDetail && !sameSavedDrop && !detailDrops.some(drop => drop.id === editing.dropId && drop.name === editing.drop)) throw new Error("Selecione um DROP cadastrado para o parceiro deste fechamento.");
       let period = originalPeriod && originalPeriod.label === text(editing.period) && financialPartner(originalPeriod) === text(editing.partner) ? originalPeriod : periods.find(
         (row) =>
           row.label === text(editing.period) &&
@@ -387,6 +388,7 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           (Object.keys(previous).length ? undefined : editing.raw.observation),
         movidosClosing: {
           ...previous.movidosClosing,
+          registrationSnapshot: { ...editing.registrationSnapshot, version: 1, capturedAt: editing.registrationSnapshot?.capturedAt ?? new Date().toISOString(), dropId: editing.dropId || null, responsible: text(editing.responsible), pix: text(editing.pix), email: text(editing.email), document: text(editing.document), pixHolderName: text(editing.pixHolderName) },
           referenceCnpj: text(editing.referenceCnpj),
           ...(manualDetail ? { manualEntry: true, referenceCnpj: text(editing.referenceCnpj) } : {}),
           sourceItemId: editing.sourceItemId,
@@ -396,13 +398,13 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         },
       });
       const payload = {
-        ...(manualDetail ? { drop_id: editing.dropId } : {}),
+        drop_id: editing.dropId || null,
         financial_period_id: period!.id,
         period_label: text(editing.period),
         partner: text(editing.partner),
         logistics_partner: text(editing.partner),
         drop_name_snapshot: text(editing.drop),
-        responsible: text(editing.responsible) || null,
+        responsible: text(editing.responsible),
         package_quantity: number(editing.packages),
         amount: number(editing.unit),
         subtotal: number(editing.subtotal),
@@ -412,7 +414,10 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
         paid_at: editing.paymentDate
           ? `${text(editing.paymentDate).slice(0, 10)}T12:00:00-03:00`
           : null,
-        pix_key: text(editing.pix) || null,
+        pix_key: text(editing.pix),
+        email: text(editing.email) || null,
+        cnpj: text(editing.document),
+        pix_holder_name: text(editing.pixHolderName),
         observation,
       };
       const result =
@@ -752,14 +757,14 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
           submitDisabled={!canEditTotal}
         >
           <div className="form-grid">
-            {detailFields.map(
+            {[...detailFields, ["email", "E-mail do fechamento", "email"], ["document", "CPF/CNPJ do favorecido", "text"], ["pixHolderName", "Titular do PIX", "text"]].map(
               ([field, label, type]) => (
                 <label key={field}>
                   {label}
                   {manualDetail && field === "period" ? (
                     <select aria-label={label} required autoFocus value={editing.periodId ?? ""} onChange={event => {
                       const period = periodById.get(event.target.value);
-                      setEditing({ ...editing, periodId: period?.id ?? "", period: period?.label ?? "", partner: period ? financialPartner(period) : "", referenceCnpj: period?.reference_cnpj || "MOVIDOS", paymentDate: text(period?.payment_date).slice(0, 10), drop: "", dropId: "", responsible: "", pix: "" });
+                      setEditing({ ...editing, periodId: period?.id ?? "", period: period?.label ?? "", partner: period ? financialPartner(period) : "", referenceCnpj: period?.reference_cnpj || "MOVIDOS", paymentDate: text(period?.payment_date).slice(0, 10), drop: "", dropId: "", responsible: "", pix: "", email: "", document: "", pixHolderName: "", registrationSnapshot: undefined });
                     }}>
                       <option value="">Selecionar fechamento</option>
                       {detailPeriods.map(period => <option key={period.id} value={period.id}>{period.label} · {financialPartner(period)} · {period.partner} · {period.id.slice(0, 8)}</option>)}
@@ -767,10 +772,11 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
                   ) : manualDetail && field === "drop" ? (
                     <select aria-label={label} required value={editing.dropId ?? ""} onChange={event => {
                       const drop = detailDrops.find(drop => drop.id === event.target.value);
-                      setEditing({ ...editing, dropId: drop?.id ?? "", drop: drop?.name ?? "", responsible: drop?.responsible ?? "", pix: drop?.pix_key ?? "" });
+                      setEditing({ ...editing, dropId: drop?.id ?? "", drop: drop?.name ?? "", responsible: drop?.responsible ?? "", pix: drop?.pix_key ?? "", email: drop?.email ?? "", document: drop?.cnpj || drop?.cpf || "", pixHolderName: drop?.pix_holder_name ?? "", registrationSnapshot: undefined });
                     }}>
                       <option value="">Selecionar DROP</option>
-                      {detailDrops.map(drop => <option key={drop.id} value={drop.id}>{drop.name} · {drop.responsible}</option>)}
+                      {editing.dropId && <option value={editing.dropId}>{editing.drop} · {editing.responsible}</option>}
+                      {detailDrops.filter(drop => drop.id !== editing.dropId).map(drop => <option key={drop.id} value={drop.id}>{drop.name} · {drop.responsible}</option>)}
                     </select>
                   ) : type === "select" ? (
                     <select
@@ -803,6 +809,14 @@ function FinanceiroVisualPage({ kind }: { kind: Kind }) {
                 </label>
               ),
             )}
+            {!manualDetail && <label>
+              Cadastro vinculado
+              <select aria-label="Cadastro vinculado" value={editing.dropId ?? ""} onChange={event => setEditing({ ...editing, dropId: event.target.value || null })}>
+                <option value="">Sem vínculo cadastral</option>
+                {editing.dropId && <option value={editing.dropId}>{editing.drop} · {editing.dropId}</option>}
+                {detailDrops.filter(drop => drop.id !== editing.dropId).map(drop => <option key={drop.id} value={drop.id}>{drop.name} · {drop.responsible} · {drop.id}</option>)}
+              </select>
+            </label>}
           </div>
           <p className="financial-hint">
             Quantidade e valor acordado recalculam o subtotal. Extravios e

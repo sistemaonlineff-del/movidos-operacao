@@ -3,7 +3,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import { jsPDF } from 'jspdf'
 import { configuredMailer, MailError, mailFailureMessage, verifyMailConnection, type ClosingMail } from '../../server/closing-mail.js'
-import { financialPartner } from '../../src/financialData.js'
+import { buildDetails, financialPartner, type DataRow } from '../../src/financialData.js'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const emailAddress = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/
@@ -91,17 +91,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (typeof input.pdf !== 'string' || !input.pdf.length || input.pdf.length > 1400000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(input.pdf)) throw new MailError(400, 'Anexo PDF inválido ou maior que 1 MB.')
     const pdf = Buffer.from(input.pdf, 'base64')
     if (pdf.subarray(0, 5).toString() !== '%PDF-' || !pdf.subarray(-1024).includes(Buffer.from('%%EOF'))) throw new MailError(400, 'Anexo não reconhecido como PDF.')
-    const [{ data: drop, error: dropError }, { data: period, error: periodError }] = await Promise.all([
-      admin.from('drops').select('id,name,email,responsible').eq('id', input.dropId).eq('is_active', true).maybeSingle(),
-      admin.from('financial_periods').select('*').eq('id', input.periodId).eq('is_active', true).maybeSingle(),
-    ])
-    if (dropError || periodError) throw new MailError(503, 'Não foi possível conferir os dados do fechamento.')
-    if (!drop || !period || period.label !== input.period || financialPartner(period) !== input.partner) throw new MailError(400, 'O DROP ou período não corresponde ao fechamento selecionado.')
-    if (!emailAddress.test(drop.email ?? '')) throw new MailError(400, 'Cadastre um único e-mail válido no DROP antes de enviar.')
+    if (!Array.isArray(input.detailIds) || !input.detailIds.length || input.detailIds.length > 1000 || input.detailIds.some((id: unknown) => typeof id !== 'string' || !uuid.test(id)) || new Set(input.detailIds).size !== input.detailIds.length) throw new MailError(400, 'Atualize a tela e selecione os pagamentos do fechamento antes de enviar.')
+    const { data: period, error: periodError } = await admin.from('financial_periods').select('*').eq('id', input.periodId).eq('is_active', true).maybeSingle()
+    if (periodError) throw new MailError(503, 'Não foi possível conferir os dados do fechamento.')
+    if (!period || period.label !== input.period || financialPartner(period) !== input.partner) throw new MailError(400, 'O DROP ou período não corresponde ao fechamento selecionado.')
+    if (period.financial_view_id) {
+      const view = await admin.from('financial_views').select('id').eq('id', period.financial_view_id).eq('is_active', true).maybeSingle()
+      if (view.error) throw new MailError(503, 'Não foi possível conferir a View.')
+      if (!view.data) throw new MailError(400, 'Fechamento inativo.')
+    }
+    const read = async (table: string) => {
+      const rows: DataRow[] = []
+      for (let offset = 0; ; offset += 1000) {
+        const result = await admin.from(table).select('*').eq('financial_period_id', period.id).eq('is_active', true).order('id').range(offset, offset + 999)
+        if (result.error) throw new MailError(503, 'Não foi possível conferir os pagamentos salvos.')
+        rows.push(...result.data)
+        if (result.data.length < 1000) return rows
+      }
+    }
+    const [history, items] = await Promise.all([read('financial_payment_history'), read('financial_drop_items')])
+    const details = buildDetails(history, items, [], [period]).filter(row => input.detailIds.includes(row.id))
+    const saved = details[0]
+    if (details.length !== input.detailIds.length || !saved || details.some(row => row.dropId !== input.dropId || row.drop !== saved.drop || row.email.toLowerCase() !== saved.email.toLowerCase() || row.responsible !== saved.responsible || row.referenceCnpj !== saved.referenceCnpj)) throw new MailError(400, 'Os pagamentos não correspondem ao mesmo destinatário salvo no fechamento.')
+    const drop = { id: saved.dropId, name: saved.drop, email: saved.email, responsible: saved.responsible }
+    if (!emailAddress.test(drop.email)) throw new MailError(400, 'Confira o e-mail salvo neste pagamento pela edição do financeiro antes de enviar.')
     if (restrictedRecipient && drop.email.toLowerCase() !== restrictedRecipient) throw new MailError(403, 'Modo de teste ativo: envio para clientes bloqueado por MAIL_TEST_RECIPIENT. O administrador deve remover essa variável na Vercel e fazer redeploy para liberar os destinatários cadastrados. Nenhum e-mail foi enviado.')
-    const membership = await Promise.all(['financial_drop_items', 'financial_payment_history'].map(table => admin.from(table).select('id').eq('financial_period_id', period.id).eq('drop_name_snapshot', drop.name).eq('is_active', true).limit(1)))
-    if (membership.some(result => result.error)) throw new MailError(503, 'Não foi possível conferir os itens do DROP.')
-    if (!membership.some(result => result.data?.length)) throw new MailError(400, 'O DROP não possui itens neste fechamento.')
     const attachmentName = 'fechamento.pdf'
     const deliveryKey = createHash('sha256').update(JSON.stringify([period.financial_view_id || period.id, period.label, input.partner, drop.id])).digest('hex')
     return await deliver(admin, res, { delivery_key: deliveryKey, financial_period_id: period.id, drop_id: drop.id, recipient_email: drop.email, period_label: period.label, partner: input.partner, drop_name_snapshot: drop.name, responsible: drop.responsible, subject, attachment_name: attachmentName, status: 'enviando', created_by: auth.user.id }, { to: drop.email, subject, body, attachmentName, pdf }, send)

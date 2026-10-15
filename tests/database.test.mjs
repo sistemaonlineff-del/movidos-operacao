@@ -5,6 +5,56 @@ import { PGlite } from '@electric-sql/pglite'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
 
+test('dated successors share a point without overlapping operations or changing history and permissions', async () => {
+  const database = new PGlite()
+  try {
+    await database.exec(`create role authenticated;
+      create table drops(id uuid primary key default gen_random_uuid(),name text,partner text,municipality text,registration_type text,is_active boolean default true,responsible text,operation_started_at date,operation_ended_at date);
+      alter table drops enable row level security;
+      create policy existing_access on drops for select to authenticated using(true);
+      insert into drops(name,partner,municipality,responsible,operation_started_at,operation_ended_at,is_active) values('MGC 5','IMILE','Suzano','Davi','2026-08-01','2026-10-10',false);`)
+    const before = (await database.query('select * from drops')).rows
+    const policies = (await database.query('select * from pg_policies')).rows
+    const migration = await readFile('supabase/migrations/20261014130000_registration_operation_successors.sql', 'utf8')
+    await database.exec(migration); await database.exec(migration)
+    assert.deepEqual((await database.query('select * from drops')).rows, before)
+    await database.exec("insert into drops(name,partner,municipality,responsible,operation_started_at) values(' mgc 5 ','imile','SUZANO','Gustavo','2026-10-11')")
+    assert.equal((await database.query('select count(*) from drops')).rows[0].count, 2)
+    await assert.rejects(database.exec("insert into drops(name,partner,municipality,responsible,operation_started_at) values('MGC 5','IMILE','Suzano','Outro','2026-10-10')"), /sobrepostas/)
+    await assert.rejects(database.exec("insert into drops(name,partner,municipality,responsible) values('MGC 5','IMILE','Suzano','Sem datas')"), /sobrepostas/)
+    await assert.rejects(database.exec("update drops set operation_started_at='2026-10-10' where responsible='Gustavo'"), /sobrepostas/)
+    await assert.rejects(database.exec("update drops set operation_ended_at='2026-10-11' where responsible='Davi'"), /sobrepostas/)
+    await database.exec("update drops set responsible='Davi corrigido' where responsible='Davi'")
+    await database.exec("insert into drops(name,partner,municipality,responsible) values('MGC 5','OUTRO','Suzano','Outro parceiro')")
+    await database.exec(migration)
+    assert.equal((await database.query("select operation_started_at::text from drops where responsible='Gustavo'")).rows[0].operation_started_at, '2026-10-11')
+    assert.deepEqual((await database.query('select * from pg_policies')).rows, policies)
+  } finally { await database.close() }
+})
+
+test('registration snapshot migration preserves history, permissions and snapshots after registration changes', async () => {
+  const database = new PGlite()
+  try {
+    await database.exec(`create role authenticated;
+      create table financial_drop_items(id integer primary key, unit_value numeric);
+      alter table financial_drop_items enable row level security;
+      create policy finance_existing on financial_drop_items for select to authenticated using(true);
+      insert into financial_drop_items values(1,.13);
+      create table drops(id integer primary key,responsible text,pix_key text);
+      insert into drops values(1,'Davi','00123');`)
+    const policies = (await database.query('select * from pg_policies')).rows
+    const migration = await readFile('supabase/migrations/20261014120000_financial_registration_snapshots.sql', 'utf8')
+    await database.exec(migration); await database.exec(migration)
+    assert.deepEqual((await database.query('select * from financial_drop_items')).rows, [{ id: 1, unit_value: '0.13', registration_snapshot: null }])
+    await database.exec(`insert into financial_drop_items values(2,.25,'{"version":1,"responsible":"Davi","pix":"00123"}');
+      update drops set responsible='Gustavo',pix_key='99999';`)
+    assert.equal((await database.query('select registration_snapshot from financial_drop_items where id=2')).rows[0].registration_snapshot.responsible, 'Davi')
+    await database.exec(migration)
+    assert.equal((await database.query('select registration_snapshot from financial_drop_items where id=2')).rows[0].registration_snapshot.pix, '00123')
+    assert.deepEqual((await database.query('select * from pg_policies')).rows, policies)
+  } finally { await database.close() }
+})
+
 test('financial view controls rename atomically, isolate references, reject duplicates and deactivate without deleting', async () => {
   const database = new PGlite()
   try {

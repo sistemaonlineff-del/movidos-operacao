@@ -16,7 +16,7 @@ export function createClosingPdf(rows: DataRow[], losses: DataRow[], periods: Da
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
   doc.setProperties({ title: 'Fechamento por DROP - iMile', subject: 'Fechamento financeiro e extravios por DROP', creator: 'Sistema Movidos' })
   const groups = new Map<string, DataRow[]>()
-  rows.forEach(row => { const identity = `${row.periodId ?? row.period}|${key(row.partner)}|${key(row.drop)}`; groups.set(identity, [...(groups.get(identity) ?? []), row]) })
+  rows.forEach(row => { const identity = JSON.stringify([row.periodId ?? row.period, key(row.partner), key(row.drop), row.dropId, row.referenceCnpj, row.responsible]); groups.set(identity, [...(groups.get(identity) ?? []), row]) })
   let y = 8
   function title(value: string, width: number, color: [number, number, number]) {
     doc.setFillColor(...color); doc.rect(8, y, width, 10, 'F')
@@ -47,6 +47,7 @@ export function createClosingPdf(rows: DataRow[], losses: DataRow[], periods: Da
   for (const group of groups.values()) {
     if (groupIndex++) nextPage()
     title('Fechamento por DROP - iMile', 277, blue)
+    cells([`Responsavel: ${text(group[0].responsible) || 'Nao informado'}`], [{ label: 'Responsavel', width: 277 }], [220, 230, 241])
     cells(closingColumns.map(column => column.label), closingColumns, blue, true)
     for (const row of group) {
       const values = [row.period, row.drop, row.partner, row.packageType || '', number(row.packages).toLocaleString('pt-BR'), ...['unit', 'subtotal', 'w2d', 'd2d', 'loss', 'reimbursement', 'receivable'].map(field => decimal(row[field])), date(row.paymentDate), row.pix || '']

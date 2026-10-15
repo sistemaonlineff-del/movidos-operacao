@@ -1,5 +1,30 @@
 # Migração do Access para Supabase
 
+## Cópia histórica do cadastro (14/10/2026)
+
+Aplicar [migrations/20261014120000_financial_registration_snapshots.sql](migrations/20261014120000_financial_registration_snapshots.sql) no SQL Editor após revisão e antes de publicar frontend/API. Adiciona somente `financial_drop_items.registration_snapshot` (JSONB nullable) e recarrega o schema. É repetível; não preenche dados antigos nem altera valores, cadastros, políticas ou permissões. Não reaplicar schema/importações/backfills antigos.
+
+Em seguida, aplicar [migrations/20261014130000_registration_operation_successors.sql](migrations/20261014130000_registration_operation_successors.sql), **depois** da antiga migração de cadastros/rotas, caso ainda precise aplicá-la. Atualiza o guard de duplicidade para permitir o mesmo nome/parceiro/município/tipo em intervalos de operação distintos. As datas são inclusivas: fim em 10/10 e início do sucessor em 11/10 são aceitos; início em 10/10 se sobrepõe e é recusado. Datas ausentes são limites abertos; cadastros desativados com datas também participam da proteção. Não cria, modifica ou desativa nenhum cadastro na instalação. Não altera RLS, concessões ou permissões individuais.
+
+Para importar uma quinzena, manter cadastros históricos separados com datas e tarifas corretas. O formulário usa datas explícitas da quinzena, incluindo ano, e consulta também históricos desativados. Sobreposição, lacuna ou ausência de cadastro elegível exige revisão. Na troca, a quantidade é informada por responsável, com soma exata; extravios recebem vínculo individual. A View salva `notes.operationPeriod`, e cada item salva vigência e período no snapshot, sem colunas extras de período. Não confundir com bloquear edições: os botões do financeiro continuam permitidos aos gestores.
+
+Conferência somente leitura:
+
+```sql
+select column_name, data_type
+from information_schema.columns
+where table_schema = 'public'
+	and table_name = 'financial_drop_items'
+	and column_name = 'registration_snapshot';
+
+select pg_get_triggerdef(oid)
+from pg_trigger
+where tgrelid = 'public.drops'::regclass
+	and tgname = 'guard_drop_duplicate';
+```
+
+Deve retornar uma linha com tipo `jsonb`; o trigger deve incluir `operation_started_at` e `operation_ended_at` entre os campos de UPDATE. Novas importações e inclusões manuais guardam cópia cadastral; edição financeira salva a cópia em `observation.movidosClosing.registrationSnapshot`, preservando o item original. Não existe atualização de fechamentos disparada por alterações no cadastro. Campos antigos sem cópia não são preenchidos com o responsável/PIX atual: revisar usando documentação histórica, pela edição do financeiro. E-mail, documento, titular e vínculo podem ser corrigidos explicitamente nessa edição. Não houve execução destes SQLs nem recuperação de dados reais nesta entrega.
+
 ## Atualização de 12/10/2026
 
 **Base existente: não executar novamente schema ou importação inicial.** SQLs testados localmente, não aplicados à produção. Aplicar pessoalmente no SQL Editor após backup/revisão, antes de publicar.

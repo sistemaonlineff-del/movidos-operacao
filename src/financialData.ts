@@ -126,6 +126,80 @@ export function notes(value: unknown): DataRow {
     return {};
   }
 }
+export function registrationSnapshot(registration: DataRow = {}) {
+  return {
+    version: 1,
+    capturedAt: new Date().toISOString(),
+    dropId: registration.id ?? null,
+    responsible: text(registration.responsible),
+    pix: text(registration.pix_key),
+    pixHolderName: text(registration.pix_holder_name),
+    document: text(registration.cnpj) || text(registration.cpf),
+    email: text(registration.email),
+    operationStartedAt: text(registration.operation_started_at),
+    operationEndedAt: text(registration.operation_ended_at),
+  };
+}
+export function closingWindow(start: string, end: string, label = '') {
+  const valid = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T12:00:00Z`)) && new Date(`${value}T12:00:00Z`).toISOString().slice(0, 10) === value;
+  if (!valid(start) || !valid(end) || start > end) throw new Error('Informe as datas de inicio e fim da quinzena.');
+  const firstDay = Number(start.slice(8));
+  const lastDay = new Date(Date.UTC(Number(start.slice(0, 4)), Number(start.slice(5, 7)), 0)).getUTCDate();
+  if (start.slice(0, 7) !== end.slice(0, 7) || !((firstDay === 1 && Number(end.slice(8)) === 15) || (firstDay === 16 && Number(end.slice(8)) === lastDay))) throw new Error('Selecione uma quinzena completa: dia 1 a 15 ou dia 16 ao ultimo dia do mes.');
+  const months = ['JANEIRO','FEVEREIRO','MARCO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
+  const normalized = key(label);
+  const namedMonth = months.findIndex(month => new RegExp(`\\b${month}\\b`).test(normalized));
+  const namedHalf = normalized.match(/\b([12])\s*Q\b/);
+  const namedYear = normalized.match(/\b(20\d{2})\b/);
+  if ((namedMonth >= 0 && namedMonth + 1 !== Number(start.slice(5, 7))) || (namedHalf && Number(namedHalf[1]) !== (firstDay === 1 ? 1 : 2)) || (namedYear && namedYear[1] !== start.slice(0, 4))) throw new Error('As datas da quinzena nao correspondem ao periodo informado no titulo.');
+  return { start, end };
+}
+export function closingOperators(dropName: unknown, partner: unknown, registrations: DataRow[], start: string, end: string, fallbackUnit = 0) {
+  closingWindow(start, end);
+  const candidates = registrations.filter(row => key(row.name) === key(dropName) && (row.is_active !== false || row.operation_started_at || row.operation_ended_at));
+  const exact = candidates.filter(row => key(normalizePartner(row.partner)) === key(normalizePartner(text(partner))));
+  const matches = exact.length ? exact : candidates.filter(row => !text(row.partner));
+  const selected = matches.filter(row => (!row.operation_started_at || row.operation_started_at <= end) && (!row.operation_ended_at || row.operation_ended_at >= start));
+  const description = `${text(dropName)} / ${text(partner)}`;
+  if (!selected.length) throw new Error(`Nenhum cadastro com operacao no periodo para ${description}. Confira as datas e o cadastro historico.`);
+  const ordered = selected.map(row => ({ row, from: row.operation_started_at || '0001-01-01', to: row.operation_ended_at || '9999-12-31' })).sort((first, second) => first.from.localeCompare(second.from));
+  if (ordered.some(entry => entry.from > entry.to)) throw new Error(`Datas de operacao invalidas para ${description}.`);
+  for (let index = 1; index < ordered.length; index++) {
+    const previous = ordered[index - 1];
+    const current = ordered[index];
+    if (current.from <= previous.to) throw new Error(`Datas de operacao sobrepostas ou ausentes para ${description}. Corrija os cadastros antes de importar.`);
+    const nextDay = new Date(`${previous.to}T12:00:00Z`);
+    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    if (nextDay.toISOString().slice(0, 10) !== current.from) throw new Error(`Ha dias sem responsavel na quinzena de ${description}. Confira as datas de operacao.`);
+  }
+  if (ordered[0].from > start || ordered[ordered.length - 1].to < end) throw new Error(`Ha dias sem responsavel na quinzena de ${description}. Confira as datas de operacao.`);
+  return ordered.map(({ row }) => {
+    if (row.monthly_value == null && (row.operation_started_at || row.operation_ended_at)) throw new Error(`Preencha o valor acordado de ${text(row.responsible) || description} no cadastro. A tarifa de outro responsavel nao sera reutilizada.`);
+    return {
+      registration_snapshot: { ...registrationSnapshot(row), closingStart: start, closingEnd: end },
+      unit_value: row.monthly_value == null ? fallbackUnit : number(row.monthly_value),
+    };
+  });
+}
+export function allocateClosingPackages(total: unknown, operators: DataRow[], quantities?: unknown[]) {
+  const packages = Number(total);
+  if (!text(total) || !Number.isInteger(packages) || packages < 0 || packages > 2147483647) throw new Error('Quantidade de pacotes invalida. Use um inteiro positivo ou zero.');
+  const values = quantities ?? (operators.length === 1 ? [packages] : []);
+  if (values.length !== operators.length || values.some(value => !/^\d+$/.test(text(value)) || !Number.isSafeInteger(Number(value)) || Number(value) > 2147483647)) throw new Error('Informe a quantidade de pacotes de cada responsavel, inclusive zero.');
+  if (values.reduce<number>((sum, value) => sum + Number(value), 0) !== packages) throw new Error(`A soma dos pacotes deve ser igual ao total importado (${packages}).`);
+  return operators.map((operator, index) => ({ ...operator, quantity_packages: Number(values[index]) }));
+}
+export function closingRegistration(dropName: unknown, partner: unknown, registrations: DataRow[], fallbackUnit = 0) {
+  const candidates = registrations.filter(row => row.is_active !== false && key(row.name) === key(dropName));
+  const exact = candidates.filter(row => key(normalizePartner(row.partner)) === key(normalizePartner(text(partner))));
+  const matches = exact.length ? exact : candidates.filter(row => !text(row.partner));
+  if (matches.length > 1) throw new Error(`Cadastro ambiguo para ${text(dropName)} e ${text(partner)}. Confira os cadastros antes de importar.`);
+  const registration = matches[0];
+  return {
+    registration_snapshot: registrationSnapshot(registration),
+    unit_value: registration?.monthly_value == null ? fallbackUnit : number(registration.monthly_value),
+  };
+}
 export function lossClass(status: unknown) {
   const normalized = key(status).replace(/[–—]/g, "-");
   const type = /PUDO|W2D/.test(normalized)
@@ -165,7 +239,7 @@ export function lossesFor(row: DataRow, losses: DataRow[], periods: DataRow[]) {
         ? row.periodId === loss.financial_period_id
         : key(row.period) === key(loss.period_label ?? period?.label) &&
           key(row.partner) === key(loss.partner ?? period?.partner);
-    return samePeriod && key(row.drop) === key(loss.drop_name_snapshot);
+    return samePeriod && key(row.drop) === key(loss.drop_name_snapshot) && (!loss.drop_id || !row.dropId || loss.drop_id === row.dropId);
   });
 }
 export function buildDetails(
@@ -173,7 +247,7 @@ export function buildDetails(
   items: DataRow[],
   losses: DataRow[],
   periods: DataRow[],
-  drops: DataRow[] = [],
+  _drops: DataRow[] = [],
 ) {
   const byId = new Map(periods.map((row) => [row.id, row]));
   const used = new Set<string>();
@@ -212,12 +286,6 @@ export function buildDetails(
       );
     else add(unlinkedLossGroups, labelIdentity, loss);
   }
-  const registrations = new Map<string, { row: DataRow; index: number }>();
-  drops.forEach((row, index) => {
-    const identity = `${key(row.name)}|${key(row.partner)}`;
-    if (!registrations.has(identity))
-      registrations.set(identity, { row, index });
-  });
   const source = history
     .map((row) => {
       const meta = notes(row.observation).movidosClosing ?? {};
@@ -235,8 +303,10 @@ export function buildDetails(
         .filter((row) => !used.has(row.id))
         .map((row) => ({ row, item: row, history: false, meta: {} })),
     );
+  const savedRegistration = (entry: (typeof source)[number]) => entry.meta.registrationSnapshot ?? entry.row.registration_snapshot ?? entry.item?.registration_snapshot ?? {};
+  const ownerId = (entry: (typeof source)[number]) => entry.row.drop_id ?? savedRegistration(entry).dropId;
   const groupKey = (entry: (typeof source)[number]) =>
-    `${entry.row.financial_period_id}|${key(entry.row.drop_name_snapshot)}${entry.meta.manualEntry ? `|manual:${entry.row.id}` : ""}`;
+    `${entry.row.financial_period_id}|${key(entry.row.drop_name_snapshot)}|${ownerId(entry) || ''}${entry.meta.manualEntry ? `|manual:${entry.row.id}` : ""}`;
   const grouped = new Map<string, typeof source>();
   source.forEach((entry) =>
     grouped.set(groupKey(entry), [
@@ -255,22 +325,16 @@ export function buildDetails(
         referenceCnpj: meta.referenceCnpj || period?.reference_cnpj || "MOVIDOS",
         drop: row.drop_name_snapshot ?? "",
       };
-      const exact = registrations.get(
-          `${key(identity.drop)}|${key(identity.partner)}`,
-        ),
-        fallback = registrations.get(`${key(identity.drop)}|`);
-      const registration =
-        exact && (!fallback || exact.index < fallback.index)
-          ? exact.row
-          : fallback?.row;
+      const snapshot = savedRegistration(source);
       const labelIdentity = `${key(identity.period)}|${key(row.partner ?? period?.partner)}|${key(identity.drop)}`;
-      const related = identity.periodId
+      const candidates = identity.periodId
         ? [
             ...(lossGroups.get(`${identity.periodId}|${key(identity.drop)}`) ??
               []),
             ...(unlinkedLossGroups.get(labelIdentity) ?? []),
           ]
         : (labelLossGroups.get(labelIdentity) ?? []);
+      const related = candidates.filter(loss => !loss.drop_id || !ownerId(source) || loss.drop_id === ownerId(source));
       const split = splitLosses(related);
       const siblings = grouped.get(groupKey(source)) ?? [source];
       const totalPackages = siblings.reduce(
@@ -330,6 +394,7 @@ export function buildDetails(
         id: row.id,
         source: source.history ? "history" : "item",
         sourceItemId: source.item?.id,
+        registrationSnapshot: snapshot,
         raw: row,
         packages,
         unit,
@@ -348,14 +413,14 @@ export function buildDetails(
             ? number(row.total_receivable)
             : round(subtotal - loss + reimbursement),
         packageType: text(meta.packageType),
-        responsible: row.responsible || period?.responsible || (!PARTNERS.includes(normalizePartner(row.partner ?? period?.partner)) ? text(row.partner ?? period?.partner) : "") || registration?.responsible || "",
-        email: row.email ?? registration?.email ?? "",
-        dropId: row.drop_id ?? registration?.id ?? null,
+        responsible: row.responsible ?? snapshot.responsible ?? period?.responsible ?? (!PARTNERS.includes(normalizePartner(row.partner ?? period?.partner)) ? text(row.partner ?? period?.partner) : ""),
+        email: row.email ?? snapshot.email ?? "",
+        dropId: row.drop_id ?? snapshot.dropId ?? null,
         paymentDate: row.paid_at ?? period?.payment_date ?? "",
-        pix: row.pix_key ?? registration?.pix_key ?? "",
+        pix: row.pix_key ?? snapshot.pix ?? "",
         pixHolderName:
-          row.pix_holder_name ?? registration?.pix_holder_name ?? "",
-        document: row.cnpj ?? registration?.cnpj ?? registration?.cpf ?? "",
+          row.pix_holder_name ?? snapshot.pixHolderName ?? "",
+        document: row.cnpj ?? snapshot.document ?? "",
       };
     })
     .sort(

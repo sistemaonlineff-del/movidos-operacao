@@ -3,7 +3,7 @@ import { ChangeEvent, useEffect, useRef, useState } from 'react'
 import { useAccess } from './access'
 import DashboardNotes from './DashboardNotes'
 import * as XLSX from 'xlsx'
-import { buildDetails, buildTotals, financialPartner, notes } from './financialData'
+import { allocateClosingPackages, buildDetails, buildTotals, closingOperators, closingWindow, financialPartner, notes } from './financialData'
 import { readFinancialRows } from './financialStore'
 import { supabase } from './lib/supabase'
 import { normalizePartner } from './dropOptions'
@@ -53,6 +53,9 @@ export default function Financeiro(){
   const [closing,setClosing]=useState<Row[]>([])
   const [losses,setLosses]=useState<Row[]>([])
   const [uploadPeriod,setUploadPeriod]=useState('')
+  const [closingStart,setClosingStart]=useState(''),[closingEnd,setClosingEnd]=useState('')
+  const [pendingImport,setPendingImport]=useState<any>(null)
+  const importRunning=useRef(false)
   const [title,setTitle]=useState('')
   const [sourceFile,setSourceFile]=useState('')
   const [message,setMessage]=useState('')
@@ -73,18 +76,19 @@ export default function Financeiro(){
     } catch(error) { setMessage(error?.message??'Falha ao atualizar a base geral.') }
   }
 
-  const latestAgreedValues=async()=>{
+  const latestAgreedValues=async(periods)=>{
     if(!supabase)return new Map<string,number>()
+    const byId=new Map(periods.map(period=>[period.id,period]))
     let from=0, rows:Row[]=[]
     while(true){
-      const {data,error}=await supabase.from('financial_drop_items').select('drop_name_snapshot,unit_value,created_at').eq('is_active',true).gt('unit_value',0).order('created_at',{ascending:false}).range(from,from+999)
+      const {data,error}=await supabase.from('financial_drop_items').select('financial_period_id,drop_name_snapshot,unit_value,created_at').eq('is_active',true).gt('unit_value',0).order('created_at',{ascending:false}).range(from,from+999)
       if(error)throw error
       rows=rows.concat((data??[]) as Row[])
       if((data??[]).length<1000)break
       from+=1000
     }
     const agreed=new Map<string,number>()
-    rows.forEach(row=>{const key=dropKey(row.drop_name_snapshot);if(!agreed.has(key))agreed.set(key,number(row.unit_value))})
+    rows.forEach(row=>{const period=byId.get(row.financial_period_id);if(!period)return;const identity=`${dropKey(row.drop_name_snapshot)}|${closingIdentity(financialPartner(period),period.reference_cnpj)}`;if(!agreed.has(identity))agreed.set(identity,number(row.unit_value))})
     return agreed
   }
   const refresh=async()=>{
@@ -141,13 +145,14 @@ export default function Financeiro(){
   }
 
   const choose=async(event:ChangeEvent<HTMLInputElement>)=>{
-    if(!canManage||busy)return
+    if(!canManage||busy||pendingImport||importRunning.current)return
     const file=event.target.files?.[0]
     if(!file)return
     const period=uploadPeriod.trim()
     if(!period){setMessage('Informe o período deste fechamento antes de anexar a planilha.');event.target.value='';return}
     setMessage('')
     try{
+      closingWindow(closingStart,closingEnd,period)
       const workbook=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true})
       const closeSheet=workbook.Sheets['Fechamento'], lossSheet=workbook.Sheets['Extravios']
       if(!closeSheet||!lossSheet)throw new Error('Use o Modelo_Fechamento_Financeiro.xlsx, com as abas Fechamento e Extravios.')
@@ -209,30 +214,52 @@ export default function Financeiro(){
       setMessage(`Base substituída: ${result.views} Views, ${result.rows} linhas de Fechamento e ${result.losses??0} extravios importados.`)
     }catch(error){setMessage(error instanceof Error?error.message:'Não foi possível importar o histórico.')}finally{setBusy(false);event.target.value=''}
   }
-  const importView=async(sourceClosing=closing,sourceLosses=losses,sourceTitle=title,sourceFileName=sourceFile,summary=new Map())=>{
-    if(!supabase||!canManage||!sourceClosing.length||hasInvalidRows(sourceClosing,sourceLosses))return
+  const importView=async(sourceClosing=closing,sourceLosses=losses,sourceTitle=title,sourceFileName=sourceFile,summary=new Map(),confirmed=null)=>{
+    if(!supabase||!canManage||importRunning.current||!sourceClosing.length||hasInvalidRows(sourceClosing,sourceLosses))return
+    importRunning.current=true
     setBusy(true);setMessage('Importando View...')
     let stage='verificar a estrutura do banco',createdViewId=''
     try{
+      const window=closingWindow(closingStart,closingEnd,sourceTitle)
       for(const [table,columns] of [
         ['financial_views','id,title,source_file_name,source_rows,import_status'],
         ['financial_periods','id,label,partner,logistics_partner,reference_cnpj,net_amount,payment_date,financial_view_id,status'],
-        ['financial_drop_items','financial_period_id,drop_name_snapshot,quantity_packages,unit_value,reimbursement,is_active,created_at'],
-        ['loss_events','financial_period_id,partner,period_label,drop_name_snapshot,waybill,label_code,bag_code,status,seller,received_at,amount,observation'],
+        ['financial_drop_items','financial_period_id,drop_name_snapshot,quantity_packages,unit_value,reimbursement,is_active,created_at,registration_snapshot'],
+        ['loss_events','financial_period_id,drop_id,partner,period_label,drop_name_snapshot,waybill,label_code,bag_code,status,seller,received_at,amount,observation'],
       ]){
         const {error}=await supabase.from(table).select(columns).limit(0)
         if(error){
-          const migration=['42703','PGRST204'].includes(error.code)&&text(error.message).includes('logistics_partner')?' Execute no Supabase a migração 20260917130000_prepare_financial_logistics_columns.sql e tente novamente.':''
+          const migration=['42703','PGRST204'].includes(error.code)?text(error.message).includes('registration_snapshot')?' Execute no Supabase a migração 20261014120000_financial_registration_snapshots.sql e tente novamente.':text(error.message).includes('logistics_partner')?' Execute no Supabase a migração 20260917130000_prepare_financial_logistics_columns.sql e tente novamente.':'':''
           throw {message:`${text(error.message)||'Estrutura indisponível.'}${migration}`,code:error.code}
         }
       }
       stage='consultar os valores acordados'
-      const agreedByDrop=await latestAgreedValues()
       const existingPeriods=await readFinancialRows('financial_periods')
+      const agreedByDrop=await latestAgreedValues(existingPeriods)
+      stage='salvar a copia dos dados cadastrais'
+      const registrations=await readFinancialRows('operation_drops')
+      const identify=row=>`${dropKey(row.Drop)}|${closingIdentity(row.Parceiro,row.CNPJReferencia)}`
+      const operators=new Map([...sourceClosing,...sourceLosses].map(row=>[identify(row),closingOperators(row.Drop,row.Parceiro,registrations,window.start,window.end,agreedByDrop.get(identify(row))??0)]))
+      const plan=sourceClosing.map(row=>({row,operators:operators.get(identify(row))}))
+      const lossPlan=sourceLosses.map(row=>({row,operators:operators.get(identify(row))}))
+      const fingerprint=JSON.stringify([...operators].map(([identity,entries])=>[identity,entries.map(entry=>({...entry,registration_snapshot:{...entry.registration_snapshot,capturedAt:undefined}}))]))
+      if(confirmed&&confirmed.fingerprint!==fingerprint)throw new Error('Os cadastros ou valores mudaram durante a conferencia. Cancele e anexe novamente a planilha para revisar a divisao.')
       const repeated=[...sourceClosing,...sourceLosses].find(row=>existingPeriods.some(period=>dropKey(period.label)===dropKey(row.Periodo)&&closingIdentity(financialPartner(period),period.reference_cnpj)===closingIdentity(row.Parceiro,row.CNPJReferencia)))
       if(repeated)throw new Error('Já existe fechamento ativo para este período, parceiro e CNPJ. Corrija o período ou exclua logicamente a View anterior antes de importar novamente.')
+      if(!confirmed&&(plan.some(entry=>entry.operators.length>1)||lossPlan.some(entry=>entry.operators.length>1))){
+        setPendingImport({sourceClosing,sourceLosses,sourceTitle,sourceFileName,summary,plan,lossPlan,fingerprint,quantities:plan.map(entry=>entry.operators.length===1?[String(number(entry.row.QuantidadePacote))]:entry.operators.map(()=>'')),lossOwners:lossPlan.map(entry=>entry.operators.length===1?entry.operators[0].registration_snapshot.dropId:'')})
+        setMessage('Troca de responsavel nesta quinzena. Confira a divisao antes de importar.');return
+      }
+      stage='conferir a divisao de pacotes e extravios'
+      const allocated=plan.map((entry,index)=>allocateClosingPackages(entry.row.QuantidadePacote,entry.operators,confirmed?.quantities[index]))
+      const lossOwners=lossPlan.map((entry,index)=>{
+        const owner=confirmed?.lossOwners[index]??entry.operators[0].registration_snapshot.dropId
+        if(!entry.operators.some(operator=>operator.registration_snapshot.dropId===owner))throw new Error(`Selecione o responsavel pelo extravio ${text(entry.row.Waybill)||index+1}.`)
+        return owner
+      })
+      setPendingImport(null)
       stage='criar a View'
-      const {data:view,error:viewError}=await supabase.from('financial_views').insert({title:sourceTitle,source_file_name:sourceFileName||`${sourceTitle}.xlsx`,source_rows:sourceClosing.length+sourceLosses.length,import_status:'rascunho'}).select().single()
+      const {data:view,error:viewError}=await supabase.from('financial_views').insert({title:sourceTitle,source_file_name:sourceFileName||`${sourceTitle}.xlsx`,source_rows:sourceClosing.length+sourceLosses.length,import_status:'rascunho',notes:JSON.stringify({operationPeriod:window})}).select().single()
       if(viewError)throw viewError
       createdViewId=view.id
       stage='gravar os períodos'
@@ -242,16 +269,18 @@ export default function Financeiro(){
       const periodIndex=new Map((periods??[]).map(period=>[`${period.label}|${closingIdentity(period.partner,period.reference_cnpj)}`,period.id]))
       const chunks=<T,>(rows:T[])=>Array.from({length:Math.ceil(rows.length/400)},(_,index)=>rows.slice(index*400,index*400+400))
       stage='gravar os itens do fechamento'
-      for(const part of chunks(sourceClosing)){const {error}=await supabase.from('financial_drop_items').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${closingIdentity(row.Parceiro,row.CNPJReferencia)}`),drop_name_snapshot:text(row.Drop),quantity_packages:number(row.QuantidadePacote),unit_value:agreedByDrop.get(dropKey(row.Drop))??0,reimbursement:0})));if(error)throw error}
+      const capturedItems=sourceClosing.flatMap((row,index)=>allocated[index].map(allocation=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${closingIdentity(row.Parceiro,row.CNPJReferencia)}`),drop_name_snapshot:text(row.Drop),...allocation,reimbursement:0})))
+      for(const part of chunks(capturedItems)){const {error}=await supabase.from('financial_drop_items').insert(part);if(error)throw error}
       stage='gravar os extravios'
-      for(const part of chunks(sourceLosses)){const {error}=await supabase.from('loss_events').insert(part.map(row=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${closingIdentity(row.Parceiro,row.CNPJReferencia)}`),partner:text(row.Parceiro),period_label:text(row.Periodo),drop_name_snapshot:text(row.Drop),waybill:text(row.Waybill),label_code:text(row.CodigoEtiqueta),bag_code:text(row.Saca),status:text(row.Status),seller:text(row.Seller),received_at:excelDate(row.DataRecebimento),amount:number(row.ValorExtravio),observation:text(row.Obs)})));if(error)throw error}
+      const capturedLosses=sourceLosses.map((row,index)=>({financial_period_id:periodIndex.get(`${text(row.Periodo)}|${closingIdentity(row.Parceiro,row.CNPJReferencia)}`),drop_id:lossOwners[index],partner:text(row.Parceiro),period_label:text(row.Periodo),drop_name_snapshot:text(row.Drop),waybill:text(row.Waybill),label_code:text(row.CodigoEtiqueta),bag_code:text(row.Saca),status:text(row.Status),seller:text(row.Seller),received_at:excelDate(row.DataRecebimento),amount:number(row.ValorExtravio),observation:text(row.Obs)}))
+      for(const part of chunks(capturedLosses)){const {error}=await supabase.from('loss_events').insert(part);if(error)throw error}
       stage='concluir a View'
       const {error:completeError}=await supabase.from('financial_views').update({import_status:'importado'}).eq('id',view.id)
       if(completeError)throw completeError
       setClosing([]);setLosses([]);setSourceFile('');setUploadPeriod('');setSelected(view.id)
       setMessage(`View de ${sourceTitle} importada com sucesso e consolidado geral atualizado.`)
       await refresh()
-    }catch(error){setMessage(`Erro ao importar (${stage}): ${text(error?.message)||'Não foi possível confirmar a gravação.'}${text(error?.code)?` (código ${text(error.code)})`:''}${createdViewId?` A View ${createdViewId} pode estar incompleta. Não reenvie a planilha antes de conferir os registros já gravados.`:''}`)}finally{setBusy(false)}
+    }catch(error){setMessage(`Erro ao importar (${stage}): ${text(error?.message)||'Não foi possível confirmar a gravação.'}${text(error?.code)?` (código ${text(error.code)})`:''}${createdViewId?` A View ${createdViewId} pode estar incompleta. Não reenvie a planilha antes de conferir os registros já gravados.`:''}`)}finally{importRunning.current=false;setBusy(false)}
   }
   const editLoss=async(loss:any)=>{
     if(!supabase||!canManage)return
@@ -283,7 +312,15 @@ export default function Financeiro(){
     <DashboardNotes financialOnly />
     {selected&&canManage&&<section className="form-section"><div className="financial-actions"><button disabled={busy} onClick={()=>{setViewAction('rename');setNewTitle(views.find(view=>view.id===selected)?.title??'');setActionReason('')}}>Corrigir período</button><button disabled={busy} onClick={()=>{setViewAction('deactivate');setActionReason('')}}>Excluir view</button></div>{viewAction&&<form onSubmit={changeView}><h3>{viewAction==='rename'?'Corrigir período':'Excluir view dos totais'}</h3>{viewAction==='rename'&&<label>Novo período<input required minLength={3} maxLength={160} value={newTitle} onChange={event=>setNewTitle(event.target.value)}/></label>}<label>Motivo<input required minLength={5} value={actionReason} onChange={event=>setActionReason(event.target.value)}/></label><div className="financial-actions"><button type="button" disabled={busy} onClick={()=>setViewAction(null)}>Cancelar</button><button className="primary" disabled={busy}>{busy?'Salvando…':'Confirmar alteração'}</button></div></form>}</section>}
     {selected&&<section className="form-section"><label>Anotações desta view<textarea aria-label="Anotações desta view" value={viewNote} readOnly={!canManage} onChange={event=>setViewNote(event.target.value)}/></label>{canManage&&<button disabled={busy} onClick={()=>void saveViewNote()}>Salvar anotação da view</button>}</section>}
-    <section className="card finance-upload"><div><p className="eyebrow">FECHAMENTOS</p><h2>Novo fechamento quinzenal</h2><p>1. Informe o período. 2. Anexe a planilha. O sistema cria a View, registra o histórico e atualiza a base geral.</p></div><label className="finance-period">Período do fechamento<input value={uploadPeriod} onChange={event=>setUploadPeriod(event.target.value)} placeholder="Ex.: 33. 1Q DE AGOSTO" disabled={busy}/></label><button type="button" className="secondary" onClick={()=>downloadClosingTemplate(uploadPeriod.trim())}>Baixar modelo</button><label className={`upload-button ${!uploadPeriod.trim()||busy?'disabled':''}`}>Anexar planilha<input type="file" accept=".xlsx" onChange={choose} disabled={!uploadPeriod.trim()||busy}/></label></section>
+    <section className="card finance-upload"><div><p className="eyebrow">FECHAMENTOS</p><h2>Novo fechamento quinzenal</h2></div><label className="finance-period">Período do fechamento<input value={uploadPeriod} onChange={event=>setUploadPeriod(event.target.value)} placeholder="Ex.: 33. 1Q DE AGOSTO" disabled={busy||Boolean(pendingImport)}/></label><div className="closing-period-dates"><label>Início da quinzena<input aria-label="Início da quinzena" type="date" value={closingStart} disabled={busy||Boolean(pendingImport)} onChange={event=>setClosingStart(event.target.value)}/></label><label>Fim da quinzena<input aria-label="Fim da quinzena" type="date" value={closingEnd} disabled={busy||Boolean(pendingImport)} onChange={event=>setClosingEnd(event.target.value)}/></label></div><button type="button" className="secondary" onClick={()=>downloadClosingTemplate(uploadPeriod.trim())}>Baixar modelo</button><label className={`upload-button ${!uploadPeriod.trim()||busy||pendingImport?'disabled':''}`}>Anexar planilha<input type="file" accept=".xlsx" onChange={choose} disabled={!uploadPeriod.trim()||busy||Boolean(pendingImport)||!canManage}/></label></section>
+    {pendingImport&&<form className="closing-allocation" aria-label="Divisão por responsável" onSubmit={event=>{event.preventDefault();void importView(pendingImport.sourceClosing,pendingImport.sourceLosses,pendingImport.sourceTitle,pendingImport.sourceFileName,pendingImport.summary,pendingImport)}}>
+      <h2>Divisão por responsável</h2><p>{pendingImport.sourceTitle} · {closingStart} a {closingEnd}</p>
+      {pendingImport.plan.map((entry,index)=><fieldset key={index} disabled={busy}><legend>{entry.row.Drop} · {entry.row.Parceiro} · {entry.row.CNPJReferencia} · Linha {index+1}</legend><p>Total importado: {number(entry.row.QuantidadePacote)} pacotes · Informados: {pendingImport.quantities[index].reduce((sum,value)=>sum+number(value),0)}</p>
+        {entry.operators.map((operator,ownerIndex)=><div className="closing-allocation-row" key={operator.registration_snapshot.dropId}><div><strong>{operator.registration_snapshot.responsible||'Responsável não informado'}</strong><span>{operator.registration_snapshot.operationStartedAt||'Sem início informado'} a {operator.registration_snapshot.operationEndedAt||'Em operação'}</span><span>Valor acordado: {money(operator.unit_value)}</span></div><label>Pacotes<input aria-label={`Pacotes de ${operator.registration_snapshot.responsible} - linha ${index+1}`} type="number" min="0" max="2147483647" step="1" required readOnly={entry.operators.length===1} value={pendingImport.quantities[index][ownerIndex]} onChange={event=>setPendingImport(current=>({...current,quantities:current.quantities.map((values,rowIndex)=>rowIndex===index?values.map((value,position)=>position===ownerIndex?event.target.value:value):values)}))}/></label></div>)}
+      </fieldset>)}
+      {pendingImport.lossPlan.length>0&&<fieldset disabled={busy}><legend>Responsáveis pelos extravios</legend>{pendingImport.lossPlan.map((entry,index)=><label key={index}>{entry.row.Drop} · {entry.row.Waybill||`Ocorrência ${index+1}`} · {money(entry.row.ValorExtravio)}<select aria-label={`Responsável pelo extravio ${index+1}`} required value={pendingImport.lossOwners[index]} onChange={event=>setPendingImport(current=>({...current,lossOwners:current.lossOwners.map((value,position)=>position===index?event.target.value:value)}))}><option value="">Selecionar responsável</option>{entry.operators.map(operator=><option key={operator.registration_snapshot.dropId} value={operator.registration_snapshot.dropId}>{operator.registration_snapshot.responsible} · {operator.registration_snapshot.operationStartedAt||'Sem início'} a {operator.registration_snapshot.operationEndedAt||'Em operação'}</option>)}</select></label>)}</fieldset>}
+      <div className="financial-actions"><button type="button" disabled={busy} onClick={()=>{setPendingImport(null);setClosing([]);setLosses([]);setSourceFile('');setMessage('Importação cancelada. Nenhum registro foi criado.')}}>Cancelar divisão</button><button className="primary" disabled={busy||!canManage}>{busy?'Importando…':'Confirmar divisão e importar'}</button></div>
+    </form>}
     {isAdmin&&<details className="finance-history"><summary>Administração da base histórica</summary><section><h2>Substituir base financeira</h2><p>Esta operação desativa toda a base atual e invalida seus links de NF. Não use para importar uma nova quinzena ou corrigir um período.</p><label className={`history-upload ${busy?'disabled':''}`}>Importar base completa<input type="file" accept=".xlsx" onChange={chooseHistory} disabled={busy}/></label></section></details>}
     {message&&<p className="form-message">{message}</p>}
     <section className="finance-summary"><article className="metric"><span>Views salvas</span><strong>{views.length}</strong></article><article className="metric"><span>Itens na base geral</span><strong>{general.items}</strong></article><article className="metric"><span>Pacotes na base geral</span><strong>{general.packages.toLocaleString('pt-BR')}</strong></article><article className="metric red"><span>Extravios na base geral</span><strong>{general.losses} · R$ {general.lossAmount.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></article></section>

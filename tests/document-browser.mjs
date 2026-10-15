@@ -24,7 +24,7 @@ const tables = {
   financial_periods: [{ id: 'p1', label: 'SETEMBRO', partner: 'Eduardo', financial_view_id: 'v1', reference_cnpj: null, net_amount: 1000, payment_date: '2026-09-15', is_active: true }],
   financial_views: [{ id: 'v1', title: 'SETEMBRO', is_active: true, notes: '{}' }],
   financial_payment_history: [],
-  financial_drop_items: [{ id: 'item1', financial_period_id: 'p1', drop_name_snapshot: 'DROP TESTE', quantity_packages: 100, unit_value: .13, reimbursement: 0, is_active: true }],
+  financial_drop_items: [{ id: 'item1', financial_period_id: 'p1', drop_name_snapshot: 'DROP TESTE', quantity_packages: 100, unit_value: .13, reimbursement: 0, is_active: true, registration_snapshot: { version: 1, dropId: 'drop1', responsible: 'Eduardo', pix: '', email: 'eduardo@example.test', document: '', pixHolderName: '' } }],
   loss_events: [],
   email_templates: [{ key: 'financial_closing', subject: 'MODELO FINANCEIRO PRIVADO', body: 'CONTEUDO FINANCEIRO PRIVADO' }, { key: 'ready-message-initial', subject: 'Mensagem inicial', body: 'Atendimento publico' }],
   app_notes: [{ key: 'ready_messages_draft', content: 'Rascunho anterior' }],
@@ -46,6 +46,7 @@ const pendingDropWrites = []
 let rejectLossWrite = false
 let rejectClosingWrite = false
 let missingLogisticsColumn = false
+let missingRegistrationSnapshot = false
 let rejectClosingItems = false
 let rejectPaymentWrite = false
 let holdPaymentWrite = false
@@ -124,6 +125,7 @@ await context.route('**/*', async route => {
       if (holdPaymentWrite) await new Promise(resolve => pendingPaymentWrites.push(resolve))
     }
     if (table === 'financial_drop_items' && request.method() === 'POST' && rejectClosingItems) return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: '22003', message: 'Valor fora do limite no teste.' }) })
+    if (table === 'financial_drop_items' && request.method() === 'GET' && missingRegistrationSnapshot && url.searchParams.get('select')?.includes('registration_snapshot')) return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: '42703', message: 'column financial_drop_items.registration_snapshot does not exist' }) })
     if (table === 'financial_periods' && request.method() === 'GET' && missingLogisticsColumn && url.searchParams.get('select')?.includes('logistics_partner')) return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ code: '42703', message: 'column financial_periods.logistics_partner does not exist' }) })
     if (table === 'financial_views' && request.method() === 'POST' && rejectClosingWrite) return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ code: '42501', message: 'Permissão negada no teste de importação.' }) })
     if (table === 'loss_events' && ['POST', 'PATCH'].includes(request.method())) {
@@ -707,6 +709,8 @@ try {
 
   await page.goto('http://127.0.0.1:5173/financeiro')
   await page.getByLabel('Período do fechamento').fill('NOVO PERIODO')
+  await page.getByLabel('Início da quinzena', { exact: true }).fill('2026-09-01')
+  await page.getByLabel('Fim da quinzena', { exact: true }).fill('2026-09-15')
   const templateDownload = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Baixar modelo', exact: true }).click()
   const downloadedTemplate = await templateDownload
@@ -734,6 +738,11 @@ try {
   assert.equal(writes.length, writesBeforeWrongPeriod)
   assert.equal(await page.locator('.finance-upload input[type="file"]').inputValue(), '')
   missingLogisticsColumn = false
+  missingRegistrationSnapshot = true
+  await page.locator('.finance-upload input[type="file"]').setInputFiles(importFile)
+  await page.getByText(/Erro ao importar \(verificar a estrutura do banco\).*registration_snapshot.*20261014120000_financial_registration_snapshots.sql/).waitFor()
+  assert.equal(writes.length, writesBeforeWrongPeriod)
+  missingRegistrationSnapshot = false
   rejectClosingWrite = true
   await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'fechamento-negado.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
   await page.getByText('Erro ao importar (criar a View): Permissão negada no teste de importação. (código 42501)', { exact: true }).waitFor()
@@ -758,6 +767,170 @@ try {
   assert.equal(tables.financial_periods.some(row => row.financial_view_id === partialView.id), true)
   rejectClosingItems = false
   console.log('PASS: missing logistics column stops before writes; structured errors expose stage/code and partial imports are explicitly flagged without deleting records')
+
+  {
+    const priorTables = structuredClone(tables)
+    const priorPaymentRequests = paymentRequests.length
+    tables.drops = [{ id: 'snapshot-drop', name: 'MGC 5', partner, responsible: 'Davi', pix_key: '00111222333', pix_holder_name: 'Davi', cpf: '00111222333', email: 'davi@example.test', monthly_value: .25, is_active: true, status: 'ATIVO' }]
+    tables.financial_views = []; tables.financial_periods = []; tables.financial_drop_items = []; tables.financial_payment_history = []; tables.loss_events = []
+    const importSnapshot = async period => {
+      const sheet = createClosingTemplate(period)
+      sheet.Sheets.Fechamento = XLSX.utils.aoa_to_sheet([['Periodo','Parceiro','Drop','QuantidadePacote','CNPJReferencia'],[period,partner,'MGC 5',100,'MOVIDOS']])
+      sheet.Sheets['Pagamento Total'] = XLSX.utils.aoa_to_sheet([['Periodo','Parceiro','TotalLiquidoAReceber','DataPagamento','CNPJReferencia'],[period,partner,100,'14/10/2026','MOVIDOS']])
+      await page.goto('http://127.0.0.1:5173/financeiro')
+      await page.getByLabel('Período do fechamento').fill(period)
+      await page.getByLabel('Início da quinzena', { exact: true }).fill('2026-09-01')
+      await page.getByLabel('Fim da quinzena', { exact: true }).fill('2026-09-15')
+      await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'snapshot.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(sheet, { type: 'buffer', bookType: 'xlsx' }) })
+      await page.getByText(`View de ${period} importada com sucesso e consolidado geral atualizado.`, { exact: true }).waitFor()
+    }
+    await importSnapshot('SNAPSHOT DAVI')
+    const saved = structuredClone(tables.financial_drop_items[0])
+    assert.equal(saved.registration_snapshot.responsible, 'Davi'); assert.equal(saved.unit_value, .25)
+    Object.assign(tables.drops[0], { responsible: 'Gustavo', pix_key: '99999888777', email: 'gustavo@example.test', monthly_value: .5, pix_holder_name: 'Gustavo', cpf: '99999888777' })
+    await importSnapshot('SNAPSHOT GUSTAVO')
+    assert.equal(tables.financial_drop_items[1].registration_snapshot.responsible, 'Gustavo')
+    assert.equal(tables.financial_drop_items[1].unit_value, .5)
+    assert.deepEqual(tables.financial_drop_items[0], saved)
+    await page.goto('http://127.0.0.1:5173/financeiro/pagamento-detalhes')
+    await page.getByLabel('Período', { exact: true }).selectOption('SNAPSHOT DAVI')
+    const oldRow = page.locator('.payment-details-table tbody tr:not(.financial-totals)')
+    await oldRow.getByRole('cell', { name: 'Davi', exact: true }).waitFor()
+    assert.equal(await oldRow.getByRole('cell', { name: '00111222333', exact: true }).count(), 1)
+    const originalText = await oldRow.innerText()
+    tables.drops[0].name = 'MGC RENOMEADO'; tables.drops[0].partner = 'J&T EXPRESS LTDA'; tables.drops[0].is_active = false
+    await page.reload()
+    await page.getByLabel('Período', { exact: true }).selectOption('SNAPSHOT DAVI')
+    await oldRow.getByRole('cell', { name: 'Davi', exact: true }).waitFor()
+    assert.equal(await oldRow.innerText(), originalText)
+    const pdfDownload = page.waitForEvent('download')
+    await oldRow.getByRole('button', { name: 'Gerar PDF', exact: true }).click()
+    const pdf = await readFile(await (await pdfDownload).path())
+    assert.ok(pdf.includes(Buffer.from('00111222333'))); assert.ok(!pdf.includes(Buffer.from('99999888777')))
+    const excelDownload = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'Baixar Excel do fechamento', exact: true }).click()
+    const exported = XLSX.read(await readFile(await (await excelDownload).path()), { type: 'buffer' }).Sheets['Pagamento Detalhes']
+    assert.equal(exported.D3.v, 'Davi'); assert.equal(exported.G3.v, .25); assert.equal(exported.O3.v, '00111222333')
+    await oldRow.getByRole('button', { name: 'Editar', exact: true }).click()
+    const editor = page.getByRole('dialog')
+    assert.equal(await editor.getByLabel('E-mail do fechamento', { exact: true }).inputValue(), 'davi@example.test')
+    assert.equal(await editor.getByLabel('CPF/CNPJ do favorecido', { exact: true }).inputValue(), '00111222333')
+    await editor.getByLabel('Responsável', { exact: true }).fill('Davi corrigido')
+    await editor.getByLabel('PIX', { exact: true }).fill('')
+    await editor.getByLabel('E-mail do fechamento', { exact: true }).fill('davi.corrigido@example.test')
+    await editor.getByRole('button', { name: 'Salvar alterações', exact: true }).click()
+    await editor.waitFor({ state: 'hidden' })
+    await page.reload()
+    await page.getByLabel('Período', { exact: true }).selectOption('SNAPSHOT DAVI')
+    await oldRow.getByRole('cell', { name: 'Davi corrigido', exact: true }).waitFor()
+    await oldRow.getByRole('button', { name: 'Editar', exact: true }).click()
+    assert.equal(await editor.getByLabel('PIX', { exact: true }).inputValue(), '')
+    assert.equal(await editor.getByLabel('E-mail do fechamento', { exact: true }).inputValue(), 'davi.corrigido@example.test')
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport)
+      assert.ok(await editor.evaluate(element => element.scrollWidth <= element.clientWidth))
+      await editor.getByLabel('E-mail do fechamento', { exact: true }).scrollIntoViewIfNeeded()
+      await page.screenshot({ path: `tmp/browser-tests/closing-snapshot-${viewport.width}.png` })
+    }
+    await editor.getByRole('button', { name: 'Cancelar', exact: true }).click()
+    assert.equal(tables.financial_drop_items[1].registration_snapshot.responsible, 'Gustavo')
+    assert.deepEqual(tables.financial_drop_items[0], saved)
+    Object.assign(tables, priorTables); paymentRequests.length = priorPaymentRequests
+    await page.setViewportSize({ width: 1440, height: 900 })
+    console.log('PASS: import snapshots Davi, next import captures Gustavo, old closing survives rename/deactivation and keeps PDF/Excel values; direct financial edits persist including empty PIX')
+  }
+
+  {
+    const previousTables = structuredClone(tables)
+    const previousPayments = paymentRequests.length
+    tables.financial_views = []; tables.financial_periods = []; tables.financial_drop_items = []; tables.financial_payment_history = []; tables.loss_events = []
+    tables.drops = [
+      { id: 'davi', name: 'MGC 5', partner, responsible: 'Davi', pix_key: '00111222333', email: 'davi@example.test', monthly_value: .25, operation_started_at: '2026-08-01', operation_ended_at: '2026-10-10', is_active: false, status: 'EXCLUIDO' },
+      { id: 'gustavo', name: 'MGC 5', partner, responsible: 'Gustavo', pix_key: '99999888777', email: 'gustavo@example.test', monthly_value: .5, operation_started_at: '2026-10-11', operation_ended_at: null, is_active: true, status: 'ATIVO' },
+    ]
+    const upload = async (title, start, end, withLosses = false) => {
+      const workbook = createClosingTemplate(title)
+      workbook.Sheets.Fechamento = XLSX.utils.aoa_to_sheet([['Periodo','Parceiro','Drop','QuantidadePacote','CNPJReferencia'],[title,partner,'MGC 5',100,'MOVIDOS']])
+      workbook.Sheets['Pagamento Total'] = XLSX.utils.aoa_to_sheet([['Periodo','Parceiro','TotalLiquidoAReceber','DataPagamento','CNPJReferencia'],[title,partner,100,'20/10/2026','MOVIDOS']])
+      if (withLosses) workbook.Sheets.Extravios = XLSX.utils.aoa_to_sheet([['Periodo','Parceiro','Drop','CNPJReferencia','Waybill','CodigoEtiqueta','Saca','Status','Seller','DataRecebimento','ValorExtravio','Obs'],[title,partner,'MGC 5','MOVIDOS','WB-DAVI','','','PUDO Missing','','',2,''],[title,partner,'MGC 5','MOVIDOS','WB-GUSTAVO','','','D2D Missing','','',3,'']])
+      await page.goto('http://127.0.0.1:5173/financeiro')
+      await page.getByLabel('Período do fechamento').fill(title)
+      await page.getByLabel('Início da quinzena', { exact: true }).fill(start)
+      await page.getByLabel('Fim da quinzena', { exact: true }).fill(end)
+      await page.locator('.finance-upload input[type="file"]').setInputFiles({ name: 'troca.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) })
+    }
+    await upload('39. 2Q DE SETEMBRO', '2026-09-16', '2026-09-30')
+    await page.getByText('View de 39. 2Q DE SETEMBRO importada com sucesso e consolidado geral atualizado.', { exact: true }).waitFor()
+    assert.equal(tables.financial_drop_items[0].registration_snapshot.responsible, 'Davi')
+    assert.equal(tables.financial_drop_items[0].quantity_packages, 100)
+    const before = structuredClone({ items: tables.financial_drop_items, periods: tables.financial_periods })
+    const writesBefore = writes.length
+    await upload('40. 1Q DE OUTUBRO', '2026-10-01', '2026-10-15', true)
+    const division = page.getByRole('form', { name: 'Divisão por responsável', exact: true })
+    await division.waitFor()
+    assert.equal(writes.length, writesBefore)
+    await division.getByRole('button', { name: 'Cancelar divisão', exact: true }).click()
+    await page.getByText('Importação cancelada. Nenhum registro foi criado.', { exact: true }).waitFor()
+    assert.equal(writes.length, writesBefore)
+    await upload('40. 1Q DE OUTUBRO', '2026-10-01', '2026-10-15', true)
+    await division.waitFor()
+    await division.getByLabel('Pacotes de Davi - linha 1', { exact: true }).fill('70')
+    await division.getByLabel('Pacotes de Gustavo - linha 1', { exact: true }).fill('20')
+    await division.getByLabel('Responsável pelo extravio 1', { exact: true }).selectOption('davi')
+    await division.getByLabel('Responsável pelo extravio 2', { exact: true }).selectOption('gustavo')
+    await division.getByRole('button', { name: 'Confirmar divisão e importar', exact: true }).click()
+    await page.getByText(/A soma dos pacotes deve ser igual/).waitFor()
+    assert.equal(writes.length, writesBefore)
+    await division.getByLabel('Pacotes de Gustavo - linha 1', { exact: true }).fill('30')
+    tables.drops[1].monthly_value = .6
+    await division.getByRole('button', { name: 'Confirmar divisão e importar', exact: true }).click()
+    await page.getByText(/Os cadastros ou valores mudaram durante a conferencia/).waitFor()
+    assert.equal(writes.length, writesBefore)
+    tables.drops[1].monthly_value = .5
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport)
+      await division.scrollIntoViewIfNeeded()
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+      for (const control of await division.locator('input,select,button').all()) assert.ok(await control.evaluate(element => { const box = element.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth + 1 }))
+      await page.screenshot({ path: `tmp/browser-tests/operation-division-${viewport.width}.png`, fullPage: true })
+    }
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await division.getByRole('button', { name: 'Confirmar divisão e importar', exact: true }).click()
+    await page.getByText('View de 40. 1Q DE OUTUBRO importada com sucesso e consolidado geral atualizado.', { exact: true }).waitFor()
+    const transition = tables.financial_periods.find(row => row.label === '40. 1Q DE OUTUBRO')
+    const split = tables.financial_drop_items.filter(row => row.financial_period_id === transition.id)
+    assert.deepEqual(split.map(row => [row.registration_snapshot.responsible, row.quantity_packages, row.unit_value]), [['Davi',70,.25],['Gustavo',30,.5]])
+    assert.deepEqual(tables.loss_events.map(row => [row.waybill,row.drop_id]), [['WB-DAVI','davi'],['WB-GUSTAVO','gustavo']])
+    assert.deepEqual(tables.financial_drop_items[0], before.items[0])
+    await upload('41. 2Q DE OUTUBRO', '2026-10-16', '2026-10-31')
+    await page.getByText('View de 41. 2Q DE OUTUBRO importada com sucesso e consolidado geral atualizado.', { exact: true }).waitFor()
+    assert.equal(tables.financial_drop_items.at(-1).registration_snapshot.responsible, 'Gustavo')
+    assert.equal(tables.financial_drop_items.at(-1).quantity_packages, 100)
+    tables.drops.forEach(row => { row.responsible = 'ALTERADO'; row.monthly_value = 999; row.pix_key = 'ALTERADO' })
+    await page.goto('http://127.0.0.1:5173/financeiro/pagamento-detalhes')
+    await page.getByLabel('Período', { exact: true }).selectOption('40. 1Q DE OUTUBRO')
+    const table = page.locator('.payment-details-table')
+    const daviRow = table.locator('tr').filter({ has: page.getByRole('cell', { name: 'Davi', exact: true }) })
+    const gustavoRow = table.locator('tr').filter({ has: page.getByRole('cell', { name: 'Gustavo', exact: true }) })
+    await daviRow.waitFor(); await gustavoRow.waitFor()
+    assert.match(await daviRow.innerText(), /15,50/); assert.match(await gustavoRow.innerText(), /12,00/)
+    const pdfDownload = page.waitForEvent('download')
+    await daviRow.getByRole('button', { name: 'Gerar PDF', exact: true }).click()
+    const pdf = await readFile(await (await pdfDownload).path())
+    assert.ok(pdf.includes(Buffer.from('WB-DAVI'))); assert.ok(!pdf.includes(Buffer.from('WB-GUSTAVO')))
+    assert.ok(pdf.includes(Buffer.from('Davi'))); assert.ok(!pdf.includes(Buffer.from('Gustavo')))
+    const excelDownload = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'Baixar Excel do fechamento', exact: true }).click()
+    const exported = XLSX.utils.sheet_to_json(XLSX.read(await readFile(await (await excelDownload).path()), { type: 'buffer' }).Sheets['Pagamento Detalhes'], { header: 1 })
+    assert.deepEqual(exported.slice(2).map(row => [row[3],row[5],row[6]]), [['Davi',70,.25],['Gustavo',30,.5]])
+    await page.goto('http://127.0.0.1:5173/financeiro/notas-fiscais')
+    await page.getByLabel('Quinzena', { exact: true }).selectOption('40. 1Q DE OUTUBRO')
+    await page.getByRole('cell', { name: 'Davi', exact: true }).waitFor()
+    await page.getByRole('cell', { name: 'Gustavo', exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Gerar link', exact: true }).count(), 2)
+    Object.assign(tables, previousTables); paymentRequests.length = previousPayments
+    console.log('PASS: dated inactive owner receives old closing; transition requires exact package/loss allocation, cancel and stale data write nothing, next fortnight selects successor; PDF/Excel/NF preserve both identities')
+  }
 
   const oldestPeriod = { id: 'oldest', label: '01. 1Q DE ABRIL', partner, net_amount: 100, is_active: true }
   const latestPeriod = { id: 'latest', label: '33. 1Q DE AGOSTO', partner, net_amount: 200, is_active: true }
@@ -1050,6 +1223,7 @@ try {
       { id: 'export4', financial_period_id: 'old-jt', drop_name_snapshot: 'DROP EDITADO', quantity_packages: 40, unit_value: .3, reimbursement: 0, is_active: true },
     ]
     tables.drops[0].pix_key = '00123456789'
+    tables.financial_drop_items.filter(row => row.drop_name_snapshot === 'DROP TESTE').forEach(row => { row.registration_snapshot = { version: 1, dropId: 'drop1', responsible: 'Eduardo', pix: '00123456789', email: 'eduardo@example.test' } })
     tables.financial_periods.find(row => row.id === 'latest').payment_date = '2026-09-17'
     const writesBeforeExport = writes.length
     await page.goto('http://127.0.0.1:5173/financeiro/pagamento-detalhes')

@@ -1,4 +1,14 @@
 .financial-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.closing-period-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.closing-period-dates label, .closing-allocation label { display: grid; gap: .4rem; min-width: 0; }
+.closing-period-dates input, .closing-allocation input, .closing-allocation select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
+.closing-allocation { border-top: 1px solid #c8dadc; padding: 1rem 0; min-width: 0; }
+.closing-allocation fieldset { min-width: 0; margin: 1rem 0; border: 0; padding: .75rem 0; border-bottom: 1px solid #c8dadc; }
+.closing-allocation legend { font-weight: 700; max-width: 100%; overflow-wrap: anywhere; }
+.closing-allocation-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, 160px); align-items: center; gap: 1rem; padding: .5rem 0; }
+.closing-allocation-row span { display: block; font-size: .85rem; }
+.app:has(.finance-page) > .content, .finance-page { min-width: 0; }
+@media (max-width: 640px) { .closing-period-dates, .closing-allocation-row { grid-template-columns: minmax(0, 1fr); } .closing-allocation { scroll-margin-top: 100px; } .app:has(.finance-page) { grid-template-columns: minmax(0, 1fr); } .finance-upload > * { min-width: 0; max-width: 100%; } }
 @media (min-width: 851px) {
   .app > aside { position: sticky; top: 0; height: 100dvh; max-height: 100dvh; min-height: 0; box-sizing: border-box; overflow-y: auto; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: #0cb9bb #10202a; }
   .app > aside > nav { flex-shrink: 0; }
