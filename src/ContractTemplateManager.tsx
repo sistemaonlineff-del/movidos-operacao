@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useState } from 'react'
+import { ChangeEvent, useEffect, useRef, useState } from 'react'
 import { supabase } from './lib/supabase'
 import { useAccess } from './access'
 
@@ -14,14 +14,21 @@ function TemplateEditor({kind}:{kind:'service'|'termination'}) {
   const [path, setPath] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
 
   const token = async () => { const result = await supabase?.auth.getSession(); return result?.data.session?.access_token ?? '' }
   const load = async () => {
-    const accessToken = await token()
-    const response = await fetch('/api/contract-templates', { headers: { Authorization: `Bearer ${accessToken}` } })
-    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) return
-    const data = await response.json()
-    setPath(data[field] ?? '')
+    setLoading(true); setLoadError(false); setMessage('')
+    try {
+      const accessToken = await token()
+      const response = await fetch('/api/contract-templates', { headers: { Authorization: `Bearer ${accessToken}` } })
+      if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('Não foi possível consultar o modelo ativo.')
+      const data = await response.json()
+      setPath(data[field] ?? '')
+    } catch (error) { setLoadError(true); setMessage(error instanceof Error ? error.message : 'Não foi possível consultar o modelo ativo.') }
+    finally { setLoading(false) }
   }
   useEffect(() => { if (isAdmin) void load() }, [isAdmin])
   if (!isAdmin) return null
@@ -36,10 +43,10 @@ function TemplateEditor({kind}:{kind:'service'|'termination'}) {
   const upload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
-    if (!file || !supabase) return
+    if (!file || !supabase || busy || loading || loadError) return
     if (!file.name.toLowerCase().endsWith('.docx')) return setMessage('Envie um arquivo .docx.')
     if(file.size>5*1024*1024)return setMessage('O modelo deve ter no máximo 5 MB.')
-    setBusy(true); setMessage('Enviando modelo temporário...')
+    setBusy(true); setMessage('Enviando modelo atualizado...')
     try {
       const safeName = file.name.replace(/[^a-z0-9._-]/gi, '_')
       const {default:PizZip}=await import('pizzip')
@@ -59,5 +66,38 @@ function TemplateEditor({kind}:{kind:'service'|'termination'}) {
     finally { setBusy(false) }
   }
 
-  return <section className="form-section document-actions" aria-label={`Modelo de ${label}`}><h3>Modelo do {label} - administração</h3><p>{path ? 'Modelo personalizado ativo.' : 'Modelo padrão ativo.'}</p><div><a className="secondary" href={original} download>Baixar modelo padrão {kind==='termination'?'do distrato ':''}para editar</a><label className={`secondary ${busy ? 'disabled' : ''}`}>Enviar modelo temporário{kind==='termination'?' do distrato':''}<input aria-label={`Alterar modelo do ${label}`} type="file" accept=".docx" onChange={upload} disabled={busy} hidden /></label>{path && <button type="button" className="secondary" disabled={busy} onClick={() => void restore()}>Restaurar modelo padrão{kind==='termination'?' do distrato':''}</button>}</div>{message && <p role="status" className="form-message">{message}</p>}</section>
+  const download = async () => {
+    if (busy || loading || loadError || !supabase) return
+    setBusy(true); setMessage('')
+    try {
+      let file: Blob
+      if (path) {
+        const { data, error } = await supabase.storage.from('movidos-documents').download(path)
+        if (error || !data) throw new Error('Não foi possível baixar o modelo ativo.')
+        file = data
+      } else {
+        const response = await fetch(original)
+        if (!response.ok) throw new Error('Não foi possível baixar o modelo padrão.')
+        file = await response.blob()
+      }
+      const url = URL.createObjectURL(file)
+      const link = document.createElement('a')
+      link.href = url; link.download = `modelo-${label}-atual.docx`; link.click(); URL.revokeObjectURL(url)
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Não foi possível baixar o modelo.') }
+    finally { setBusy(false) }
+  }
+
+  return <section className="form-section document-actions template-editor" aria-label={`Modelo de ${label}`}>
+    <h3>Modelo do {label} - administração</h3>
+    <p>{loading ? 'Consultando modelo...' : loadError ? 'Modelo indisponível.' : path ? 'Modelo personalizado ativo.' : 'Modelo padrão ativo.'}</p>
+    <div>
+      <button type="button" className="secondary" disabled={busy || loading || loadError} onClick={() => void download()}>Baixar modelo atual (Word)</button>
+      <button type="button" className="secondary" disabled={busy || loading || loadError} onClick={() => input.current?.click()}>Enviar modelo atualizado</button>
+      <input ref={input} aria-label={`Alterar modelo do ${label}`} type="file" accept=".docx" onChange={upload} disabled={busy || loading || loadError} hidden />
+      {path && !loading && !loadError && <a className="secondary" href={original} download>Baixar modelo original (Word)</a>}
+      {path && !loadError && <button type="button" className="secondary" disabled={busy || loading} onClick={() => void restore()}>Restaurar modelo padrão{kind==='termination'?' do distrato':''}</button>}
+      {loadError && <button type="button" className="secondary" disabled={loading} onClick={() => void load()}>Tentar novamente</button>}
+    </div>
+    {message && <p role="status" className="form-message">{message}</p>}
+  </section>
 }

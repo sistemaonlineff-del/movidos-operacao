@@ -35,6 +35,8 @@ const photoBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAA
 const storagePaths = new Set()
 let serviceTemplatePath = ''
 let terminationTemplatePath = ''
+let rejectTemplateDownload = false
+let rejectTemplateLoad = false
 let invoiceRequests = []
 const invoiceActions = []
 const writes = []
@@ -73,7 +75,7 @@ const labelResult = { extraction: { recipient: { street: 'Rua das Flores', neigh
 await context.addInitScript(({ user, jwt }) => {
   localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token', JSON.stringify({ access_token: jwt, refresh_token: 'local-only', token_type: 'bearer', expires_at: Math.floor(Date.now() / 1000) + 3600, expires_in: 3600, user }))
 }, { user, jwt })
-await context.route('**/*', async route => {
+const mockRequests = async route => {
   const request = route.request()
   const url = new URL(request.url())
   const json = data => route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) })
@@ -84,6 +86,10 @@ await context.route('**/*', async route => {
       if (url.pathname.startsWith('/storage/v1/object/sign/') && request.method() === 'POST') return json({ signedURL: `/object/sign/movidos-documents/${path}?token=test-only` })
       if (request.method() === 'POST') { storagePaths.add(path); return json({ Key: `movidos-documents/${path}` }) }
       assert.ok(storagePaths.has(path), `Stored object must exist: ${path}`)
+      if (path.startsWith('contract-templates/') && path.endsWith('.docx')) {
+        if (rejectTemplateDownload) return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ message: 'Modelo indisponivel no teste' }) })
+        return route.fulfill({ contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', body: await readFile(path.includes('/termination/') ? 'public/templates/modelo-distrato-sociedade.docx' : 'public/templates/modelo-contrato-prestacao-servico.docx') })
+      }
       return route.fulfill({ contentType: path.endsWith('.png') ? 'image/png' : 'application/pdf', body: path.endsWith('.png') ? photoBytes : Buffer.from('%PDF-1.7\nTest attachment\n%%EOF') })
     }
     if (!url.pathname.startsWith('/rest/v1/')) return json([])
@@ -195,6 +201,7 @@ await context.route('**/*', async route => {
       return json({ status: 'aceito', duplicate: false })
     }
     if (url.pathname === '/api/contract-templates') {
+      if (request.method() === 'GET' && rejectTemplateLoad) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Modelo indisponivel no teste' }) })
       if (request.method() === 'POST') {
         assert.equal(tables.user_profiles[0].role, 'admin')
         const payload=request.postDataJSON()
@@ -240,7 +247,8 @@ await context.route('**/*', async route => {
     return route.continue()
   }
   return route.abort()
-})
+}
+await context.route('**/*', mockRequests)
 const page = await context.newPage()
 page.on('pageerror', error => failures.push(error.message))
 page.setDefaultTimeout(15000)
@@ -301,6 +309,25 @@ try {
   await page.reload()
   await page.waitForFunction(() => document.querySelector('[aria-label="Rascunho de mensagem"]')?.value === 'Rascunho persistido no teste')
   console.log('PASS: draft survives reload; financial templates absent from ready messages')
+
+  await page.goto('http://127.0.0.1:5173/financeiro/pagamento-total')
+  const financialNote = page.getByLabel('Anotações do financeiro', { exact: true })
+  await financialNote.fill('Revisar fechamento de outubro.\nConferir pagamentos pendentes.')
+  await page.getByRole('button', { name: 'Salvar anotação', exact: true }).click()
+  await page.getByRole('status').filter({ hasText: 'Anotação salva.' }).waitFor()
+  await page.reload()
+  await page.waitForFunction(() => document.querySelector('[aria-label="Anotações do financeiro"]')?.value.includes('Conferir pagamentos pendentes.'))
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
+    await page.setViewportSize(viewport)
+    const geometry = await financialNote.evaluate(element => {
+      const rect = element.getBoundingClientRect(), section = element.closest('.dashboard-notes-grid').getBoundingClientRect()
+      return { width: rect.width, available: section.width, left: rect.left, right: rect.right, screen: innerWidth, font: parseFloat(getComputedStyle(element).fontSize) }
+    })
+    assert.ok(geometry.width >= geometry.available - 2 && geometry.font >= 16 && geometry.left >= 0 && geometry.right <= geometry.screen + 1, JSON.stringify(geometry))
+    await page.locator('.financial-notes').screenshot({ path: `tmp/browser-tests/financial-notes-${viewport.width}.png` })
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  console.log('PASS: financial note uses full width and readable input on desktop/portrait/landscape; saved text survives reload')
 
   await page.goto('http://127.0.0.1:5173/financeiro/pagamento-detalhes')
   await page.getByRole('columnheader', { name: 'Responsável', exact: true }).waitFor()
@@ -664,12 +691,64 @@ try {
     assert.equal(await page.locator('.drop-photos img').evaluate(image => image.complete && image.naturalWidth > 0), true)
     await page.screenshot({ path: `tmp/browser-tests/last-mile-attachments-${viewport.width}.png`, fullPage: true })
   }
+  const serviceEditor = page.getByRole('region', { name: 'Modelo de contrato', exact: true })
+  const defaultModelDownload = page.waitForEvent('download')
+  await serviceEditor.getByRole('button', { name: 'Baixar modelo atual (Word)', exact: true }).click()
+  assert.deepEqual(await readFile(await (await defaultModelDownload).path()), await readFile('public/templates/modelo-contrato-prestacao-servico.docx'))
   await page.getByLabel('Alterar modelo do contrato', { exact: true }).setInputFiles({ name: 'modelo.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: await readFile('public/templates/modelo-contrato-prestacao-servico.docx') })
   await page.getByText('Modelo de contrato ativado para os próximos documentos.', { exact: true }).waitFor()
   assert.match(serviceTemplatePath, /^contract-templates\/service\//)
   await page.getByLabel('Alterar modelo do distrato',{exact:true}).setInputFiles({name:'distrato.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:await readFile('public/templates/modelo-distrato-sociedade.docx')})
   await page.getByText('Modelo de distrato ativado para os próximos documentos.',{exact:true}).waitFor()
   assert.match(terminationTemplatePath,/^contract-templates\/termination\//)
+  await page.reload()
+  for (const kind of ['contrato', 'distrato']) {
+    const templateEditor = page.getByRole('region', { name: `Modelo de ${kind}`, exact: true })
+    await templateEditor.getByText('Modelo personalizado ativo.', { exact: true }).waitFor()
+    const activeDownload = page.waitForEvent('download')
+    await templateEditor.getByRole('button', { name: 'Baixar modelo atual (Word)', exact: true }).click()
+    const downloaded = await activeDownload
+    assert.equal(downloaded.suggestedFilename(), `modelo-${kind}-atual.docx`)
+    assert.deepEqual(await readFile(await downloaded.path()), await readFile(kind === 'contrato' ? 'public/templates/modelo-contrato-prestacao-servico.docx' : 'public/templates/modelo-distrato-sociedade.docx'))
+    const pathsBeforeDownload = [serviceTemplatePath, terminationTemplatePath]
+    const originalDownload = page.waitForEvent('download')
+    await templateEditor.getByRole('link', { name: 'Baixar modelo original (Word)', exact: true }).click()
+    assert.deepEqual(await readFile(await (await originalDownload).path()), await readFile(kind === 'contrato' ? 'public/templates/modelo-contrato-prestacao-servico.docx' : 'public/templates/modelo-distrato-sociedade.docx'))
+    assert.deepEqual([serviceTemplatePath, terminationTemplatePath], pathsBeforeDownload)
+  }
+  rejectTemplateLoad = true
+  await page.reload()
+  for (const kind of ['contrato', 'distrato']) {
+    const templateEditor = page.getByRole('region', { name: `Modelo de ${kind}`, exact: true })
+    await templateEditor.getByText('Modelo indisponível.', { exact: true }).waitFor()
+    assert.equal(await templateEditor.getByRole('button', { name: 'Baixar modelo atual (Word)', exact: true }).isDisabled(), true)
+    assert.equal(await templateEditor.getByRole('button', { name: 'Enviar modelo atualizado', exact: true }).isDisabled(), true)
+  }
+  rejectTemplateLoad = false
+  for (const kind of ['contrato', 'distrato']) {
+    const templateEditor = page.getByRole('region', { name: `Modelo de ${kind}`, exact: true })
+    await templateEditor.getByRole('button', { name: 'Tentar novamente', exact: true }).click()
+    await templateEditor.getByText('Modelo personalizado ativo.', { exact: true }).waitFor()
+  }
+  rejectTemplateDownload = true
+  await serviceEditor.getByRole('button', { name: 'Baixar modelo atual (Word)', exact: true }).click()
+  await serviceEditor.getByRole('status').filter({ hasText: 'Não foi possível baixar o modelo ativo.' }).waitFor()
+  rejectTemplateDownload = false
+  const recoveredDownload = page.waitForEvent('download')
+  await serviceEditor.getByRole('button', { name: 'Baixar modelo atual (Word)', exact: true }).click()
+  assert.equal((await recoveredDownload).suggestedFilename(), 'modelo-contrato-atual.docx')
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
+    await page.setViewportSize(viewport)
+    const buttonsFit = await page.locator('.template-editor button, .template-editor a').evaluateAll(buttons => buttons.every(button => {
+      const rect = button.getBoundingClientRect()
+      return rect.left >= 0 && rect.right <= innerWidth + 1 && rect.height >= 44 && button.scrollWidth <= button.clientWidth + 1
+    }))
+    assert.equal(buttonsFit, true, JSON.stringify(await page.locator('.template-editor button, .template-editor a').evaluateAll(elements => elements.map(element => {
+      const rect = element.getBoundingClientRect()
+      return { text: element.textContent, left: rect.left, right: rect.right, height: rect.height, client: element.clientWidth, scroll: element.scrollWidth, screen: innerWidth }
+    }))))
+    await serviceEditor.screenshot({ path: `tmp/browser-tests/template-editor-${viewport.width}.png` })
+  }
   await page.getByRole('button', { name: 'Restaurar modelo padrão', exact: true }).click()
   await page.getByText('Modelo padrão restaurado para os próximos contratos.', { exact: true }).waitFor()
   assert.equal(serviceTemplatePath, '')
@@ -704,6 +783,8 @@ try {
   await page.goto('http://127.0.0.1:5173/financeiro/pagamento-total')
   await totalRow().waitFor()
   assert.equal(await page.getByRole('button', { name: 'Editar', exact: true }).count(), 0)
+  assert.equal(await page.getByLabel('Anotações do financeiro', { exact: true }).getAttribute('readonly'), '')
+  assert.equal(await page.getByRole('button', { name: 'Salvar anotação', exact: true }).count(), 0)
   tables.user_profiles[0].role = 'admin'
   console.log('PASS: Last Mile photos/contracts persist under one ID, model edit is admin-only and finance viewer cannot edit totals')
 
@@ -1497,6 +1578,34 @@ try {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.screenshot({ path: 'tmp/browser-tests/reader-mobile.png', fullPage: true })
   console.log('PASS: five continuous captures, concurrency three, failed saves visible, sidebar scrolls')
+  for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }, { width: 932, height: 430 }, { width: 1024, height: 768 }]) {
+    const mobileContext = await browser.newContext({ viewport, isMobile: true, hasTouch: true, deviceScaleFactor: 2, storageState: await context.storageState() })
+    await mobileContext.route('**/*', mockRequests)
+    const mobilePage = await mobileContext.newPage()
+    mobilePage.on('pageerror', error => failures.push(error.message))
+    await mobilePage.goto('http://127.0.0.1:5173/leitor-etiquetas')
+    await mobilePage.getByRole('button', { name: 'Abrir leitura contínua sem pausa' }).waitFor()
+    const geometry = await mobilePage.evaluate(() => {
+      const sidebar = document.querySelector('.app > aside').getBoundingClientRect()
+      const firstSection = document.querySelector('.label-batch').getBoundingClientRect()
+      const activeButton = document.querySelector('.nav-label-reader').getBoundingClientRect()
+      return { screen: innerWidth, document: document.documentElement.scrollWidth, sidebar: sidebar.height, firstSection: firstSection.top + scrollY, activeButton: activeButton.height, coarse: matchMedia('(pointer:coarse)').matches }
+    })
+    assert.equal(geometry.screen, viewport.width, JSON.stringify(geometry))
+    assert.ok(geometry.coarse && geometry.document <= viewport.width + 1 && geometry.sidebar <= 140 && geometry.firstSection <= 180 && geometry.activeButton <= 64, JSON.stringify(geometry))
+    await mobilePage.screenshot({ path: `tmp/browser-tests/reader-touch-${viewport.width}.png`, fullPage: true })
+    await mobilePage.getByRole('button', { name: /^Financeiro/ }).click()
+    const expandedMenuHeight = await mobilePage.locator('.app > aside').evaluate(element => element.getBoundingClientRect().height)
+    assert.ok(expandedMenuHeight <= 140, `Expanded reader menu: ${expandedMenuHeight}`)
+    await mobilePage.getByRole('button', { name: 'Abrir leitura contínua sem pausa' }).click()
+    await mobilePage.getByRole('button', { name: 'Capturar pacote #1', exact: true }).waitFor()
+    await mobilePage.waitForFunction(() => { const video = document.querySelector('video'); return video?.readyState >= 2 && video.videoWidth > 0 })
+    const mobileVideo = await mobilePage.locator('video').evaluate(video => ({ width: video.videoWidth, height: video.videoHeight, ready: video.readyState }))
+    assert.ok(mobileVideo.width > 0 && mobileVideo.height > 0 && mobileVideo.ready >= 2, JSON.stringify(mobileVideo))
+    await mobilePage.getByRole('button', { name: 'Fechar câmera', exact: true }).click()
+    await mobileContext.close()
+  }
+  console.log('PASS: real mobile viewport and touch keep reader navigation compact in portrait/landscape/tablet, including expanded submenu; camera opens')
   assert.deepEqual(failures, [])
   console.log(`PASS: ${writes.length} simulated writes; no production requests were allowed`)
 } finally { await browser.close() }

@@ -1,4 +1,9 @@
 .financial-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.dashboard-notes-grid.financial-notes { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.financial-notes .dashboard-note { min-width: 0; padding: 1rem 0; border-top: 1px solid #d5e4e5; border-bottom: 1px solid #d5e4e5; }
+.financial-notes textarea { display: block; width: 100%; min-width: 0; max-width: 100%; min-height: 140px; padding: .75rem; border: 1px solid #c8dadc; border-radius: 6px; font: inherit; font-size: 1rem; line-height: 1.5; color: #172f35; background: #fff; resize: vertical; }
+.financial-notes textarea:focus-visible { outline: 2px solid #087f8a; outline-offset: 2px; }
+.financial-notes textarea:read-only { background: #f4f8f8; }
 .closing-period-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
 .closing-period-dates label, .closing-allocation label { display: grid; gap: .4rem; min-width: 0; }
 .closing-period-dates input, .closing-allocation input, .closing-allocation select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
