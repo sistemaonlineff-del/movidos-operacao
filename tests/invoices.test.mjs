@@ -20,7 +20,7 @@ test('invoice files validate extension, content, size and prohibit XML entities'
 test('invoice API binds token to registered closing, blocks viewers and keeps duplicate receipts immutable',async()=>{
   const originalEnv={...process.env},originalFetch=globalThis.fetch
   const periodId='22222222-2222-4222-8222-222222222222',dropId='33333333-3333-4333-8333-333333333333',requestId='44444444-4444-4444-8444-444444444444'
-  let role='admin',request=null,file=null,storageWrites=0,member=true,active=true,dropPartner='IMILE DELIVERY BRAZIL LTDA',ambiguous=false,failConfirmation=false
+  let role='admin',request=null,file=null,storageWrites=0,member=true,active=true,dropPartner='IMILE DELIVERY BRAZIL LTDA',ambiguous=false,failConfirmation=false,linkedSnapshot=false
   const invoke=async(body,token,method=body?'POST':'GET',auth=true)=>{
     let result
     const response={setHeader(){},status(status){this.code=status;return this},json(body){result={status:this.code,body};return this}}
@@ -37,7 +37,7 @@ test('invoice API binds token to registered closing, blocks viewers and keeps du
       if(url.pathname.endsWith('/user_module_permissions'))return Response.json([{financeiro_view:true,financeiro_manage:false}])
       if(url.pathname.endsWith('/financial_periods'))return Response.json(active?[{id:periodId,label:'35. 1Q',partner:'IMILE DELIVERY BRAZIL LTDA',reference_cnpj:'BELLY'}]:[])
       if(url.pathname.endsWith('/drops'))return Response.json([{id:dropId,name:'DROP',partner:dropPartner},...(!url.searchParams.has('id')&&ambiguous?[{id:'other',name:'DROP',partner:dropPartner}]:[])])
-      if(url.pathname.endsWith('/financial_drop_items'))return Response.json(member?[{id:'item'}]:[])
+      if(url.pathname.endsWith('/financial_drop_items'))return Response.json(member&&(!url.searchParams.has('registration_snapshot')||linkedSnapshot)?[{id:'item'}]:[])
       if(url.pathname.endsWith('/financial_payment_history'))return Response.json([])
       if(url.pathname.includes('/storage/v1/object/financial-invoices/')){if(init?.method==='GET')return new Response(Buffer.from(pdf,'base64'));storageWrites++;return Response.json({Key:'stored'})}
       if(url.pathname.endsWith('/financial_invoice_requests')){
@@ -59,7 +59,8 @@ test('invoice API binds token to registered closing, blocks viewers and keeps du
     assert.equal((await invoke()).status,200)
     role='admin';member=false;assert.equal((await invoke({mode:'create',periodId,dropId})).status,400)
     member=true;dropPartner='J&T EXPRESS BRAZIL LTDA';assert.equal((await invoke({mode:'create',periodId,dropId})).status,400)
-    dropPartner='IMILE DELIVERY BRAZIL LTDA';ambiguous=true;assert.equal((await invoke({mode:'create',periodId,dropId})).status,400);ambiguous=false
+    dropPartner='IMILE DELIVERY BRAZIL LTDA';ambiguous=true;assert.equal((await invoke({mode:'create',periodId,dropId})).status,400)
+    linkedSnapshot=true;assert.equal((await invoke({mode:'create',periodId,dropId})).status,200);linkedSnapshot=false;ambiguous=false
     const created=await invoke({mode:'create',periodId,dropId})
     assert.equal(created.status,200)
     const token=created.body.token

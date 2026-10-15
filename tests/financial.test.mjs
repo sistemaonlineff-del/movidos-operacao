@@ -11,11 +11,83 @@ await build({ entryPoints: ['src/cnabSpreadsheet.ts'], outfile: 'tmp/financial-t
 await build({ entryPoints: ['src/closingSpreadsheet.ts'], outfile: 'tmp/financial-tests/closing.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
 const { createClosingTemplate, readClosingSummary, readHistoricalPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/closing.cjs`).href)
 const { readCnabSpreadsheet } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/spreadsheet.mjs`).href)
-const { buildDetails, buildTotals, paymentTotalTarget, lossClass, lossesFor, number, splitLosses, lossEditorValues, lossEventPayload, lossBatchPayloads } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
+const { buildDetails, buildTotals, closingRegistration, closingOperators, closingWindow, allocateClosingPackages, paymentTotalTarget, lossClass, lossesFor, number, splitLosses, lossEditorValues, lossEventPayload, lossBatchPayloads } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
 const { createCnabInter, pixKeyType, prepareCnabPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/cnab.mjs`).href)
 const periods = [{ id: 'p1', label: '33. 1Q DE AGOSTO', partner: 'IMILE DELIVERY BRAZIL LTDA', financial_view_id: 'v1', net_amount: null }, { id: 'p2', label: '33. 1Q DE AGOSTO', partner: 'J&T EXPRESS LTDA', financial_view_id: 'v1', net_amount: null }]
 const item = { id: 'i1', financial_period_id: 'p1', drop_name_snapshot: 'VNM', quantity_packages: 2168, unit_value: .13, reimbursement: 0 }
 const loss = (id, status, amount, period = 'p1') => ({ id, financial_period_id: period, period_label: periods[0].label, drop_name_snapshot: 'VNM', status, amount })
+
+test('operation dates select historical owners and require an exact manual package split at transition', () => {
+  const davi = { id: 'davi', name: 'MGC 5', partner: periods[0].partner, responsible: 'Davi', monthly_value: .25, pix_key: '00123', operation_started_at: '2026-08-01', operation_ended_at: '2026-10-10', is_active: false }
+  const gustavo = { ...davi, id: 'gustavo', responsible: 'Gustavo', monthly_value: .5, pix_key: '99999', operation_started_at: '2026-10-11', operation_ended_at: null, is_active: true }
+  const operators = [gustavo, davi]
+  const select = (start, end, rows = operators) => closingOperators('MGC 5', periods[0].partner, rows, start, end)
+  assert.deepEqual(select('2026-09-16', '2026-09-30').map(row => row.registration_snapshot.responsible), ['Davi'])
+  assert.deepEqual(select('2026-10-16', '2026-10-31').map(row => row.registration_snapshot.responsible), ['Gustavo'])
+  const transition = select('2026-10-01', '2026-10-15')
+  assert.deepEqual(transition.map(row => row.registration_snapshot.responsible), ['Davi', 'Gustavo'])
+  assert.throws(() => allocateClosingPackages(100, transition), /cada responsavel/)
+  assert.throws(() => allocateClosingPackages(100, transition, [70, 20]), /soma/)
+  for (const values of [['', 100], [-1, 101], [1.5, 98.5], ['invalid', 0]]) assert.throws(() => allocateClosingPackages(100, transition, values), /quantidade/)
+  const split = allocateClosingPackages(100, transition, [70, 30])
+  assert.deepEqual(split.map(row => [row.quantity_packages, row.unit_value]), [[70, .25], [30, .5]])
+  assert.equal(allocateClosingPackages(100, transition, [0, 100])[0].quantity_packages, 0)
+  assert.throws(() => select('2026-10-01', '2026-10-15', [davi, { ...gustavo, operation_started_at: '2026-10-10' }]), /sobrepostas/)
+  assert.throws(() => select('2026-10-01', '2026-10-15', [davi, { ...gustavo, operation_started_at: '2026-10-12' }]), /sem responsavel/)
+  assert.throws(() => select('2026-07-01', '2026-07-15'), /Nenhum cadastro/)
+  assert.throws(() => select('2026-10-16', '2026-10-31', [{ ...gustavo, monthly_value: null }]), /valor acordado/)
+  assert.throws(() => closingWindow('2026-02-16', '2026-02-30'), /datas/)
+  assert.throws(() => closingWindow('2026-10-01', '2026-10-31'), /quinzena completa/)
+  assert.deepEqual(closingWindow('2028-02-16', '2028-02-29'), { start: '2028-02-16', end: '2028-02-29' })
+  assert.throws(() => closingWindow('2026-10-01', '2026-10-15', '40. 1Q DE SETEMBRO'), /titulo/)
+  assert.throws(() => closingWindow('2026-10-01', '2026-10-15', '40. 2Q DE OUTUBRO'), /titulo/)
+  assert.throws(() => closingWindow('2026-10-01', '2026-10-15', '40. 1Q DE OUTUBRO 2025'), /titulo/)
+  assert.equal(closingWindow('2026-03-01', '2026-03-15', '1Q DE MARÇO').start, '2026-03-01')
+  assert.equal(split[0].registration_snapshot.closingStart, '2026-10-01')
+})
+
+test('split owners keep their packages, rates and assigned losses separate after manual edits', () => {
+  const items = [{ ...item, id: 'davi-item', quantity_packages: 70, unit_value: .25, registration_snapshot: { dropId: 'davi', responsible: 'Davi', pix: '001' } }, { ...item, id: 'gustavo-item', quantity_packages: 30, unit_value: .5, registration_snapshot: { dropId: 'gustavo', responsible: 'Gustavo', pix: '002' } }]
+  const occurrences = [{ ...loss('davi-loss', 'PUDO Missing', 2), drop_id: 'davi' }, { ...loss('gustavo-loss', 'D2D Missing', 3), drop_id: 'gustavo' }]
+  const details = buildDetails([], items, occurrences, periods)
+  assert.deepEqual(details.map(row => [row.responsible, row.subtotal, row.loss, row.receivable]), [['Davi', 17.5, 2, 15.5], ['Gustavo', 15, 3, 12]])
+  assert.equal(lossesFor(details[0], occurrences, periods)[0].id, 'davi-loss')
+  assert.equal(lossesFor(details[1], occurrences, periods).length, 1)
+  const history = [{ id: 'edit-davi', financial_period_id: 'p1', drop_id: 'davi', drop_name_snapshot: item.drop_name_snapshot, responsible: 'Davi editado', package_quantity: 70, amount: .3, subtotal: 21, loss_amount: 2, total_receivable: 19, observation: JSON.stringify({ movidosClosing: { sourceItemId: 'davi-item' } }) }]
+  const edited = buildDetails(history, items, occurrences, periods)
+  assert.equal(edited.length, 2)
+  assert.deepEqual(edited.find(row => row.dropId === 'gustavo'), details[1])
+})
+
+test('import captures current registration once, preserves zero and refuses ambiguous partners', () => {
+  const davi = { id: 'davi-id', name: 'MGC 5', partner: periods[0].partner, responsible: 'Davi', pix_key: '00123', email: 'davi@example.test', cpf: '00123456789', monthly_value: .25 }
+  const saved = closingRegistration('mgc 5', periods[0].partner, [davi], .13)
+  const old = structuredClone(saved)
+  davi.responsible = 'Gustavo'; davi.pix_key = '999'; davi.monthly_value = .5
+  assert.deepEqual(saved, old)
+  assert.equal(saved.unit_value, .25); assert.equal(saved.registration_snapshot.responsible, 'Davi')
+  const next = closingRegistration('MGC 5', periods[0].partner, [davi], .13)
+  assert.equal(next.unit_value, .5); assert.equal(next.registration_snapshot.responsible, 'Gustavo')
+  assert.equal(closingRegistration('MGC 5', periods[0].partner, [{ ...davi, monthly_value: 0 }], .13).unit_value, 0)
+  assert.equal(closingRegistration('MGC 5', periods[0].partner, [{ ...davi, monthly_value: null }], .13).unit_value, .13)
+  assert.equal(closingRegistration('MGC 5', periods[1].partner, [davi], .13).registration_snapshot.dropId, null)
+  assert.throws(() => closingRegistration('MGC 5', periods[0].partner, [davi, { ...davi, id: 'other' }]), /ambiguo/)
+})
+
+test('closing snapshots never follow registration edits, removal or replacement', () => {
+  const snapshot = { dropId: 'davi-id', responsible: 'Davi', pix: '00123456789', pixHolderName: 'Davi', document: '00123456789', email: 'davi@example.test' }
+  const saved = { ...item, registration_snapshot: snapshot }
+  const original = buildDetails([], [saved], [], periods)[0]
+  const replacement = { id: 'gustavo-id', name: item.drop_name_snapshot, partner: periods[0].partner, responsible: 'Gustavo', pix_key: '99999999999', monthly_value: 9999, email: 'gustavo@example.test' }
+  assert.deepEqual(buildDetails([], [saved], [], periods, [replacement])[0], original)
+  assert.deepEqual(buildDetails([], [saved], [], periods, [{ ...replacement, id: 'davi-id', name: 'RENAMED', is_active: false }])[0], original)
+  for (const field of ['responsible', 'pix', 'pixHolderName', 'document', 'email', 'dropId']) assert.equal(original[field], snapshot[field], field)
+  const legacy = buildDetails([], [item], [], periods, [replacement])[0]
+  assert.equal(legacy.responsible, ''); assert.equal(legacy.pix, ''); assert.equal(legacy.dropId, null)
+  const edited = { id: 'edit', financial_period_id: 'p1', drop_name_snapshot: 'VNM', responsible: '', pix_key: '', observation: JSON.stringify({ movidosClosing: { sourceItemId: item.id } }) }
+  const result = buildDetails([edited], [saved], [], periods, [replacement])[0]
+  assert.equal(result.responsible, ''); assert.equal(result.pix, ''); assert.equal(result.email, snapshot.email)
+})
 
 test('payment details workbook matches table columns and totals with numeric amounts and literal PIX', async () => {
   await build({ entryPoints: ['src/excelDownload.ts'], outfile: 'tmp/financial-tests/excel.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' })

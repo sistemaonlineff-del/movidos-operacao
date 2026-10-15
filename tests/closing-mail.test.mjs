@@ -117,7 +117,7 @@ test('SMTP diagnostic authenticates without sendMail, closes transport and sanit
   }
 })
 
-test('API checks permissions, uses registered recipient, reserves once and never retries uncertain sends', async () => {
+test('API checks permissions, uses saved recipient without reading current registration and never retries uncertain sends', async () => {
   const originalEnv = { ...process.env }
   const originalFetch = globalThis.fetch
   const module = await import(pathToFileURL(`${process.cwd()}/tmp/mail-tests/handler.cjs`).href)
@@ -125,11 +125,13 @@ test('API checks permissions, uses registered recipient, reserves once and never
   const userId = '11111111-1111-4111-8111-111111111111'
   const dropId = '22222222-2222-4222-8222-222222222222'
   const periodId = '33333333-3333-4333-8333-333333333333'
+  const detailId = '44444444-4444-4444-8444-444444444444'
   const partner = 'IMILE DELIVERY BRAZIL LTDA'
   let active = true, manage = false, providerFails = false, finishFails = false, testMode = false
   let role = 'operador'
   let sends = 0, reservations = 0, log = null
-  const payload = { dropId, periodId, period: 'SETEMBRO', partner, subject: 'Test', body: 'Message', to: 'untrusted@example.com', pdf: Buffer.from('%PDF-1.7\n%%EOF').toString('base64') }
+  let snapshotEmail = 'registered@example.com'
+  const payload = { dropId, periodId, detailIds: [detailId], period: 'SETEMBRO', partner, subject: 'Test', body: 'Message', to: 'untrusted@example.com', pdf: Buffer.from('%PDF-1.7\n%%EOF').toString('base64') }
   const invoke = async (body = payload, method = 'POST') => {
     let result
     const response = { setHeader() {}, status(status) { this.statusCode = status; return this }, json(value) { result = { status: this.statusCode, body: value }; return this } }
@@ -159,9 +161,10 @@ test('API checks permissions, uses registered recipient, reserves once and never
       if (url.pathname.endsWith('/user_profiles')) return Response.json([{ role, is_active: active }])
       if (testMode) assert.ok(!['/drops', '/financial_periods', '/financial_drop_items', '/financial_payment_history'].some(path => url.pathname.endsWith(path)))
       if (url.pathname.endsWith('/user_module_permissions')) return Response.json([{ financeiro_manage: manage }])
-      if (url.pathname.endsWith('/drops')) return Response.json([{ id: dropId, name: 'DROP', email: 'registered@example.com', responsible: 'Test' }])
+      assert.ok(!url.pathname.endsWith('/drops'), 'Sending old closing must not read current registration')
       if (url.pathname.endsWith('/financial_periods')) return Response.json([{ id: periodId, label: 'SETEMBRO', partner, financial_view_id: 'view' }])
-      if (url.pathname.endsWith('/financial_drop_items')) return Response.json([{ id: 'item' }])
+      if (url.pathname.endsWith('/financial_views')) return Response.json([{ id: 'view' }])
+      if (url.pathname.endsWith('/financial_drop_items')) return Response.json([{ id: detailId, financial_period_id: periodId, drop_name_snapshot: 'DROP', registration_snapshot: { version: 1, dropId, responsible: 'Davi', email: snapshotEmail } }])
       if (url.pathname.endsWith('/financial_payment_history')) return Response.json([])
       assert.ok(url.pathname.endsWith('/email_logs'))
       if (init?.method === 'POST') {
@@ -183,6 +186,11 @@ test('API checks permissions, uses registered recipient, reserves once and never
     assert.equal((await invoke()).status, 403)
     active = true
     assert.equal((await invoke({ ...payload, pdf: 'invalid' })).status, 400)
+    assert.equal((await invoke({ ...payload, detailIds: ['55555555-5555-4555-8555-555555555555'] })).status, 400)
+    assert.equal((await invoke({ ...payload, dropId: userId })).status, 400)
+    snapshotEmail = ''
+    assert.equal((await invoke()).status, 400)
+    snapshotEmail = 'registered@example.com'
     process.env.MAIL_TEST_RECIPIENT = 'another@example.com'
     assert.deepEqual((await invoke(undefined, 'GET')).body, { configured: true, from: 'sender@example.com', testRecipient: 'another@example.com' })
     const blocked = await invoke()
@@ -199,6 +207,8 @@ test('API checks permissions, uses registered recipient, reserves once and never
     assert.ok(concurrent.some(result => result.body.status === 'aceito'))
     assert.equal(sends, 1)
     assert.equal(reservations, 1)
+    assert.equal(log.responsible, 'Davi')
+    assert.equal(log.recipient_email, 'registered@example.com')
     assert.equal((await invoke()).body.duplicate, true)
     assert.equal(sends, 1)
     log = null; providerFails = true

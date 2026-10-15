@@ -132,7 +132,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (registrations.error) throw new InvoiceError(503, 'Não foi possível conferir os cadastros.')
       if (registrations.data.filter(candidate => financialPartner(candidate) === financialPartner(period)).length > 1) {
         const explicit = await admin.from('financial_payment_history').select('id').eq('financial_period_id', period.id).eq('drop_id', drop.data.id).eq('is_active', true).limit(1)
-        if (explicit.error || !explicit.data?.length) throw new InvoiceError(400, 'Há mais de um DROP com este nome e parceiro. Vincule o cadastro correto ao pagamento antes de gerar o link.')
+        const snapshot = await admin.from('financial_drop_items').select('id').eq('financial_period_id', period.id).contains('registration_snapshot', { dropId: drop.data.id }).eq('is_active', true).limit(1)
+        if (explicit.error || snapshot.error || (!explicit.data?.length && !snapshot.data?.length)) throw new InvoiceError(400, 'Há mais de um DROP com este nome e parceiro. Vincule o cadastro correto ao pagamento antes de gerar o link.')
       }
       const linkToken = randomBytes(32).toString('hex')
       const result = await admin.from('financial_invoice_requests').upsert({ financial_period_id: period.id, drop_id: drop.data.id, drop_name: drop.data.name, period_label: period.label, partner: financialPartner(period), reference_cnpj: period.reference_cnpj || 'MOVIDOS', token_hash: hash(linkToken), expires_at: new Date(Date.now() + 30 * 86400000).toISOString(), revoked_at: null, created_by: userId }, { onConflict: 'financial_period_id,drop_id' }).select('id').single()
