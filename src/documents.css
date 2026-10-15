@@ -1,4 +1,11 @@
 .cadastro-form>.modal-actions{flex-wrap:wrap}
+.template-editor{min-width:0}
+.template-editor>div{align-items:flex-start}
+.template-editor .secondary{display:inline-flex;align-items:center;justify-content:center;min-height:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere;text-align:center;border-radius:6px}
+.template-editor a.secondary{padding:.76rem 1rem;color:inherit;background:#efefef;font-weight:700;text-decoration:none;box-sizing:border-box}
+.template-editor p{overflow-wrap:anywhere}
+@media(max-width:850px){.app:has(.template-editor){grid-template-columns:minmax(0,1fr)}.app:has(.template-editor)>.content,.app:has(.template-editor)>aside{min-width:0}.app:has(.template-editor)>aside{align-items:center}.app:has(.template-editor)>aside nav{min-width:0;overflow-x:auto;align-items:center}.app:has(.template-editor)>aside nav button{flex:0 0 auto;min-height:44px;white-space:nowrap}.app:has(.template-editor)>aside .nav-submenu{display:flex;align-items:center;flex:0 0 auto;margin:0}.template-editor{scroll-margin-top:100px}}
+@media(max-width:640px){.template-editor>div{flex-direction:column}.template-editor .secondary{width:100%;font-size:1rem}}
 .cadastro-form .deactivation-reason{display:grid;gap:8px;margin-top:16px}
 .cadastro-form .deactivation-reason textarea{width:100%;min-height:80px;resize:vertical;font:inherit}
 .last-mile-cadastro,.last-mile-cadastro form,.last-mile-cadastro .form-grid>*{min-width:0;max-width:100%}

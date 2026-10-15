@@ -2,6 +2,20 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Layout no celular e modelos Word (15/10/2026)
+
+O documento HTML agora define o viewport do dispositivo, sem bloquear zoom. O leitor de etiquetas usa uma barra compacta em celulares e telas com toque, sem herdar a altura inteira da barra lateral; os submenus ficam na rolagem horizontal. A barra lateral de desktop mantém a rolagem vertical. Anotações do financeiro ocupam a largura disponível, com fonte legível, campo delimitado e as mesmas permissões e gravação.
+
+Para editar o modelo de contrato ou distrato, com acesso de administrador:
+
+1. Na seção **Modelo do contrato - administração** ou **Modelo do distrato - administração**, clicar em **Baixar modelo atual (Word)**. Sem personalização ativa, o download é do modelo original. Havendo personalização, **Baixar modelo original (Word)** permite partir do padrão de fábrica sem desativar o modelo atual.
+2. Editar o arquivo no Word e salvar como `.docx`, preservando os campos automáticos entre chaves.
+3. Clicar em **Enviar modelo atualizado** e selecionar o arquivo. Aguardar a confirmação de ativação.
+
+O modelo atualizado passa a valer para os próximos documentos de todos os cadastros, não somente o cadastro aberto. Contrato e distrato têm modelos independentes. **Restaurar modelo padrão** retorna ao original daquele tipo. Documentos já emitidos/anexados não são reescritos. A edição do texto acontece no Word, não dentro do app; as limitações de conversão para PDF descritas abaixo continuam e o documento gerado deve ser conferido. Falhas na consulta do modelo bloqueiam ações até nova consulta, sem apresentar um original como se fosse o ativo.
+
+Esta alteração não exige nova migração SQL nem modifica permissões. Validação local com rede simulada: anotações salvas/reabertas, download do DOCX original e ativo, envio e restauração independentes, recuperação de falhas, acesso administrativo e leitor/câmera em telas de 390, 844, 932 e 1024 pixels com toque. Não substitui a conferência no Safari do aparelho real. Nenhum modelo ou dado de produção foi alterado.
+
 ## Cópia cadastral dos fechamentos (14/10/2026)
 
 Ao importar uma nova View, informar início e fim da quinzena, com ano: 1 a 15 ou 16 ao último dia do mês. O nome do período é conferido quando contém mês, ano ou indicação 1Q/2Q; a data do upload não define quem recebe. A seleção considera o nome do ponto, parceiro e vigência inclusiva de cada cadastro, incluindo desativados com datas históricas. Um único cadastro ativo sem datas continua compatível como vigência aberta; ambiguidades, sobreposições ou dias sem responsável bloqueiam a importação. Sem cadastro elegível, o sistema não escolhe a pessoa atual.
