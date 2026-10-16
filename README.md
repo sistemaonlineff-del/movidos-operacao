@@ -4,7 +4,7 @@ Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e S
 
 ## Layout no celular e modelos Word (15/10/2026)
 
-O documento HTML agora define o viewport do dispositivo, sem bloquear zoom. O leitor de etiquetas usa uma barra compacta em celulares e telas com toque, sem herdar a altura inteira da barra lateral; os submenus ficam na rolagem horizontal. A barra lateral de desktop mantém a rolagem vertical. Anotações do financeiro ocupam a largura disponível, com fonte legível, campo delimitado e as mesmas permissões e gravação.
+O viewport do dispositivo fica restrito à rota do leitor de etiquetas, sem bloquear zoom. Nas demais telas, o HTML explicita a largura de 980 pixels usada anteriormente pelo navegador sem viewport, restaurando o layout da Visão Geral, Cadastros e demais telas no celular, com menu lateral e escala de desktop. Ao sair do leitor, inclusive pelo histórico do navegador, essa configuração é restaurada; apenas remover a tag não restaura a escala em todos os navegadores. O leitor usa uma barra compacta em celulares e telas com toque, sem herdar a altura inteira da barra lateral; os submenus ficam na rolagem horizontal. A barra lateral de desktop mantém a rolagem vertical. Anotações do financeiro ocupam a largura disponível, com fonte legível, campo delimitado e as mesmas permissões e gravação.
 
 Para editar o modelo de contrato ou distrato, com acesso de administrador:
 

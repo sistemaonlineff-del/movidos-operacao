@@ -1086,7 +1086,7 @@ try {
 
   {
   tables.financial_periods.push({ id: 'old-jt', label: oldestPeriod.label, partner: 'J&T EXPRESS LTDA', net_amount: 50, is_active: true })
-  tables.drops.push({ id: 'jt-edit', name: 'DROP EDITADO', partner: 'J&T EXPRESS LTDA', is_active: true })
+  tables.drops.push({ id: 'jt-edit', name: 'DROP EDITADO', partner: 'J&T EXPRESS LTDA', is_active: true, status: 'ATIVO' })
   Object.assign(tables.loss_events[0], { updated_at: '2026-09-15T12:00:00Z', legacy_id: 99, created_by: 'original-user', drop_id: 'original-drop' })
   await page.reload()
   await lossRows.nth(4).waitFor()
@@ -1583,7 +1583,27 @@ try {
     await mobileContext.route('**/*', mockRequests)
     const mobilePage = await mobileContext.newPage()
     mobilePage.on('pageerror', error => failures.push(error.message))
-    await mobilePage.goto('http://127.0.0.1:5173/leitor-etiquetas')
+    const layoutBeforeReader = {}
+    const previousLayout = async () => {
+      const result = await mobilePage.waitForFunction(() => {
+        const sidebarElement = document.querySelector('.app > aside'), contentElement = document.querySelector('.app > .content')
+        if (!sidebarElement || !contentElement) return false
+        const sidebar = sidebarElement.getBoundingClientRect(), content = contentElement.getBoundingClientRect()
+        return { width: document.documentElement.clientWidth, sidebarWidth: sidebar.width, sidebarRight: sidebar.right, contentLeft: content.left, grid: getComputedStyle(document.querySelector('.app')).gridTemplateColumns, viewport: document.querySelector('meta[name="viewport"]')?.getAttribute('content') ?? null }
+      })
+      return result.jsonValue()
+    }
+    for (const pathname of ['/cadastros', '/financeiro/pagamento-total', '/']) {
+      await mobilePage.goto(`http://127.0.0.1:5173${pathname}`)
+      await mobilePage.locator(pathname === '/' ? '.metric-grid' : pathname === '/cadastros' ? '.cadastros-list-page' : '.finance-visual-page').waitFor()
+      layoutBeforeReader[pathname] = await previousLayout()
+      const layout = layoutBeforeReader[pathname]
+      assert.equal(layout.viewport, 'width=980')
+      assert.ok(layout.width >= 980 && layout.sidebarRight <= layout.contentLeft + 1, JSON.stringify({ pathname, layout }))
+      if (pathname === '/') assert.ok(await mobilePage.locator('.metric-grid').evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length > 1))
+      await mobilePage.screenshot({ path: `tmp/browser-tests/restored-${pathname === '/' ? 'dashboard' : pathname.includes('financeiro') ? 'financial' : 'registrations'}-${viewport.width}.png` })
+    }
+    await mobilePage.getByRole('button', { name: 'Leitor de etiquetas', exact: true }).click()
     await mobilePage.getByRole('button', { name: 'Abrir leitura contínua sem pausa' }).waitFor()
     const geometry = await mobilePage.evaluate(() => {
       const sidebar = document.querySelector('.app > aside').getBoundingClientRect()
@@ -1603,9 +1623,26 @@ try {
     const mobileVideo = await mobilePage.locator('video').evaluate(video => ({ width: video.videoWidth, height: video.videoHeight, ready: video.readyState }))
     assert.ok(mobileVideo.width > 0 && mobileVideo.height > 0 && mobileVideo.ready >= 2, JSON.stringify(mobileVideo))
     await mobilePage.getByRole('button', { name: 'Fechar câmera', exact: true }).click()
+    await mobilePage.goBack()
+    await mobilePage.locator('.metric-grid').waitFor()
+    assert.deepEqual(await previousLayout(), layoutBeforeReader['/'])
+    await mobilePage.goForward()
+    await mobilePage.getByRole('button', { name: 'Abrir leitura contínua sem pausa' }).waitFor()
+    assert.equal(await mobilePage.evaluate(() => innerWidth), viewport.width)
+    await mobilePage.getByRole('button', { name: /^Cadastros/ }).click()
+    await mobilePage.getByRole('button', { name: 'Ver cadastros Drop off', exact: true }).click()
+    await mobilePage.locator('.cadastros-list-page').waitFor()
+    assert.deepEqual(await previousLayout(), layoutBeforeReader['/cadastros'])
+    await mobilePage.getByRole('button', { name: 'Pagamento Total', exact: true }).click()
+    await mobilePage.locator('.finance-visual-page').waitFor()
+    assert.deepEqual(await previousLayout(), layoutBeforeReader['/financeiro/pagamento-total'])
+    await mobilePage.reload()
+    await mobilePage.locator('.finance-visual-page').waitFor()
+    assert.deepEqual(await previousLayout(), layoutBeforeReader['/financeiro/pagamento-total'])
     await mobileContext.close()
   }
   console.log('PASS: real mobile viewport and touch keep reader navigation compact in portrait/landscape/tablet, including expanded submenu; camera opens')
+  console.log('PASS: dashboard, registrations and financial retain previous desktop-style mobile layout on direct access, after reader navigation, history back/forward and reload')
   assert.deepEqual(failures, [])
   console.log(`PASS: ${writes.length} simulated writes; no production requests were allowed`)
 } finally { await browser.close() }
