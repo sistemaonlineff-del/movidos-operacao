@@ -5,6 +5,30 @@ import { PGlite } from '@electric-sql/pglite'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
 
+test('shared invoice intake migration is repeatable, private and enforces atomic daily quotas',async()=>{
+  const database=new PGlite()
+  try{
+    await database.exec('create role anon;create role authenticated;create role service_role bypassrls;create table financial_periods(id uuid primary key);create table drops(id uuid primary key);create table user_profiles(id uuid primary key);')
+    const migration=await readFile('supabase/migrations/20261018120000_shared_invoice_intake.sql','utf8')
+    await database.exec(migration);await database.exec(migration)
+    for(const table of ['financial_invoice_intake','financial_invoice_intake_limits']){
+      assert.equal((await database.query(`select relrowsecurity from pg_class where relname='${table}'`)).rows[0].relrowsecurity,true)
+      assert.equal((await database.query(`select has_table_privilege('anon','${table}','select') as allowed`)).rows[0].allowed,false)
+      assert.equal((await database.query(`select has_table_privilege('authenticated','${table}','insert') as allowed`)).rows[0].allowed,false)
+    }
+    await database.exec('set role anon')
+    await assert.rejects(database.exec(`select reserve_invoice_intake('${'a'.repeat(64)}')`),/permission denied/)
+    await database.exec('reset role;set role service_role')
+    for(let count=0;count<50;count++)assert.equal((await database.query(`select reserve_invoice_intake('${'a'.repeat(64)}') as allowed`)).rows[0].allowed,true)
+    assert.equal((await database.query(`select reserve_invoice_intake('${'a'.repeat(64)}') as allowed`)).rows[0].allowed,false)
+    assert.equal((await database.query(`select reserve_invoice_intake('invalid') as allowed`)).rows[0].allowed,false)
+    await database.exec("update financial_invoice_intake_limits set attempts=1000 where bucket='global'")
+    assert.equal((await database.query(`select reserve_invoice_intake('${'b'.repeat(64)}') as allowed`)).rows[0].allowed,false)
+    await database.exec('reset role');await database.exec(migration)
+    assert.equal((await database.query("select attempts from financial_invoice_intake_limits where bucket='global'")).rows[0].attempts,1000)
+  }finally{await database.close()}
+})
+
 test('dated successors share a point without overlapping operations or changing history and permissions', async () => {
   const database = new PGlite()
   try {

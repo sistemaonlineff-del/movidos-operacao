@@ -436,7 +436,7 @@ function useDrops() {
     for (let from = 0; ; from += 1000) {
       const { data, error } = await supabase
         .from("drops")
-        .select("id,name,status,municipality,state,latitude,longitude,is_active")
+        .select("id,name,status,responsible,address,address_number,complement,neighborhood,postal_code,municipality,state,partner,latitude,longitude,is_active")
         .order("legacy_id", { ascending: false, nullsFirst: false })
         .range(from, from + 999);
       if (error) {

@@ -3,6 +3,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from './lib/supabase'
 import './route-management.css'
+import { routeIdentity, routeImportPlan } from './routeImport'
 
 type BaseRow = { id?: string; street: string; neighborhood: string; city: string; postal_code: string; zone: string; route: string; delivery_sequence?: number | null; latitude?: number | null; longitude?: number | null; is_active?: boolean }
 type Volume = { id?: string; delivery_date: string; zone: string; route: string; batch_number: number; driver_name: string; recipient: string; street: string; neighborhood: string; city: string; postal_code: string; delivery_sequence?: number | null }
@@ -13,7 +14,6 @@ const cep = (value: unknown) => normalize(value).replace(/\D/g, '').slice(0, 8).
 const key = (value: unknown) => normalize(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '')
 const pick = (row: Record<string, unknown>, names: string[]) => { const entry = Object.entries(row).find(([name]) => names.includes(key(name))); return entry ? normalize(entry[1]) : '' }
 const planKey = (row: Volume) => `${row.delivery_date}|${row.zone}|${row.route}|${row.batch_number}`
-const routeIdentity = (row: BaseRow) => [row.street,row.neighborhood,row.city,row.zone,row.route].map(value=>normalize(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/\s+/g,' ')).join('|')
 const byDeliverySequence = (a: Volume, b: Volume) => (a.delivery_sequence ?? Number.MAX_SAFE_INTEGER) - (b.delivery_sequence ?? Number.MAX_SAFE_INTEGER) || a.postal_code.localeCompare(b.postal_code, 'pt-BR', { numeric: true }) || a.street.localeCompare(b.street, 'pt-BR')
 
 export default function RouteManagement() {
@@ -57,19 +57,29 @@ export default function RouteManagement() {
   }
   const importBase = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; event.target.value = ''; if (!file || !supabase) return
-    let saved=0
+    let saved=0, filled=0
+    setSaving(true)
     try {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' }); const sheet = workbook.Sheets[workbook.SheetNames[0]]
       const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' }).map(row => ({
         street: pick(row, ['rua', 'logradouro', 'endereco', 'endereço']), neighborhood: pick(row, ['bairro']), city: pick(row, ['cidade', 'municipio', 'município']), postal_code: cep(pick(row, ['cep', 'postalcode', 'codigopostal', 'código postal'])), zone: pick(row, ['zona', 'regiao', 'região', 'zone']), route: pick(row, ['rota', 'route']) || 'A definir', delivery_sequence: Number(pick(row, ['sequencia', 'sequência', 'ordem'])) || null, latitude: Number(pick(row, ['latitude', 'lat'])) || null, longitude: Number(pick(row, ['longitude', 'longitude', 'lng', 'lon'])) || null, is_active: true,
       })).filter(row => row.zone)
       if (!rows.length) throw new Error('Não encontrei linhas com a coluna Zona. Confira o cabeçalho do Excel.')
-      const known=new Set(base.filter(row=>row.is_active!==false).map(routeIdentity))
-      const unique=rows.filter(row=>{const identity=routeIdentity(row);if(known.has(identity))return false;known.add(identity);return true})
-      setSaving(true)
+      const current=await readBase()
+      if(current.error)throw current.error
+      const plan=routeImportPlan(current.data,rows)
+      if(plan.fills.length&&!confirm(`Preencher ${plan.fills.length} CEP(s) vazio(s) com os valores da planilha? Os CEPs já preenchidos e os demais campos serão preservados.`)){setMessage('Importação cancelada. Nenhum endereço alterado.');return}
+      for(const fill of plan.fills){
+        let update=supabase.from('delivery_route_base').update({postal_code:fill.postal_code}).eq('id',fill.id).eq('is_active',true)
+        update=fill.previous===null?update.is('postal_code',null):update.eq('postal_code',fill.previous)
+        const result=await update.select('id')
+        if(result.error||result.data?.length!==1)throw new Error('Um CEP mudou durante a importação. Confira a base antes de repetir.')
+        filled++
+      }
+      const unique=plan.inserts
       for (let start = 0; start < unique.length; start += 250) { const part=unique.slice(start,start+250);const result = await supabase.from('delivery_route_base').insert(part); if (result.error) throw result.error;saved+=part.length }
-      await load();setMessage(`${saved} endereço(s) importado(s); ${rows.length-unique.length} duplicado(s) ignorado(s).`)
-    } catch (error) { setMessage(`${saved} endereço(s) confirmado(s). ${error?.message||'Não foi possível importar a planilha.'} Atualize os dados antes de repetir.`) } finally { setSaving(false) }
+      await load();setMessage(`${saved} endereço(s) importado(s); ${filled} CEP(s) vazio(s) preenchido(s); ${plan.skipped} duplicado(s) ignorado(s).`)
+    } catch (error) { setMessage(`${saved} endereço(s) e ${filled} CEP(s) confirmado(s). ${error?.message||'Não foi possível importar a planilha.'} Atualize os dados antes de repetir.`) } finally { setSaving(false) }
   }
   const clearPostalCodes=async()=>{
     if(!supabase||saving)return

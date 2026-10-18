@@ -39,6 +39,7 @@ export default function LabelReader() {
   const [routeSave, setRouteSave] = useState('')
   const [camera, setCamera] = useState(false)
   const [cameraReady, setCameraReady] = useState(false)
+  const [portraitCamera, setPortraitCamera] = useState(false)
   const [cameraStarting, setCameraStarting] = useState(false)
   const [extraction, setExtraction] = useState<LabelExtraction | null>(null)
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
@@ -289,8 +290,12 @@ export default function LabelReader() {
     if (!video?.videoWidth || cameraItems.filter(item => item.status === 'na_fila' || item.status === 'lendo').length >= 20) return
     const canvas = document.createElement('canvas')
     const scale = Math.min(1, READ_MAX_EDGE / Math.max(video.videoWidth, video.videoHeight))
-    canvas.width = Math.round(video.videoWidth * scale); canvas.height = Math.round(video.videoHeight * scale)
-    canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height)
+    const portrait = video.videoHeight > video.videoWidth
+    const width = Math.round(video.videoWidth * scale), height = Math.round(video.videoHeight * scale)
+    canvas.width = portrait ? height : width; canvas.height = portrait ? width : height
+    const context = canvas.getContext('2d')!
+    if (portrait) { context.translate(canvas.width, 0); context.rotate(Math.PI / 2) }
+    context.drawImage(video, 0, 0, width, height)
     const data = canvas.toDataURL('image/jpeg', READ_JPEG_QUALITY)
 
     const num = ++captureNumber.current
@@ -344,7 +349,7 @@ export default function LabelReader() {
       </div>}
       {camera && <div>
         <div className="label-camera-frame">
-          <video ref={videoRef} autoPlay muted playsInline onLoadedData={() => setCameraReady(true)} aria-label="Câmera da etiqueta" />
+          <video ref={videoRef} className={portraitCamera ? 'portrait-camera' : undefined} autoPlay muted playsInline onResize={event => setPortraitCamera(event.currentTarget.videoHeight > event.currentTarget.videoWidth)} onLoadedData={event => { setPortraitCamera(event.currentTarget.videoHeight > event.currentTarget.videoWidth); setCameraReady(true) }} aria-label="Câmera da etiqueta" />
           <span>Modo disparo sem pausa: tire a foto e passe para o próximo pacote!</span>
         </div>
         {captureToast && <p className="camera-toast">{captureToast}</p>}
