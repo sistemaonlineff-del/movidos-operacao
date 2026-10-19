@@ -261,7 +261,29 @@ const page = await context.newPage()
 page.on('pageerror', error => failures.push(error.message))
 page.setDefaultTimeout(15000)
 try {
-  if (process.env.CAMERA_ONLY !== '1') {
+  if (process.env.CONTRACT_ONLY === '1') {
+    await page.goto('http://127.0.0.1:5173/cadastros/novo?edit=drop1', { waitUntil: 'domcontentloaded' })
+    await page.getByLabel('Início da operação', { exact: true }).fill('')
+    await page.getByLabel('Fim da operação', { exact: true }).fill('')
+    await page.getByLabel('Data do contrato', { exact: true }).fill('2026-09-02')
+    await page.getByLabel('Data do distrato', { exact: true }).fill('2026-09-15')
+    for (const kind of ['contrato', 'distrato']) {
+      const pending = page.waitForEvent('download')
+      await page.getByRole('button', { name: `Baixar ${kind} em PDF`, exact: true }).click()
+      const download = await pending
+      assert.match(download.suggestedFilename(), /\.pdf$/)
+      const bytes = await readFile(await download.path())
+      assert.equal(bytes.subarray(0, 4).toString(), '%PDF')
+      assert.ok(bytes.toString('latin1').includes('02/09/2026'))
+      if (kind === 'distrato') assert.ok(bytes.toString('latin1').includes('15/09/2026'))
+      assert.equal(await page.getByLabel('Início da operação', { exact: true }).inputValue(), '')
+      assert.equal(await page.getByLabel('Fim da operação', { exact: true }).inputValue(), '')
+    }
+    assert.equal(writes.length, 0)
+    assert.equal(await page.locator('script[type="module"]').count(), 1)
+    console.log('PASS: contract and termination download valid PDFs with blank operation dates and no database writes')
+  }
+  if (process.env.CAMERA_ONLY !== '1' && process.env.CONTRACT_ONLY !== '1') {
   await page.goto('http://127.0.0.1:5173/financeiro/notas-fiscais')
   await page.getByRole('cell',{name:'DROP TESTE',exact:true}).waitFor()
   await page.getByRole('cell',{name:'Pendente',exact:true}).waitFor()
@@ -1753,7 +1775,7 @@ try {
   console.log('PASS: real mobile viewport and touch keep reader navigation compact in portrait/landscape/tablet, including expanded submenu; camera opens')
   console.log('PASS: dashboard, registrations and financial retain previous desktop-style mobile layout on direct access, after reader navigation, history back/forward and reload')
   }
-  for (const nativeSize of [{width:360,height:640},{width:640,height:360}]) {
+  for (const nativeSize of process.env.CONTRACT_ONLY === '1' ? [] : [{width:360,height:640},{width:640,height:360}]) {
     const portraitContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,storageState:await context.storageState()})
     await portraitContext.route('**/*',mockRequests)
     await portraitContext.addInitScript(({user,jwt})=>{
