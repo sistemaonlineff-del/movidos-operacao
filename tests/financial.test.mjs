@@ -14,19 +14,59 @@ const { readCnabSpreadsheet } = await import(pathToFileURL(`${process.cwd()}/tmp
 const { buildDetails, buildTotals, closingRegistration, closingOperators, closingWindow, allocateClosingPackages, paymentTotalTarget, lossClass, lossesFor, number, splitLosses, lossEditorValues, lossEventPayload, lossBatchPayloads } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
 const { createCnabInter, pixKeyType, prepareCnabPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/cnab.mjs`).href)
 await build({ entryPoints: ['src/routeImport.ts'], outfile: 'tmp/financial-tests/routes.mjs', bundle: true, platform: 'node', format: 'esm' })
-const { routeImportPlan } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/routes.mjs`).href)
+const { routeImportPlan, routeSpreadsheetRows } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/routes.mjs`).href)
+test('route spreadsheet reads hidden fields and MOTORISTA while exposing incomplete rows', async () => {
+  const XLSX = await import('xlsx')
+  const workbook = XLSX.utils.book_new()
+  const sheet = XLSX.utils.aoa_to_sheet([['ENDERECO','BAIRRO','CIDADE','CEP','LATITUDE','LONGITUDE','ZONA','MOTORISTA','SEQUENCIA'],['Avenida','Centro','Varzea Paulista','13220-001','','','Oeste','Joao Miguel',''],['Avenida','Centro','Varzea Paulista','13220-005','','','Oeste','Joao Miguel',''],['Rua incompleta','Loteamento Novo','','13225-851','','','','Lucia','']])
+  sheet['!cols'] = Array.from({ length: 9 }, (_, index) => ({ hidden: [2,4,5,6].includes(index) }))
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Ruas')
+  const read = XLSX.read(XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }), { type: 'buffer', cellStyles: true })
+  const parsed = routeSpreadsheetRows(XLSX.utils.sheet_to_json(read.Sheets.Ruas, { defval: '' }))
+  assert.equal(parsed.length, 3)
+  assert.equal(parsed[0].city, 'Varzea Paulista')
+  assert.equal(parsed[0].route, 'Joao Miguel')
+  assert.equal(parsed.filter(row => !row.zone).length, 1)
+  assert.equal(routeImportPlan([], parsed.filter(row => row.zone)).inserts.length, 2)
+  if (process.env.ROUTE_WORKBOOK) {
+    const real = XLSX.default.readFile(process.env.ROUTE_WORKBOOK, { cellStyles: true })
+    const actual = routeSpreadsheetRows(XLSX.utils.sheet_to_json(real.Sheets[real.SheetNames[0]], { defval: '' }))
+    assert.equal(actual.length, 746)
+    assert.equal(actual.filter(row => !row.zone).length, 11)
+    const valid = actual.filter(row => row.zone)
+    const plan = routeImportPlan([], valid)
+    assert.equal(plan.inserts.length, 735)
+    assert.equal(new Set(valid.map(row => row.route)).size, 13)
+    const saved = plan.inserts.map((row, index) => ({ ...row, id: String(index) }))
+    assert.equal(routeImportPlan(saved, valid).skipped, 735)
+    assert.equal(routeImportPlan(saved, valid).inserts.length, 0)
+    const unnamed = saved.map(row => ({ ...row, route: 'A definir' }))
+    assert.equal(routeImportPlan(unnamed, valid).updates.length, 735)
+  }
+})
+test('route import preserves separate postal segments of the same avenue from the client workbook', () => {
+  const first = { street: 'Avenida Fernao Dias Paes Leme', neighborhood: 'Centro', city: 'Varzea Paulista', zone: 'Zona Oeste', route: 'Joao Miguel', postal_code: '13220-001' }
+  const second = { ...first, postal_code: '13220-005' }
+  const initial = routeImportPlan([], [first, second])
+  assert.equal(initial.inserts.length, 2)
+  const existing = [first, second].map((row, index) => ({ ...row, id: `segment-${index}`, route: 'A definir' }))
+  const update = routeImportPlan(existing, [first, second])
+  assert.equal(update.inserts.length, 0)
+  assert.equal(update.updates.length, 2)
+  assert.equal(update.fills.length, 0)
+})
 test('route reimport fills only blank CEPs and preserves different streets with the same CEP', () => {
   const first = { id: 'one', street: 'Rua Um', neighborhood: 'Centro', city: 'Suzano', zone: 'Leste', route: '1', postal_code: null }
   const second = { ...first, id: 'two', street: 'Rua Dois', postal_code: '12345-000' }
   const plan = routeImportPlan([first, second], [{ ...first, postal_code: '12345-000' }, { ...second, postal_code: '99999-000' }, { ...first, id: undefined, street: 'Rua Três', postal_code: '12345-000' }])
   assert.deepEqual(plan.fills, [{ id: 'one', previous: null, postal_code: '12345-000' }])
-  assert.equal(plan.inserts.length, 1); assert.equal(plan.skipped, 1)
-  assert.throws(() => routeImportPlan([first], [{ ...first, postal_code: '12345-000' }, { ...first, postal_code: '99999-000' }]), /CEPs diferentes/)
+  assert.equal(plan.inserts.length, 2); assert.equal(plan.skipped, 0)
+  assert.throws(() => routeImportPlan([first], [{ ...first, postal_code: '12345-000' }, { ...first, postal_code: '99999-000' }]), /CEP vazio na base/)
   assert.equal(first.postal_code, null); assert.equal(second.postal_code, '12345-000')
 })
 test('route reimport updates a named route on the same address without duplicating or erasing data', () => {
   const original = { id: 'route-one', street: 'Rua Um', neighborhood: 'Centro', city: 'Suzano', zone: 'Leste', route: 'A definir', postal_code: '12345-000', delivery_sequence: 4 }
-  const incoming = { ...original, route: 'Fulano', postal_code: '99999-000', delivery_sequence: null }
+  const incoming = { ...original, route: 'Fulano', delivery_sequence: null }
   const plan = routeImportPlan([original], [incoming, incoming])
   assert.equal(plan.inserts.length, 0)
   assert.equal(plan.fills.length, 0)

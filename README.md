@@ -2,6 +2,16 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Importacao de trechos por CEP (19/10/2026)
+
+Corrige o bloqueio da planilha de Varzea Paulista: mesma rua/bairro/cidade/zona pode ter varios CEPs legitimos. A reimportacao reconhece cada trecho pelo CEP e atualiza a rota existente, sem usar o nome do motorista como identidade do endereco. A coluna MOTORISTA e aceita como alternativa a ROTA (ROTA tem prioridade). Colunas ocultas sao lidas normalmente; nao remover CIDADE ou ZONA so por estarem ocultas. CEP preenchido nunca e substituido: CEP diferente representa outro trecho. CEP vazio so e completado se houver correspondencia unica; ambiguidades e rotas conflitantes para o mesmo trecho bloqueiam antes das gravacoes. Comparacao de atualizacao da rota inclui o CEP original para nao sobrescrever mudancas concorrentes.
+
+O arquivo original tem 746 linhas, 735 com Zona e 13 nomes de motorista. As linhas Excel 693 a 703 estao sem cidade e zona; a 695 tambem nao tem CEP. Nao foram preenchidas por inferencia. A interface pede confirmacao para ignorar linhas sem Zona e informa a quantidade ao terminar. A aba Observacao cita 786 registros, mas nao corresponde a contagem real da aba de ruas. Arquivo original preservado; nada importado na producao.
+
+Antes do frontend, aplicar pessoalmente [supabase/migrations/20261019120000_route_postal_segments.sql](supabase/migrations/20261019120000_route_postal_segments.sql), apos backup e revisao. A protecao antiga do banco tambem ignorava CEP; alterar apenas o frontend nao basta. A migracao troca somente o guard de rotas e inclui CEP na verificacao de duplicidade; nao importa, apaga ou altera linhas, politicas, permissoes ou auditoria de limpeza. Requer a funcao route_identity de cinco argumentos ja instalada pela migracao de guards de 12/10. Nao reaplicar a migracao antiga apos esta. Ver detalhes em [supabase/README.md](supabase/README.md).
+
+Teste opcional do arquivo original: definir ROUTE_WORKBOOK com seu caminho antes de npm test ou npm run test:browser. Os testes padrao usam uma planilha sintetica com colunas ocultas e a avenida em dois CEPs; nao dependem do arquivo pessoal. Integracao e otimizacao do Google Maps nao fazem parte desta correcao.
+
 ## Complementos de 19/10/2026
 
 - Leitor: leitura em massa fica no final da tela, depois da base completa. Camera, fila e concorrencia permanecem iguais.

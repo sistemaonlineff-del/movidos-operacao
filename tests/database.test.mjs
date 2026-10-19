@@ -169,6 +169,20 @@ test('registration and route guards reject new duplicates, preserve old data and
     assert.equal((await database.query('select postal_code from delivery_route_base')).rows[0].postal_code,null)
     assert.equal((await database.query('select previous_values from route_postal_changes')).rows[0].previous_values[0].postal_code,'08600-000')
     assert.equal((await database.query(clearing)).rows[0].count,0)
+    const segmentsMigration=await readFile('supabase/migrations/20261019120000_route_postal_segments.sql','utf8')
+    const snapshot=(await database.query('select * from delivery_route_base order by id')).rows
+    const policies=(await database.query("select * from pg_policies where tablename in ('delivery_route_base','route_postal_changes') order by policyname")).rows
+    await database.exec(segmentsMigration);await database.exec(segmentsMigration)
+    assert.deepEqual((await database.query('select * from delivery_route_base order by id')).rows,snapshot)
+    assert.deepEqual((await database.query("select * from pg_policies where tablename in ('delivery_route_base','route_postal_changes') order by policyname")).rows,policies)
+    await database.exec("insert into delivery_route_base(street,neighborhood,city,zone,route,postal_code) values('Avenida','Centro','Varzea Paulista','Oeste','Joao','13220-001'),('Avenida','Centro','Varzea Paulista','Oeste','Joao','13220-005')")
+    await assert.rejects(database.exec("insert into delivery_route_base(street,neighborhood,city,zone,route,postal_code) values(' AVENIDA ','centro','Varzea Paulista','oeste','joao','13220001')"),/duplicado/)
+    await assert.rejects(database.exec("update delivery_route_base set postal_code='13220-001' where postal_code='13220-005'"),/duplicado/)
+    await database.exec("update delivery_route_base set route='Maria' where street='Avenida'")
+    assert.equal((await database.query(clearing)).rows[0].count,2)
+    assert.equal((await database.query("select count(*) from delivery_route_base where street='Avenida' and postal_code is null")).rows[0].count,2)
+    await database.exec("select set_config('test.allowed','no',false)")
+    await assert.rejects(database.exec(clearing),/permissao/)
   } finally {await database.close()}
 })
 

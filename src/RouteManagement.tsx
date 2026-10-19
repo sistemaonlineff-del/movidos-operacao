@@ -3,7 +3,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from './lib/supabase'
 import './route-management.css'
-import { routeIdentity, routeImportPlan } from './routeImport'
+import { routeIdentity, routeImportPlan, routeSpreadsheetRows } from './routeImport'
 
 type BaseRow = { id?: string; street: string; neighborhood: string; city: string; postal_code: string; zone: string; route: string; delivery_sequence?: number | null; latitude?: number | null; longitude?: number | null; is_active?: boolean }
 type Volume = { id?: string; delivery_date: string; zone: string; route: string; batch_number: number; driver_name: string; recipient: string; street: string; neighborhood: string; city: string; postal_code: string; delivery_sequence?: number | null }
@@ -12,7 +12,6 @@ const blankVolume = (): Volume => ({ delivery_date: new Date().toISOString().sli
 const normalize = (value: unknown) => String(value ?? '').trim()
 const cep = (value: unknown) => normalize(value).replace(/\D/g, '').slice(0, 8).replace(/(\d{5})(\d)/, '$1-$2')
 const key = (value: unknown) => normalize(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '')
-const pick = (row: Record<string, unknown>, names: string[]) => { const entry = Object.entries(row).find(([name]) => names.includes(key(name))); return entry ? normalize(entry[1]) : '' }
 const planKey = (row: Volume) => `${row.delivery_date}|${row.zone}|${row.route}|${row.batch_number}`
 const byDeliverySequence = (a: Volume, b: Volume) => (a.delivery_sequence ?? Number.MAX_SAFE_INTEGER) - (b.delivery_sequence ?? Number.MAX_SAFE_INTEGER) || a.postal_code.localeCompare(b.postal_code, 'pt-BR', { numeric: true }) || a.street.localeCompare(b.street, 'pt-BR')
 
@@ -57,21 +56,21 @@ export default function RouteManagement() {
   }
   const importBase = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; event.target.value = ''; if (!file || !supabase) return
-    let saved=0, filled=0, updated=0
+    let saved=0, filled=0, updated=0, ignored=0
     setSaving(true)
     try {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' }); const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' }).map(row => ({
-        street: pick(row, ['rua', 'logradouro', 'endereco', 'endereço']), neighborhood: pick(row, ['bairro']), city: pick(row, ['cidade', 'municipio', 'município']), postal_code: cep(pick(row, ['cep', 'postalcode', 'codigopostal', 'código postal'])), zone: pick(row, ['zona', 'regiao', 'região', 'zone']), route: pick(row, ['rota', 'route']) || 'A definir', delivery_sequence: Number(pick(row, ['sequencia', 'sequência', 'ordem'])) || null, latitude: Number(pick(row, ['latitude', 'lat'])) || null, longitude: Number(pick(row, ['longitude', 'longitude', 'lng', 'lon'])) || null, is_active: true,
-      })).filter(row => row.zone)
+      const parsed = routeSpreadsheetRows(XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' }))
+      const rows = parsed.filter(row => row.zone)
+      ignored = parsed.length - rows.length
       if (!rows.length) throw new Error('Não encontrei linhas com a coluna Zona. Confira o cabeçalho do Excel.')
       const current=await readBase()
       if(current.error)throw current.error
       const plan=routeImportPlan(current.data,rows)
-      if((plan.fills.length||plan.updates.length)&&!confirm(`Atualizar ${plan.updates.length} rota(s) e preencher ${plan.fills.length} CEP(s) vazio(s) nos endereços existentes? CEPs já preenchidos e demais campos serão preservados.`)){setMessage('Importação cancelada. Nenhum endereço alterado.');return}
+      if((plan.fills.length||plan.updates.length||ignored)&&!confirm(`${ignored?`${ignored} linha(s) sem Zona serão ignoradas. Confira a planilha para importá-las depois.\n`:''}Atualizar ${plan.updates.length} rota(s) e preencher ${plan.fills.length} CEP(s) vazio(s) nos endereços existentes? CEPs já preenchidos e demais campos serão preservados.`)){setMessage('Importação cancelada. Nenhum endereço alterado.');return}
       for(const change of plan.updates){
         let update=supabase.from('delivery_route_base').update({route:change.route}).eq('id',change.original.id).eq('is_active',true)
-        for(const field of ['street','neighborhood','city','zone','route']) update=change.original[field]==null?update.is(field,null):update.eq(field,change.original[field])
+        for(const field of ['street','neighborhood','city','zone','route','postal_code']) update=change.original[field]==null?update.is(field,null):update.eq(field,change.original[field])
         const result=await update.select('id')
         if(result.error||result.data?.length!==1)throw new Error('Um endereço ou rota mudou durante a importação. Confira a base antes de repetir.')
         updated++
@@ -84,8 +83,8 @@ export default function RouteManagement() {
         filled++
       }
       const unique=plan.inserts
-      for (let start = 0; start < unique.length; start += 250) { const part=unique.slice(start,start+250);const result = await supabase.from('delivery_route_base').insert(part); if (result.error) throw result.error;saved+=part.length }
-      await load();setMessage(`${saved} endereço(s) importado(s); ${updated} rota(s) atualizada(s); ${filled} CEP(s) vazio(s) preenchido(s); ${plan.skipped} duplicado(s) ignorado(s).`)
+      for (let start = 0; start < unique.length; start += 250) { const part=unique.slice(start,start+250);const result = await supabase.from('delivery_route_base').insert(part); if (result.error) { if(result.error.code==='23505')throw new Error('O banco recusou um trecho duplicado. Confira a base e se a migração 20261019120000_route_postal_segments.sql foi aplicada.');throw result.error }saved+=part.length }
+      await load();setMessage(`${saved} endereço(s) importado(s); ${updated} rota(s) atualizada(s); ${filled} CEP(s) vazio(s) preenchido(s); ${plan.skipped} duplicado(s) ignorado(s).${ignored?` ${ignored} linha(s) sem Zona não importada(s).`:''}`)
     } catch (error) { setMessage(`${saved} endereço(s), ${updated} rota(s) e ${filled} CEP(s) confirmado(s). ${error?.message||'Não foi possível importar a planilha.'} Atualize os dados antes de repetir.`) } finally { setSaving(false) }
   }
   const clearPostalCodes=async()=>{

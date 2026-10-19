@@ -1,5 +1,22 @@
 # Migração do Access para Supabase
 
+## Trechos da mesma rua com CEPs distintos (19/10/2026)
+
+Aplicar somente [migrations/20261019120000_route_postal_segments.sql](migrations/20261019120000_route_postal_segments.sql), pessoalmente no SQL Editor, apos backup e antes do frontend correspondente. Requer delivery_route_base e route_identity(text,text,text,text,text), ja preparados pelos guards de 12/10. Nao reaplicar schema, importacoes iniciais nem a antiga migracao completa para corrigir somente rotas.
+
+O SQL e repetivel: substitui guard_route_duplicate e seu trigger para considerar o CEP normalizado junto a rua/bairro/cidade/zona/rota. Permite dois CEPs da mesma avenida; continua bloqueando nova duplicidade do mesmo trecho, inclusive em UPDATE de CEP. Nao altera linhas existentes, RLS, grants, financeiro ou cadastros. A limpeza autorizada de CEPs continua exigindo motivo e preservando auditoria; se deixar varias linhas sem CEP no mesmo endereco, a proxima reimportacao exige revisao da ambiguidade, sem escolher um trecho arbitrariamente. Nenhum SQL foi executado na producao por esta correcao.
+
+Conferencia somente leitura apos aplicar:
+
+```sql
+select pg_get_triggerdef(oid)
+from pg_trigger
+where tgrelid = 'public.delivery_route_base'::regclass
+	and tgname = 'guard_route_duplicate';
+```
+
+O trigger deve incluir postal_code nos campos de UPDATE. A funcao guard_route_duplicate deve conter a normalizacao de new.postal_code. Aplicar SQL nao publica o frontend nem importa a planilha. No arquivo original de Varzea Paulista, as linhas 693 a 703 precisam ter cidade/zona revisadas; a 695 tambem esta sem CEP. Nao apagar colunas ocultas CIDADE/ZONA.
+
 ## View incorreta de setembro (19/10/2026)
 
 Não instalar novamente migrações antigas. A câmera não exige SQL. Para retirar a **35. 2Q DE SETEMBRO** incorreta, preservando **35. 1Q DE SETEMBRO** e **36. 2Q DE SETEMBRO**:
