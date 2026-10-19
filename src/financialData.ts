@@ -172,11 +172,10 @@ export function closingOperators(dropName: unknown, partner: unknown, registrati
     nextDay.setUTCDate(nextDay.getUTCDate() + 1);
     if (nextDay.toISOString().slice(0, 10) !== current.from) throw new Error(`Ha dias sem responsavel na quinzena de ${description}. Confira as datas de operacao.`);
   }
-  if (ordered[0].from > start || ordered[ordered.length - 1].to < end) throw new Error(`Ha dias sem responsavel na quinzena de ${description}. Confira as datas de operacao.`);
   return ordered.map(({ row }) => {
     if (row.monthly_value == null && (row.operation_started_at || row.operation_ended_at)) throw new Error(`Preencha o valor acordado de ${text(row.responsible) || description} no cadastro. A tarifa de outro responsavel nao sera reutilizada.`);
     return {
-      registration_snapshot: { ...registrationSnapshot(row), closingStart: start, closingEnd: end },
+      registration_snapshot: { ...registrationSnapshot(row), closingStart: start, closingEnd: end, effectiveStart: row.operation_started_at && row.operation_started_at > start ? row.operation_started_at : start, effectiveEnd: row.operation_ended_at && row.operation_ended_at < end ? row.operation_ended_at : end },
       unit_value: row.monthly_value == null ? fallbackUnit : number(row.monthly_value),
     };
   });

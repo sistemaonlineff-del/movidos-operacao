@@ -1029,6 +1029,19 @@ try {
     await page.getByText('View de 41. 2Q DE OUTUBRO importada com sucesso e consolidado geral atualizado.', { exact: true }).waitFor()
     assert.equal(tables.financial_drop_items.at(-1).registration_snapshot.responsible, 'Gustavo')
     assert.equal(tables.financial_drop_items.at(-1).quantity_packages, 100)
+    const fullOwners = tables.drops
+    tables.drops = [{ ...fullOwners[0], operation_started_at: '2026-11-01', operation_ended_at: '2026-11-10' }]
+    const beforePartial = writes.length
+    await upload('42. 1Q DE NOVEMBRO', '2026-11-01', '2026-11-15')
+    await division.waitFor()
+    assert.equal(writes.length, beforePartial)
+    assert.equal(await division.getByLabel('Pacotes de Davi - linha 1', { exact: true }).inputValue(), '100')
+    await division.getByRole('button', { name: 'Confirmar divisão e importar', exact: true }).click()
+    await page.getByText('View de 42. 1Q DE NOVEMBRO importada com sucesso e consolidado geral atualizado.', { exact: true }).waitFor()
+    const partial = tables.financial_drop_items.at(-1)
+    assert.equal(partial.registration_snapshot.effectiveEnd, '2026-11-10')
+    assert.equal(partial.quantity_packages * partial.unit_value, 25)
+    tables.drops = fullOwners
     tables.drops.forEach(row => { row.responsible = 'ALTERADO'; row.monthly_value = 999; row.pix_key = 'ALTERADO' })
     await page.goto('http://127.0.0.1:5173/financeiro/pagamento-detalhes')
     await page.getByLabel('Período', { exact: true }).selectOption('40. 1Q DE OUTUBRO')
@@ -1561,9 +1574,25 @@ try {
     routesWorkbook.Sheets.Rotas=XLSX.utils.json_to_sheet([{Rua:'Rua Um',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-000',Zona:'LESTE',Rota:'1'},{Rua:'Rua Nova',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-001',Zona:'LESTE',Rota:'3'},{Rua:'Rua Nova',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-001',Zona:'LESTE',Rota:'3'}])
     page.once('dialog',dialog=>dialog.accept())
     await page.locator('.route-import input').setInputFiles({name:'rotas-corrigidas.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:XLSX.write(routesWorkbook,{type:'buffer',bookType:'xlsx'})})
-    await page.getByRole('status').filter({hasText:'1 endereço(s) importado(s); 1 CEP(s) vazio(s) preenchido(s); 1 duplicado(s) ignorado(s).'}).waitFor()
+    await page.getByRole('status').filter({hasText:'1 endereço(s) importado(s); 0 rota(s) atualizada(s); 1 CEP(s) vazio(s) preenchido(s); 1 duplicado(s) ignorado(s).'}).waitFor()
     assert.equal(tables.delivery_route_base.length,3)
     assert.equal(tables.delivery_route_base[0].postal_code,'99999-000');assert.equal(tables.delivery_route_base[1].postal_code,'08600-001')
+    routesWorkbook.Sheets.Rotas=XLSX.utils.json_to_sheet([{Rua:'Rua Um',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-000',Zona:'LESTE',Rota:'Fulano'}])
+    const namedRouteFile={name:'rotas-com-nome.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:XLSX.write(routesWorkbook,{type:'buffer',bookType:'xlsx'})}
+    const beforeRouteUpdate=writes.length
+    page.once('dialog',dialog=>dialog.dismiss())
+    await page.locator('.route-import input').setInputFiles(namedRouteFile)
+    await page.getByRole('status').filter({hasText:'Importação cancelada. Nenhum endereço alterado.'}).waitFor()
+    assert.equal(writes.length,beforeRouteUpdate)
+    page.once('dialog',dialog=>dialog.accept())
+    await page.locator('.route-import input').setInputFiles(namedRouteFile)
+    await page.getByRole('status').filter({hasText:'1 rota(s) atualizada(s)'}).waitFor()
+    assert.equal(tables.delivery_route_base.length,3)
+    assert.equal(tables.delivery_route_base[0].route,'Fulano')
+    assert.equal(tables.delivery_route_base[0].postal_code,'99999-000')
+    await page.locator('.route-import input').setInputFiles(namedRouteFile)
+    await page.getByRole('status').filter({hasText:'0 rota(s) atualizada(s); 0 CEP(s) vazio(s) preenchido(s); 1 duplicado(s) ignorado(s).'}).waitFor()
+    assert.equal(writes.length,beforeRouteUpdate+1)
 
     tables.financial_views=[{id:'view-test',title:'35. 2Q DE SETEMBRO',is_active:true,notes:JSON.stringify({annotation:'Anterior',summary:{invoice:100}}),created_at:'2026-10-12'}]
     tables.financial_periods=[{id:'period-test',financial_view_id:'view-test',label:'35. 2Q DE SETEMBRO',partner,logistics_partner:partner,reference_cnpj:'MOVIDOS',net_amount:100,is_active:true}]
@@ -1666,7 +1695,7 @@ try {
     await mobilePage.getByRole('button', { name: 'Abrir leitura contínua sem pausa' }).waitFor()
     const geometry = await mobilePage.evaluate(() => {
       const sidebar = document.querySelector('.app > aside').getBoundingClientRect()
-      const firstSection = document.querySelector('.label-batch').getBoundingClientRect()
+      const firstSection = document.querySelector('.label-grid').getBoundingClientRect()
       const activeButton = document.querySelector('.nav-label-reader').getBoundingClientRect()
       return { screen: innerWidth, document: document.documentElement.scrollWidth, sidebar: sidebar.height, firstSection: firstSection.top + scrollY, activeButton: activeButton.height, coarse: matchMedia('(pointer:coarse)').matches }
     })
@@ -1727,6 +1756,9 @@ try {
     },nativeSize)
     const portraitPage=await portraitContext.newPage()
     await portraitPage.goto('http://127.0.0.1:5173/leitor-etiquetas')
+    await portraitPage.getByRole('button',{name:'Abrir leitura contínua sem pausa',exact:true}).waitFor()
+    const batchOrder=await portraitPage.locator('.label-reader').evaluate(element=>element.lastElementChild.classList.contains('label-batch'))
+    assert.equal(batchOrder,true)
     await portraitPage.getByRole('button',{name:'Abrir leitura contínua sem pausa',exact:true}).click()
     await portraitPage.waitForFunction(height=>document.querySelector('video')?.videoHeight===height,nativeSize.height)
     assert.equal(await portraitPage.locator('video').evaluate(video=>getComputedStyle(video).transform),'none')

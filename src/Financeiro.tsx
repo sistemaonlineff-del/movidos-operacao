@@ -246,9 +246,10 @@ export default function Financeiro(){
       if(confirmed&&confirmed.fingerprint!==fingerprint)throw new Error('Os cadastros ou valores mudaram durante a conferencia. Cancele e anexe novamente a planilha para revisar a divisao.')
       const repeated=[...sourceClosing,...sourceLosses].find(row=>existingPeriods.some(period=>dropKey(period.label)===dropKey(row.Periodo)&&closingIdentity(financialPartner(period),period.reference_cnpj)===closingIdentity(row.Parceiro,row.CNPJReferencia)))
       if(repeated)throw new Error('Já existe fechamento ativo para este período, parceiro e CNPJ. Corrija o período ou exclua logicamente a View anterior antes de importar novamente.')
-      if(!confirmed&&(plan.some(entry=>entry.operators.length>1)||lossPlan.some(entry=>entry.operators.length>1))){
+      const needsReview=entries=>entries.some(entry=>entry.operators.length>1||entry.operators.some(operator=>operator.registration_snapshot.effectiveStart!==window.start||operator.registration_snapshot.effectiveEnd!==window.end))
+      if(!confirmed&&(needsReview(plan)||needsReview(lossPlan))){
         setPendingImport({sourceClosing,sourceLosses,sourceTitle,sourceFileName,summary,plan,lossPlan,fingerprint,quantities:plan.map(entry=>entry.operators.length===1?[String(number(entry.row.QuantidadePacote))]:entry.operators.map(()=>'')),lossOwners:lossPlan.map(entry=>entry.operators.length===1?entry.operators[0].registration_snapshot.dropId:'')})
-        setMessage('Troca de responsavel nesta quinzena. Confira a divisao antes de importar.');return
+        setMessage('Confira os responsaveis e as datas de operacao. O pagamento usa os pacotes importados e a tarifa de cada cadastro, sem rateio por dias.');return
       }
       stage='conferir a divisao de pacotes e extravios'
       const allocated=plan.map((entry,index)=>allocateClosingPackages(entry.row.QuantidadePacote,entry.operators,confirmed?.quantities[index]))
