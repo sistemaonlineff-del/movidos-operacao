@@ -1567,9 +1567,9 @@ try {
     await page.getByRole('status').filter({hasText:'1 CEP(s) esvaziado(s)'}).waitFor()
     assert.equal(tables.delivery_route_base[0].postal_code,null);assert.equal(tables.delivery_route_base[1].postal_code,'08600-001')
     const routesWorkbook=XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(routesWorkbook,XLSX.utils.json_to_sheet([{Rua:'Rua Um',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-000',Zona:'LESTE',Rota:'1'},{Rua:'Rua Nova',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-001',Zona:'LESTE',Rota:'3'},{Rua:'Rua Nova',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-002',Zona:'LESTE',Rota:'3'}]),'Rotas')
+    XLSX.utils.book_append_sheet(routesWorkbook,XLSX.utils.json_to_sheet([{Rua:'Rua Um',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-000',Zona:'LESTE',Rota:'1'},{Rua:'Rua Nova',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-001',Zona:'LESTE',Rota:'3'},{Rua:'Rua Nova',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-001',Zona:'LESTE',Rota:'Outra'}]),'Rotas')
     await page.locator('.route-import input').setInputFiles({name:'rotas.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:XLSX.write(routesWorkbook,{type:'buffer',bookType:'xlsx'})})
-    await page.getByRole('status').filter({hasText:'A planilha informa CEPs diferentes'}).waitFor()
+    await page.getByRole('status').filter({hasText:'A planilha informa rotas diferentes'}).waitFor()
     assert.equal(tables.delivery_route_base.length,2);assert.equal(tables.delivery_route_base[0].postal_code,null)
     routesWorkbook.Sheets.Rotas=XLSX.utils.json_to_sheet([{Rua:'Rua Um',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-000',Zona:'LESTE',Rota:'1'},{Rua:'Rua Nova',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-001',Zona:'LESTE',Rota:'3'},{Rua:'Rua Nova',Bairro:'Centro',Cidade:'Suzano',CEP:'99999-001',Zona:'LESTE',Rota:'3'}])
     page.once('dialog',dialog=>dialog.accept())
@@ -1593,6 +1593,27 @@ try {
     await page.locator('.route-import input').setInputFiles(namedRouteFile)
     await page.getByRole('status').filter({hasText:'0 rota(s) atualizada(s); 0 CEP(s) vazio(s) preenchido(s); 1 duplicado(s) ignorado(s).'}).waitFor()
     assert.equal(writes.length,beforeRouteUpdate+1)
+    if(process.env.ROUTE_WORKBOOK){
+      const beforeReal=structuredClone(tables.delivery_route_base)
+      tables.delivery_route_base=[]
+      await page.goto('http://127.0.0.1:5173/rotas-entrega')
+      await page.locator('.route-import input').waitFor({state:'attached'})
+      page.once('dialog',dialog=>{assert.match(dialog.message(),/11 linha\(s\) sem Zona/);return dialog.accept()})
+      await page.locator('.route-import input').setInputFiles(process.env.ROUTE_WORKBOOK)
+      await page.getByRole('status').filter({hasText:'735 endereço(s) importado(s)'}).waitFor()
+      assert.match(await page.getByRole('status').innerText(),/11 linha\(s\) sem Zona não importada/)
+      assert.equal(tables.delivery_route_base.length,735)
+      assert.equal(new Set(tables.delivery_route_base.map(row=>row.route)).size,13)
+      assert.equal(tables.delivery_route_base.filter(row=>row.postal_code==='13220-001'||row.postal_code==='13220-005').length,2)
+      const beforeRepeat=writes.length
+      page.once('dialog',dialog=>dialog.accept())
+      await page.locator('.route-import input').setInputFiles(process.env.ROUTE_WORKBOOK)
+      await page.getByRole('status').filter({hasText:'735 duplicado(s) ignorado(s)'}).waitFor()
+      assert.equal(writes.length,beforeRepeat)
+      assert.equal(tables.delivery_route_base.length,735)
+      tables.delivery_route_base=beforeReal
+      console.log('PASS: original client workbook imports 735 postal segments, keeps 13 driver names and hidden fields, warns about 11 incomplete rows and reimports without writes')
+    }
 
     tables.financial_views=[{id:'view-test',title:'35. 2Q DE SETEMBRO',is_active:true,notes:JSON.stringify({annotation:'Anterior',summary:{invoice:100}}),created_at:'2026-10-12'}]
     tables.financial_periods=[{id:'period-test',financial_view_id:'view-test',label:'35. 2Q DE SETEMBRO',partner,logistics_partner:partner,reference_cnpj:'MOVIDOS',net_amount:100,is_active:true}]
@@ -1682,7 +1703,7 @@ try {
       return result.jsonValue()
     }
     for (const pathname of ['/cadastros', '/financeiro/pagamento-total', '/']) {
-      await mobilePage.goto(`http://127.0.0.1:5173${pathname}`)
+      await mobilePage.goto(`http://127.0.0.1:5173${pathname}`, { waitUntil: 'domcontentloaded' })
       await mobilePage.locator(pathname === '/' ? '.metric-grid' : pathname === '/cadastros' ? '.cadastros-list-page' : '.finance-visual-page').waitFor()
       layoutBeforeReader[pathname] = await previousLayout()
       const layout = layoutBeforeReader[pathname]
@@ -1755,7 +1776,7 @@ try {
       }
     },nativeSize)
     const portraitPage=await portraitContext.newPage()
-    await portraitPage.goto('http://127.0.0.1:5173/leitor-etiquetas')
+    await portraitPage.goto('http://127.0.0.1:5173/leitor-etiquetas', { waitUntil: 'domcontentloaded' })
     await portraitPage.getByRole('button',{name:'Abrir leitura contínua sem pausa',exact:true}).waitFor()
     const batchOrder=await portraitPage.locator('.label-reader').evaluate(element=>element.lastElementChild.classList.contains('label-batch'))
     assert.equal(batchOrder,true)
