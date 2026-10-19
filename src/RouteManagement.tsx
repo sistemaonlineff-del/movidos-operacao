@@ -57,7 +57,7 @@ export default function RouteManagement() {
   }
   const importBase = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; event.target.value = ''; if (!file || !supabase) return
-    let saved=0, filled=0
+    let saved=0, filled=0, updated=0
     setSaving(true)
     try {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' }); const sheet = workbook.Sheets[workbook.SheetNames[0]]
@@ -68,7 +68,14 @@ export default function RouteManagement() {
       const current=await readBase()
       if(current.error)throw current.error
       const plan=routeImportPlan(current.data,rows)
-      if(plan.fills.length&&!confirm(`Preencher ${plan.fills.length} CEP(s) vazio(s) com os valores da planilha? Os CEPs já preenchidos e os demais campos serão preservados.`)){setMessage('Importação cancelada. Nenhum endereço alterado.');return}
+      if((plan.fills.length||plan.updates.length)&&!confirm(`Atualizar ${plan.updates.length} rota(s) e preencher ${plan.fills.length} CEP(s) vazio(s) nos endereços existentes? CEPs já preenchidos e demais campos serão preservados.`)){setMessage('Importação cancelada. Nenhum endereço alterado.');return}
+      for(const change of plan.updates){
+        let update=supabase.from('delivery_route_base').update({route:change.route}).eq('id',change.original.id).eq('is_active',true)
+        for(const field of ['street','neighborhood','city','zone','route']) update=change.original[field]==null?update.is(field,null):update.eq(field,change.original[field])
+        const result=await update.select('id')
+        if(result.error||result.data?.length!==1)throw new Error('Um endereço ou rota mudou durante a importação. Confira a base antes de repetir.')
+        updated++
+      }
       for(const fill of plan.fills){
         let update=supabase.from('delivery_route_base').update({postal_code:fill.postal_code}).eq('id',fill.id).eq('is_active',true)
         update=fill.previous===null?update.is('postal_code',null):update.eq('postal_code',fill.previous)
@@ -78,8 +85,8 @@ export default function RouteManagement() {
       }
       const unique=plan.inserts
       for (let start = 0; start < unique.length; start += 250) { const part=unique.slice(start,start+250);const result = await supabase.from('delivery_route_base').insert(part); if (result.error) throw result.error;saved+=part.length }
-      await load();setMessage(`${saved} endereço(s) importado(s); ${filled} CEP(s) vazio(s) preenchido(s); ${plan.skipped} duplicado(s) ignorado(s).`)
-    } catch (error) { setMessage(`${saved} endereço(s) e ${filled} CEP(s) confirmado(s). ${error?.message||'Não foi possível importar a planilha.'} Atualize os dados antes de repetir.`) } finally { setSaving(false) }
+      await load();setMessage(`${saved} endereço(s) importado(s); ${updated} rota(s) atualizada(s); ${filled} CEP(s) vazio(s) preenchido(s); ${plan.skipped} duplicado(s) ignorado(s).`)
+    } catch (error) { setMessage(`${saved} endereço(s), ${updated} rota(s) e ${filled} CEP(s) confirmado(s). ${error?.message||'Não foi possível importar a planilha.'} Atualize os dados antes de repetir.`) } finally { setSaving(false) }
   }
   const clearPostalCodes=async()=>{
     if(!supabase||saving)return

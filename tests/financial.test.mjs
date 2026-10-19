@@ -24,6 +24,24 @@ test('route reimport fills only blank CEPs and preserves different streets with 
   assert.throws(() => routeImportPlan([first], [{ ...first, postal_code: '12345-000' }, { ...first, postal_code: '99999-000' }]), /CEPs diferentes/)
   assert.equal(first.postal_code, null); assert.equal(second.postal_code, '12345-000')
 })
+test('route reimport updates a named route on the same address without duplicating or erasing data', () => {
+  const original = { id: 'route-one', street: 'Rua Um', neighborhood: 'Centro', city: 'Suzano', zone: 'Leste', route: 'A definir', postal_code: '12345-000', delivery_sequence: 4 }
+  const incoming = { ...original, route: 'Fulano', postal_code: '99999-000', delivery_sequence: null }
+  const plan = routeImportPlan([original], [incoming, incoming])
+  assert.equal(plan.inserts.length, 0)
+  assert.equal(plan.fills.length, 0)
+  assert.deepEqual(plan.updates, [{ original, route: 'Fulano' }])
+  assert.equal(plan.skipped, 1)
+  const updated = { ...original, route: 'Fulano' }
+  assert.equal(routeImportPlan([updated], [incoming]).updates.length, 0)
+  assert.equal(routeImportPlan([updated], [{ ...incoming, route: 'A definir' }]).updates.length, 0)
+  assert.equal(routeImportPlan([updated], [{ ...incoming, route: 'Beltrano' }]).updates[0].route, 'Beltrano')
+  assert.equal(routeImportPlan([original], [{ ...incoming, street: 'Rua Dois' }]).inserts.length, 1)
+  assert.throws(() => routeImportPlan([original, { ...original, id: 'duplicate', route: 'Outra' }], [incoming]), /duplicados/)
+  assert.throws(() => routeImportPlan([original], [incoming, { ...incoming, route: 'Outra' }]), /rotas diferentes/)
+  assert.equal(original.route, 'A definir')
+  assert.equal(original.delivery_sequence, 4)
+})
 const periods = [{ id: 'p1', label: '33. 1Q DE AGOSTO', partner: 'IMILE DELIVERY BRAZIL LTDA', financial_view_id: 'v1', net_amount: null }, { id: 'p2', label: '33. 1Q DE AGOSTO', partner: 'J&T EXPRESS LTDA', financial_view_id: 'v1', net_amount: null }]
 const item = { id: 'i1', financial_period_id: 'p1', drop_name_snapshot: 'VNM', quantity_packages: 2168, unit_value: .13, reimbursement: 0 }
 const loss = (id, status, amount, period = 'p1') => ({ id, financial_period_id: period, period_label: periods[0].label, drop_name_snapshot: 'VNM', status, amount })
@@ -55,6 +73,21 @@ test('operation dates select historical owners and require an exact manual packa
   assert.throws(() => closingWindow('2026-10-01', '2026-10-15', '40. 1Q DE OUTUBRO 2025'), /titulo/)
   assert.equal(closingWindow('2026-03-01', '2026-03-15', '1Q DE MARÇO').start, '2026-03-01')
   assert.equal(split[0].registration_snapshot.closingStart, '2026-10-01')
+})
+
+test('partial operation at fortnight edges uses actual packages and preserves effective dates', () => {
+  const owner = { id: 'ended', name: 'MGC 5', partner: periods[0].partner, responsible: 'Davi', monthly_value: .25, operation_started_at: '2026-10-01', operation_ended_at: '2026-10-10', is_active: false }
+  const operators = closingOperators('MGC 5', periods[0].partner, [owner], '2026-10-01', '2026-10-15')
+  const allocation = allocateClosingPackages(100, operators)[0]
+  assert.equal(allocation.quantity_packages * allocation.unit_value, 25)
+  assert.equal(allocation.registration_snapshot.effectiveStart, '2026-10-01')
+  assert.equal(allocation.registration_snapshot.effectiveEnd, '2026-10-10')
+  assert.equal(allocation.registration_snapshot.closingEnd, '2026-10-15')
+  assert.throws(() => closingOperators('MGC 5', periods[0].partner, [owner], '2026-10-16', '2026-10-31'), /Nenhum cadastro/)
+  const started = closingOperators('MGC 5', periods[0].partner, [{ ...owner, operation_started_at: '2026-10-10', operation_ended_at: null }], '2026-10-01', '2026-10-15')[0]
+  assert.equal(started.registration_snapshot.effectiveStart, '2026-10-10')
+  assert.equal(started.registration_snapshot.effectiveEnd, '2026-10-15')
+  assert.equal(owner.operation_ended_at, '2026-10-10')
 })
 
 test('split owners keep their packages, rates and assigned losses separate after manual edits', () => {

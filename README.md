@@ -2,6 +2,14 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Complementos de 19/10/2026
+
+- Leitor: leitura em massa fica no final da tela, depois da base completa. Camera, fila e concorrencia permanecem iguais.
+- Reimportacao de rotas: rua, bairro, cidade e zona identificam o endereco, sem depender do nome da rota. Uma rota informada atualiza a existente apos confirmacao; rota vazia ou A definir nao apaga um nome salvo. CEP preenchido, sequencia e outros campos sao preservados; CEP vazio pode ser completado. Multiplas rotas ou CEPs conflitantes na planilha e multiplos enderecos ativos correspondentes bloqueiam antes de gravar. Mesmo CEP em ruas diferentes continua permitido. Falha parcial informa as quantidades confirmadas; nao e sincronizacao integral nem transacao de arquivo inteiro.
+- Datas do drop: inicio ou encerramento dentro da quinzena e permitido, inclusive encerramento no dia 10 sem sucessor. A importacao pede conferencia e salva o intervalo efetivo junto ao cadastro historico. O pagamento continua sendo quantidade de pacotes importada vezes tarifa acordada, com descontos existentes; NAO presume valor fixo mensal nem rateio por dias. A planilha precisa conter os pacotes efetivos da operacao. Trocas de responsavel exigem divisao explicita dos pacotes; sobreposicoes e lacunas entre responsaveis continuam bloqueadas. Periodos fora da vigencia nao selecionam esse cadastro. Fechamentos anteriores nao sao recalculados.
+
+Estes complementos nao exigem novo SQL. Implementacao local ate publicacao e homologacao no aparelho.
+
 ## Ajustes solicitados em 18/10/2026
 
 Em 19/10, a correção abaixo remove o giro indevido do cenário. Também foi reforçado o salvamento cadastral para usar o ID já confirmado caso a navegação ainda não reflita esse ID, evitando reinclusão. A exclusão administrativa da View **35. 2Q DE SETEMBRO** está preparada, mas depende da conferência do UUID e execução pessoal no Supabase: ver [supabase/README.md](supabase/README.md). Nenhuma View real foi alterada; a retirada é do uso e cálculos, com auditoria preservada, não apagamento físico.
