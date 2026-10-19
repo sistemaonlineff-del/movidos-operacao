@@ -120,6 +120,26 @@ test('financial view controls rename atomically, isolate references, reject dupl
     for (const table of ['financial_drop_items','financial_payment_history','loss_events']) assert.equal((await database.query(`select is_active,amount from ${table}`)).rows[0].is_active,false)
     assert.equal((await database.query("select is_active from financial_periods where reference_cnpj='BELLY'")).rows[0].is_active,true)
     assert.equal((await database.query('select count(*) from financial_view_changes')).rows[0].count,2)
+    const maintenance=await readFile('supabase/maintenance/exclude_wrong_september_view.sql','utf8')
+    await assert.rejects(database.exec(maintenance),/Informe em target_id/)
+    await database.exec('rollback')
+    const wrongId='88888888-8888-4888-8888-888888888888',wrongPeriod='99999999-9999-4999-8999-999999999999'
+    await database.exec(`insert into financial_views(id,title) values('${wrongId}','35. 2Q DE SETEMBRO'),('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','36. 2Q DE SETEMBRO');
+      insert into financial_periods(id,financial_view_id,label,partner,logistics_partner,reference_cnpj,net_amount) values('${wrongPeriod}','${wrongId}','35. 2Q DE SETEMBRO','IMILE','IMILE','MOVIDOS',99),('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','36. 2Q DE SETEMBRO','IMILE','IMILE','MOVIDOS',321);
+      insert into financial_drop_items(id,financial_period_id,amount) values('cccccccc-cccc-4ccc-8ccc-cccccccccccc','${wrongPeriod}',7);
+      insert into financial_payment_history select *, '35. 2Q DE SETEMBRO' from financial_drop_items where financial_period_id='${wrongPeriod}';
+      insert into loss_events select * from financial_payment_history where financial_period_id='${wrongPeriod}';`)
+    const correctBefore=(await database.query("select * from financial_periods where label in ('35. 1Q DE SETEMBRO','36. 2Q DE SETEMBRO') order by id")).rows
+    const executeFor=id=>maintenance.replace('target_id uuid := null;',`target_id uuid := '${id}';`)
+    await assert.rejects(database.exec(executeFor('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')),/titulo diferente/)
+    await database.exec('rollback')
+    await database.exec(executeFor(wrongId));await database.exec(executeFor(wrongId))
+    assert.equal((await database.query(`select is_active from financial_views where id='${wrongId}'`)).rows[0].is_active,false)
+    for(const table of ['financial_drop_items','financial_payment_history','loss_events']){
+      assert.deepEqual((await database.query(`select is_active,amount from ${table} where financial_period_id='${wrongPeriod}'`)).rows,[{is_active:false,amount:'7'}])
+    }
+    assert.deepEqual((await database.query("select * from financial_periods where label in ('35. 1Q DE SETEMBRO','36. 2Q DE SETEMBRO') order by id")).rows,correctBefore)
+    assert.equal((await database.query(`select count(*) from financial_view_changes where financial_view_id='${wrongId}'`)).rows[0].count,1)
   } finally { await database.close() }
 })
 

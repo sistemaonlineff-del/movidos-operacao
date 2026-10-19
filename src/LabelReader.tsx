@@ -39,8 +39,6 @@ export default function LabelReader() {
   const [routeSave, setRouteSave] = useState('')
   const [camera, setCamera] = useState(false)
   const [cameraReady, setCameraReady] = useState(false)
-  const [portraitCamera, setPortraitCamera] = useState(false)
-  const [uprightPhone, setUprightPhone] = useState(() => navigator.maxTouchPoints > 0 && matchMedia('(orientation: portrait)').matches)
   const [cameraStarting, setCameraStarting] = useState(false)
   const [extraction, setExtraction] = useState<LabelExtraction | null>(null)
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
@@ -61,12 +59,6 @@ export default function LabelReader() {
   const primaryMatch = matches.length === 1 ? matches[0] : null
   const ceps = postalCodes(query)
 
-  useEffect(() => {
-    const orientation = matchMedia('(orientation: portrait)')
-    const update = () => setUprightPhone(navigator.maxTouchPoints > 0 && orientation.matches)
-    orientation.addEventListener('change', update)
-    return () => orientation.removeEventListener('change', update)
-  }, [])
 
   useEffect(() => {
     alive.current = true
@@ -295,14 +287,12 @@ export default function LabelReader() {
     const video = videoRef.current
     if (!video?.videoWidth || cameraItems.filter(item => item.status === 'na_fila' || item.status === 'lendo').length >= 20) return
     const canvas = document.createElement('canvas')
-    const portrait = uprightPhone || video.videoHeight > video.videoWidth
-    const sourceWidth = portrait ? Math.min(video.videoWidth, video.videoHeight * 9 / 16) : video.videoWidth
-    const sourceHeight = portrait ? Math.min(video.videoHeight, video.videoWidth * 16 / 9) : video.videoHeight
+    const sourceWidth = Math.min(video.videoWidth, video.videoHeight * 16 / 9)
+    const sourceHeight = Math.min(video.videoHeight, video.videoWidth * 9 / 16)
     const scale = Math.min(1, READ_MAX_EDGE / Math.max(sourceWidth, sourceHeight))
     const width = Math.round(sourceWidth * scale), height = Math.round(sourceHeight * scale)
-    canvas.width = portrait ? height : width; canvas.height = portrait ? width : height
+    canvas.width = width; canvas.height = height
     const context = canvas.getContext('2d')!
-    if (portrait) { context.translate(canvas.width, 0); context.rotate(Math.PI / 2) }
     context.drawImage(video, (video.videoWidth - sourceWidth) / 2, (video.videoHeight - sourceHeight) / 2, sourceWidth, sourceHeight, 0, 0, width, height)
     const data = canvas.toDataURL('image/jpeg', READ_JPEG_QUALITY)
 
@@ -357,7 +347,7 @@ export default function LabelReader() {
       </div>}
       {camera && <div>
         <div className="label-camera-frame">
-          <video ref={videoRef} className={uprightPhone || portraitCamera ? 'portrait-camera' : undefined} autoPlay muted playsInline onResize={event => setPortraitCamera(event.currentTarget.videoHeight > event.currentTarget.videoWidth)} onLoadedData={event => { setPortraitCamera(event.currentTarget.videoHeight > event.currentTarget.videoWidth); setCameraReady(true) }} aria-label="Câmera da etiqueta" />
+          <video ref={videoRef} autoPlay muted playsInline onLoadedData={() => setCameraReady(true)} aria-label="Câmera da etiqueta" />
           <span>Modo disparo sem pausa: tire a foto e passe para o próximo pacote!</span>
         </div>
         {captureToast && <p className="camera-toast">{captureToast}</p>}

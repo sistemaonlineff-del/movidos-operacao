@@ -261,6 +261,7 @@ const page = await context.newPage()
 page.on('pageerror', error => failures.push(error.message))
 page.setDefaultTimeout(15000)
 try {
+  if (process.env.CAMERA_ONLY !== '1') {
   await page.goto('http://127.0.0.1:5173/financeiro/notas-fiscais')
   await page.getByRole('cell',{name:'DROP TESTE',exact:true}).waitFor()
   await page.getByRole('cell',{name:'Pendente',exact:true}).waitFor()
@@ -1701,9 +1702,13 @@ try {
   }
   console.log('PASS: real mobile viewport and touch keep reader navigation compact in portrait/landscape/tablet, including expanded submenu; camera opens')
   console.log('PASS: dashboard, registrations and financial retain previous desktop-style mobile layout on direct access, after reader navigation, history back/forward and reload')
+  }
   for (const nativeSize of [{width:360,height:640},{width:640,height:360}]) {
     const portraitContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,storageState:await context.storageState()})
     await portraitContext.route('**/*',mockRequests)
+    await portraitContext.addInitScript(({user,jwt})=>{
+      localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token',JSON.stringify({access_token:jwt,refresh_token:'local-only',token_type:'bearer',expires_at:Math.floor(Date.now()/1000)+3600,expires_in:3600,user}))
+    },{user,jwt})
     await portraitContext.addInitScript(({width,height})=>{
       globalThis.orientationLocks=0
       screen.orientation.lock=async()=>{globalThis.orientationLocks++}
@@ -1715,7 +1720,7 @@ try {
       const original=HTMLCanvasElement.prototype.toDataURL
       HTMLCanvasElement.prototype.toDataURL=function(...args){
         if(args[0]==='image/jpeg'){
-          const context=this.getContext('2d');globalThis.rotatedCapture={width:this.width,height:this.height,left:[...context.getImageData(10,this.height/2,1,1).data],right:[...context.getImageData(this.width-10,this.height/2,1,1).data]}
+          const context=this.getContext('2d');globalThis.rotatedCapture={width:this.width,height:this.height,top:[...context.getImageData(this.width/2,10,1,1).data],bottom:[...context.getImageData(this.width/2,this.height-10,1,1).data]}
         }
         return original.apply(this,args)
       }
@@ -1724,19 +1729,18 @@ try {
     await portraitPage.goto('http://127.0.0.1:5173/leitor-etiquetas')
     await portraitPage.getByRole('button',{name:'Abrir leitura contínua sem pausa',exact:true}).click()
     await portraitPage.waitForFunction(height=>document.querySelector('video')?.videoHeight===height,nativeSize.height)
-    await portraitPage.locator('video.portrait-camera').waitFor()
-    assert.match(await portraitPage.locator('video').evaluate(video=>getComputedStyle(video).transform),/matrix\(0, 1, -1, 0,/)
+    assert.equal(await portraitPage.locator('video').evaluate(video=>getComputedStyle(video).transform),'none')
     await portraitPage.getByRole('button',{name:'Capturar pacote #1',exact:true}).click()
     const capture=await portraitPage.evaluate(()=>globalThis.rotatedCapture)
-    assert.equal(capture.width,nativeSize.height);assert.equal(capture.height,Math.round(nativeSize.height*9/16))
+    assert.equal(capture.width,nativeSize.width);assert.equal(capture.height,Math.round(nativeSize.width*9/16))
     assert.equal(await portraitPage.evaluate(()=>globalThis.orientationLocks),0)
-    assert.ok(capture.left.every((channel,index)=>Math.abs(channel-[0,255,0,255][index])<=3),JSON.stringify(capture.left))
-    assert.ok(capture.right.every((channel,index)=>Math.abs(channel-[255,0,0,255][index])<=3),JSON.stringify(capture.right))
+    assert.ok(capture.top.every((channel,index)=>Math.abs(channel-[255,0,0,255][index])<=3),JSON.stringify(capture.top))
+    assert.ok(capture.bottom.every((channel,index)=>Math.abs(channel-[0,255,0,255][index])<=3),JSON.stringify(capture.bottom))
     await portraitPage.screenshot({path:`tmp/browser-tests/camera-upright-native-${nativeSize.width}.png`,fullPage:true})
-    assert.match(await portraitPage.locator('video').evaluate(video=>getComputedStyle(video).transform),/matrix\(0, 1, -1, 0,/)
+    assert.equal(await portraitPage.locator('video').evaluate(video=>getComputedStyle(video).transform),'none')
     await portraitPage.getByRole('button',{name:'Fechar câmera',exact:true}).click()
     await portraitContext.close()
-    console.log(`PASS: upright phone rotates native ${nativeSize.width}x${nativeSize.height} preview and JPEG with matching crop, without locking screen or changing controls`)
+    console.log(`PASS: upright phone keeps native ${nativeSize.width}x${nativeSize.height} scene upright in landscape preview and JPEG, with matching crop and no screen lock`)
   }
   assert.deepEqual(failures, [])
   console.log(`PASS: ${writes.length} simulated writes; no production requests were allowed`)

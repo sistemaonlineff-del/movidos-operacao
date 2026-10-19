@@ -1,5 +1,18 @@
 # Migração do Access para Supabase
 
+## View incorreta de setembro (19/10/2026)
+
+Não instalar novamente migrações antigas. A câmera não exige SQL. Para retirar a **35. 2Q DE SETEMBRO** incorreta, preservando **35. 1Q DE SETEMBRO** e **36. 2Q DE SETEMBRO**:
+
+1. Fazer backup e executar somente a consulta [maintenance/inspect_september_views.sql](maintenance/inspect_september_views.sql) no SQL Editor. Conferir ID, título, situação, parceiros, empresas e períodos vinculados. Se o nome real for diferente ou houver ambiguidade, interromper e revisar; não escolher por aproximação.
+2. Preferencialmente, no app, selecionar a View errada e usar **Excluir view**, informando o motivo. O app aplica a exclusão auditada com a identidade do usuário autorizado.
+3. Como alternativa administrativa, revisar [maintenance/exclude_wrong_september_view.sql](maintenance/exclude_wrong_september_view.sql) e substituir somente `target_id uuid := null;` pelo UUID conferido entre aspas. Executar o arquivo completo em sessão administrativa do SQL Editor. Sem UUID, com outro título ou com períodos de outro nome, o script aborta. Mantém o ator nulo, com indicação explícita de execução administrativa na auditoria; não simula usuário nem altera permissões.
+4. Executar a consulta novamente: a View errada deve retornar `is_active = false`; conferir as corretas sem alterações. Atualizar as telas do aplicativo para remover dados já carregados.
+
+É exclusão **do uso do sistema**, não `DELETE` físico: a View e seus períodos, itens, pagamentos e extravios vinculados ficam inativos em uma transação e saem das consultas/cálculos padrão. Documentos, arquivos de NF, e-mails e auditoria são preservados. Registros sem vínculo com essa View não são alterados. O script não é migração automática, não foi executado na produção e não deve ser incluído em execução automática de migrações.
+
+Reimportação de rotas compara rua/bairro/cidade/zona/rota, não CEP isolado: identidade já existente não é inserida outra vez; CEP vazio pode ser preenchido após confirmação. Não é sincronização/substituição integral: mudar um componente da identidade pode criar outra linha; CEP já preenchido não é atualizado automaticamente. No financeiro, novas Views com período/parceiro/empresa já ativos são bloqueadas; isso não limpa duplicidades históricas.
+
 ## Cópia histórica do cadastro (14/10/2026)
 
 Aplicar [migrations/20261014120000_financial_registration_snapshots.sql](migrations/20261014120000_financial_registration_snapshots.sql) no SQL Editor após revisão e antes de publicar frontend/API. Adiciona somente `financial_drop_items.registration_snapshot` (JSONB nullable) e recarrega o schema. É repetível; não preenche dados antigos nem altera valores, cadastros, políticas ou permissões. Não reaplicar schema/importações/backfills antigos.
