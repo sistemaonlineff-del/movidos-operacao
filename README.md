@@ -2,6 +2,10 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Download de contratos (19/10/2026)
+
+O gerador de contrato/distrato passa a ser carregado com a aplicacao, sem importacao dinamica no clique que poderia solicitar um chunk antigo apos um deploy. Isso aumenta o pacote inicial; nao altera modelos, datas ou permissoes. Inicio/fim da operacao continuam opcionais e independentes da data do contrato/distrato. A data do proprio documento continua exigida. Sem SQL adicional. Apos publicar, salvar o cadastro antes de atualizar abas antigas. O teste CONTRACT_ONLY=1 npm run test:browser baixa ambos os PDFs com datas operacionais vazias, banco simulado e nenhuma gravacao. Nao garante funcionamento offline nem corrige outras falhas de rede ou modulos de outras telas.
+
 ## Importacao de trechos por CEP (19/10/2026)
 
 Corrige o bloqueio da planilha de Varzea Paulista: mesma rua/bairro/cidade/zona pode ter varios CEPs legitimos. A reimportacao reconhece cada trecho pelo CEP e atualiza a rota existente, sem usar o nome do motorista como identidade do endereco. A coluna MOTORISTA e aceita como alternativa a ROTA (ROTA tem prioridade). Colunas ocultas sao lidas normalmente; nao remover CIDADE ou ZONA so por estarem ocultas. CEP preenchido nunca e substituido: CEP diferente representa outro trecho. CEP vazio so e completado se houver correspondencia unica; ambiguidades e rotas conflitantes para o mesmo trecho bloqueiam antes das gravacoes. Comparacao de atualizacao da rota inclui o CEP original para nao sobrescrever mudancas concorrentes.

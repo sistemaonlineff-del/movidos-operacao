@@ -13,6 +13,7 @@ import DashboardNotes from "./DashboardNotes";
 import DropPhotos from "./DropPhotos";
 import DropDocuments from "./DropDocuments";
 import MunicipalityInput from "./MunicipalityInput";
+import { downloadContractPdf } from "./contractPdf";
 const Financeiro = lazy(() => import("./Financeiro"));
 const FinancialInvoices = lazy(() => import("./FinancialInvoices"));
 const InvoiceUpload = lazy(() => import("./FinancialInvoices").then(module => ({ default: module.InvoiceUpload })));
@@ -553,7 +554,6 @@ function ContractButtons({ drop }: { drop: Drop | null }) {
         .replace(/[^a-z0-9]+/gi, "-")
         .replace(/(^-|-$)/g, "")
         .toLowerCase();
-      const { downloadContractPdf } = await import("./contractPdf");
       await downloadContractPdf(
         template,
         data,
