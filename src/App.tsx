@@ -657,6 +657,7 @@ function Cadastro() {
   const save = async (e: FormEvent) => {
     e.preventDefault();
     if (!supabase || savingRef.current) return;
+    const targetId = editId || record?.id;
     const stay = (e.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "stay";
     setMessage(""); setSaveError(true);
     if (!values.name.trim()) {
@@ -719,11 +720,11 @@ function Cadastro() {
           payload.deactivated_by = null;
         }
       }
-      const result = editId
+      const result = targetId
         ? await supabase
             .from("drops")
             .update(payload)
-            .eq("id", editId)
+            .eq("id", targetId)
             .select()
             .single()
         : await supabase.from("drops").insert(payload).select().single();
