@@ -40,6 +40,7 @@ export default function LabelReader() {
   const [camera, setCamera] = useState(false)
   const [cameraReady, setCameraReady] = useState(false)
   const [portraitCamera, setPortraitCamera] = useState(false)
+  const [uprightPhone, setUprightPhone] = useState(() => navigator.maxTouchPoints > 0 && matchMedia('(orientation: portrait)').matches)
   const [cameraStarting, setCameraStarting] = useState(false)
   const [extraction, setExtraction] = useState<LabelExtraction | null>(null)
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
@@ -59,6 +60,13 @@ export default function LabelReader() {
   const matches = useMemo(() => findLabelMatches(query, base?.records ?? []), [query, base])
   const primaryMatch = matches.length === 1 ? matches[0] : null
   const ceps = postalCodes(query)
+
+  useEffect(() => {
+    const orientation = matchMedia('(orientation: portrait)')
+    const update = () => setUprightPhone(navigator.maxTouchPoints > 0 && orientation.matches)
+    orientation.addEventListener('change', update)
+    return () => orientation.removeEventListener('change', update)
+  }, [])
 
   useEffect(() => {
     alive.current = true
@@ -186,14 +194,12 @@ export default function LabelReader() {
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach(track => track.stop())
-    try { (screen.orientation as any)?.unlock?.() } catch { /* navegador sem controle de orientação */ }
     streamRef.current = null; setCamera(false); setCameraReady(false)
   }
   const startCamera = async () => {
     setError(''); setCameraStarting(true)
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Câmera indisponível neste navegador. Envie uma foto para continuar.')
-      try { void (screen.orientation as any)?.lock?.('landscape')?.catch?.(() => {}) } catch { /* em alguns celulares basta girar o aparelho */ }
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { ideal: 16 / 9 } }, audio: false })
       if (!alive.current) { stream.getTracks().forEach(track => track.stop()); return }
       streamRef.current = stream; setCamera(true)
@@ -289,13 +295,15 @@ export default function LabelReader() {
     const video = videoRef.current
     if (!video?.videoWidth || cameraItems.filter(item => item.status === 'na_fila' || item.status === 'lendo').length >= 20) return
     const canvas = document.createElement('canvas')
-    const scale = Math.min(1, READ_MAX_EDGE / Math.max(video.videoWidth, video.videoHeight))
-    const portrait = video.videoHeight > video.videoWidth
-    const width = Math.round(video.videoWidth * scale), height = Math.round(video.videoHeight * scale)
+    const portrait = uprightPhone || video.videoHeight > video.videoWidth
+    const sourceWidth = portrait ? Math.min(video.videoWidth, video.videoHeight * 9 / 16) : video.videoWidth
+    const sourceHeight = portrait ? Math.min(video.videoHeight, video.videoWidth * 16 / 9) : video.videoHeight
+    const scale = Math.min(1, READ_MAX_EDGE / Math.max(sourceWidth, sourceHeight))
+    const width = Math.round(sourceWidth * scale), height = Math.round(sourceHeight * scale)
     canvas.width = portrait ? height : width; canvas.height = portrait ? width : height
     const context = canvas.getContext('2d')!
     if (portrait) { context.translate(canvas.width, 0); context.rotate(Math.PI / 2) }
-    context.drawImage(video, 0, 0, width, height)
+    context.drawImage(video, (video.videoWidth - sourceWidth) / 2, (video.videoHeight - sourceHeight) / 2, sourceWidth, sourceHeight, 0, 0, width, height)
     const data = canvas.toDataURL('image/jpeg', READ_JPEG_QUALITY)
 
     const num = ++captureNumber.current
@@ -349,7 +357,7 @@ export default function LabelReader() {
       </div>}
       {camera && <div>
         <div className="label-camera-frame">
-          <video ref={videoRef} className={portraitCamera ? 'portrait-camera' : undefined} autoPlay muted playsInline onResize={event => setPortraitCamera(event.currentTarget.videoHeight > event.currentTarget.videoWidth)} onLoadedData={event => { setPortraitCamera(event.currentTarget.videoHeight > event.currentTarget.videoWidth); setCameraReady(true) }} aria-label="Câmera da etiqueta" />
+          <video ref={videoRef} className={uprightPhone || portraitCamera ? 'portrait-camera' : undefined} autoPlay muted playsInline onResize={event => setPortraitCamera(event.currentTarget.videoHeight > event.currentTarget.videoWidth)} onLoadedData={event => { setPortraitCamera(event.currentTarget.videoHeight > event.currentTarget.videoWidth); setCameraReady(true) }} aria-label="Câmera da etiqueta" />
           <span>Modo disparo sem pausa: tire a foto e passe para o próximo pacote!</span>
         </div>
         {captureToast && <p className="camera-toast">{captureToast}</p>}
