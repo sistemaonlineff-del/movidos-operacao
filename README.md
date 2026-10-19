@@ -4,6 +4,8 @@ Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e S
 
 ## Ajustes solicitados em 18/10/2026
 
+Correção adicional da câmera: com celular de toque em pé, a imagem ao vivo e a captura giram 90 graus mesmo quando o navegador entrega um vídeo nativo horizontal. A tela do aparelho não é bloqueada em paisagem. Visor e JPEG usam o mesmo recorte central 16:9, sem deformar a imagem; parte das bordas pode ficar fora do enquadramento. Controles, fila e demais telas não mudam. Testes simulam ambas as dimensões nativas, verificam pixels e ausência de bloqueio de orientação; ainda requer conferência no aparelho real.
+
 - Mapa: busca por palavras combinadas em nome do DROP, responsável, endereço, número, complemento, bairro, CEP, cidade, estado, status e parceiro, sem diferenciar acentos/caixa. Mantém os filtros de cidade/status/situação; **Limpar mapa** limpa também a busca. Marcadores e legenda de ativos agora são amarelos, sem alterar cores de status nas outras telas.
 - Câmera: somente a imagem vertical da câmera e a foto capturada são giradas para paisagem. Imagem já horizontal, botões, fila, três leituras simultâneas e layout não mudam. A rotação de tela quando suportada continua existente. Teste local com vídeo vertical e cores conhecidas verifica dimensões, orientação do preview e pixels da captura; homologar no aparelho real, especialmente Safari.
 - Contratos/distratos: corpo justificado, última linha à esquerda, títulos/alinhamento de cabeçalhos preservados. Quebra de página, margens e rodapé continuam. A justificação foi medida no PDF extraído, não apenas na opção da biblioteca. Não reescreve PDFs antigos nem modelos armazenados.
