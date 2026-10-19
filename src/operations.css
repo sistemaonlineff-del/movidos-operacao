@@ -15,6 +15,9 @@
 .map-legend small { color: #78868b; font-weight: 600; }
 .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .status-active { background: #008b89; }
+.map-legend .status-active { background: #d4a900; }
+.map-search { display: grid; gap: .4rem; margin: .8rem 0; font-size: .85rem; font-weight: 700; }
+.map-search input { width: 100%; min-width: 0; }
 .status-progress { background: #237be7; }
 .status-frozen { background: #7556c7; }
 .status-problem { background: #d94b44; }

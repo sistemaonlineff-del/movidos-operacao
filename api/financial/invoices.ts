@@ -1,13 +1,86 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
-import { financialPartner } from '../../src/financialData.js'
+import { buildDetails, financialPartner, key } from '../../src/financialData.js'
+import { PARTNERS } from '../../src/dropOptions.js'
 
 const bucket = 'financial-invoices'
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 class InvoiceError extends Error { constructor(public status: number, message: string) { super(message) } }
+
+export function intakeFields(input: Record<string, unknown>) {
+  const fields = { drop_name: String(input.dropName ?? '').trim(), responsible: String(input.responsible ?? '').trim(), period_label: String(input.period ?? '').trim(), partner: String(input.partner ?? ''), reference_cnpj: String(input.referenceCnpj ?? '') }
+  if (!fields.drop_name || fields.drop_name.length > 160 || !fields.responsible || fields.responsible.length > 160 || !fields.period_label || fields.period_label.length > 120 || !PARTNERS.includes(fields.partner) || !['MOVIDOS','BELLY','JOTA EXPRESS'].includes(fields.reference_cnpj)) throw new InvoiceError(400, 'Preencha DROP, responsável, período, parceiro e empresa válidos.')
+  return fields
+}
+
+async function sharedIntake(admin: SupabaseClient, req: VercelRequest, serviceKey: string) {
+  const input = req.body ?? {}
+  if (!uuid.test(input.clientUploadId ?? '')) throw new InvoiceError(400, 'Identificador de envio inválido.')
+  const fields = intakeFields(input)
+  const file = invoiceFile(input)
+  const ip = String(req.headers['x-vercel-forwarded-for'] ?? req.headers['x-forwarded-for'] ?? 'unknown').split(',')[0].trim()
+  const bucketKey = createHmac('sha256', serviceKey).update(`${new Date().toISOString().slice(0,10)}|${ip}`).digest('hex')
+  const admitted = await admin.rpc('reserve_invoice_intake', { bucket_key: bucketKey })
+  if (admitted.error) throw new InvoiceError(503, 'Recebimento indisponível. Consulte o financeiro.')
+  if (admitted.data !== true) throw new InvoiceError(429, 'Limite de envios atingido. Consulte o financeiro.')
+  const submissionKey = hash(JSON.stringify([key(fields.drop_name), key(fields.responsible), key(fields.period_label), fields.partner, fields.reference_cnpj, file.digest]))
+  const previous = await admin.from('financial_invoice_intake').select('*').eq('submission_key', submissionKey).maybeSingle()
+  if (previous.error) throw new InvoiceError(503, 'Não foi possível conferir o envio.')
+  let record = previous.data
+  if (record?.status === 'pending' || record?.status === 'approved') return { status: 'pending', protocol: record.id }
+  if (!record) {
+    const id = input.clientUploadId
+    const reserved = await admin.from('financial_invoice_intake').insert({ id, submission_key: submissionKey, ...fields, file_name: file.filename, storage_path: `intake/${id}/${randomUUID()}.${file.extension}`, content_hash: file.digest, size_bytes: file.content.length, content_type: file.type, status: 'uploading' }).select('*').single()
+    if (reserved.error || !reserved.data) throw new InvoiceError(409, 'Envio já iniciado ou não confirmado. Confira com o financeiro antes de repetir.')
+    record = reserved.data
+  }
+  const stored = await admin.storage.from(bucket).upload(record.storage_path, file.content, { contentType: file.type, upsert: false })
+  if (stored.error) {
+    const existing = await admin.storage.from(bucket).download(record.storage_path)
+    if (existing.error || !existing.data || hash(Buffer.from(await existing.data.arrayBuffer())) !== file.digest) throw new InvoiceError(503, 'Armazenamento sem confirmação. Guarde o protocolo e consulte o financeiro.')
+  }
+  const finished = await admin.from('financial_invoice_intake').update({ status: 'pending' }).eq('id', record.id).eq('status', 'uploading').select('id').maybeSingle()
+  if (finished.error || !finished.data) throw new InvoiceError(503, 'Arquivo sem confirmação. Guarde o protocolo e consulte o financeiro.')
+  return { status: 'pending', protocol: record.id }
+}
+
+async function intakeReview(admin: SupabaseClient, input: Record<string, any>, userId: string) {
+  if (!uuid.test(input.intakeId ?? '')) throw new InvoiceError(400, 'Envio inválido.')
+  const stored = await admin.from('financial_invoice_intake').select('*').eq('id', input.intakeId).maybeSingle()
+  if (stored.error || !stored.data) throw new InvoiceError(404, 'Envio não encontrado.')
+  const record = stored.data
+  if (input.mode === 'intake-download') {
+    const signed = await admin.storage.from(bucket).createSignedUrl(record.storage_path, 60, { download: record.file_name })
+    if (signed.error || !signed.data?.signedUrl) throw new InvoiceError(503, 'Não foi possível baixar o arquivo.')
+    return { url: signed.data.signedUrl }
+  }
+  if (record.status === 'approved') throw new InvoiceError(409, 'Este envio já foi vinculado. Atualize a tela.')
+  if (!uuid.test(input.periodId ?? '') || !uuid.test(input.dropId ?? '')) throw new InvoiceError(400, 'Selecione o pagamento do fechamento.')
+  const period = await activePeriod(admin, input.periodId)
+  const sources: Record<string, any[]> = {}
+  for (const table of ['financial_drop_items','financial_payment_history']) {
+    const rows: any[] = []
+    for (let offset=0;;offset+=1000) {
+      const result=await admin.from(table).select('*').eq('financial_period_id',period.id).eq('is_active',true).order('id').range(offset,offset+999)
+      if(result.error)throw new InvoiceError(503,'Não foi possível conferir os pagamentos.')
+      rows.push(...result.data);if(result.data.length<1000)break
+    }
+    sources[table]=rows
+  }
+  const details=buildDetails(sources.financial_payment_history,sources.financial_drop_items,[],[period])
+  const matches=details.filter(row=>row.dropId===input.dropId&&row.referenceCnpj===(period.reference_cnpj||'MOVIDOS'))
+  if(!matches.length)throw new InvoiceError(400,'O cadastro não está vinculado a este fechamento. Revise o financeiro.')
+  const file=await admin.storage.from(bucket).download(record.storage_path)
+  if(file.error||!file.data)throw new InvoiceError(409,'Arquivo não localizado; recebimento não confirmado.')
+  const content=Buffer.from(await file.data.arrayBuffer())
+  if(content.length!==record.size_bytes||hash(content)!==record.content_hash)throw new InvoiceError(409,'Arquivo divergente; recebimento não confirmado.')
+  const result=await admin.from('financial_invoice_intake').update({status:'approved',financial_period_id:period.id,drop_id:input.dropId,reviewed_by:userId,reviewed_at:new Date().toISOString()}).eq('id',record.id).eq('status',record.status).select('id').maybeSingle()
+  if(result.error||!result.data)throw new InvoiceError(409,'O envio mudou. Atualize antes de conferir novamente.')
+  return {status:'approved'}
+}
 
 export function invoiceFile(input: Record<string, unknown>) {
   if (typeof input.content !== 'string' || input.content.length > 4194304 || !/^[A-Za-z0-9+/]+={0,2}$/.test(input.content)) throw new InvoiceError(400, 'Envie PDF ou XML de até 3 MB.')
@@ -72,6 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const url = process.env.SUPABASE_URL, serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (!url || !serviceKey) throw new InvoiceError(503, 'Serviço de notas fiscais não configurado.')
     const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } })
+    if (req.method === 'POST' && req.body?.mode === 'submit-public') return res.status(200).json(await sharedIntake(admin, req, serviceKey))
     const token = req.headers['x-invoice-token']
     if (typeof token === 'string') {
       const request = await publicRequest(admin, token)
@@ -110,7 +184,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ status: 'received', duplicate: false })
     }
     const input = req.body ?? {}
-    const userId = await authorize(admin, req, req.method === 'POST' && input.mode !== 'download')
+    const userId = await authorize(admin, req, req.method === 'POST' && !['download','intake-download'].includes(input.mode))
+    if (req.method === 'POST' && ['intake-download','intake-approve'].includes(input.mode)) return res.status(200).json(await intakeReview(admin,input,userId))
     if (req.method === 'GET') {
       const rows: unknown[] = []
       for (let offset = 0; ; offset += 1000) {
@@ -118,7 +193,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (result.error) throw new InvoiceError(503, 'A estrutura de notas fiscais está indisponível. Confira a migração no Supabase.')
         rows.push(...result.data); if (result.data.length < 1000) break
       }
-      return res.status(200).json({ requests: rows })
+      const submissions: unknown[]=[]
+      for(let offset=0;;offset+=1000){
+        const result=await admin.from('financial_invoice_intake').select('id,drop_name,responsible,period_label,partner,reference_cnpj,file_name,status,financial_period_id,drop_id,created_at').order('created_at',{ascending:false}).range(offset,offset+999)
+        if(result.error)throw new InvoiceError(503,'Confira a migração 20261018120000_shared_invoice_intake.sql no Supabase.')
+        submissions.push(...result.data);if(result.data.length<1000)break
+      }
+      return res.status(200).json({ requests: rows, submissions })
     }
     if (input.mode === 'create') {
       if (!uuid.test(input.dropId ?? '') || !uuid.test(input.periodId ?? '')) throw new InvoiceError(400, 'DROP ou período inválido.')

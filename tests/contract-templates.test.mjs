@@ -27,6 +27,11 @@ test('contract PDF splits long paragraphs within A4 margins and numbers every pa
       }
     }
     assert.ok(fullText.includes('palavra1799'));assert.ok(fullText.includes('FINAL DO DOCUMENTO'))
+    const firstPage = await pdf.getPage(1), content = await firstPage.getTextContent()
+    const body = content.items.filter(item => /palavra\d/.test(item.str))
+    const baseline = body[0].transform[5]
+    const firstLine = body.filter(item => Math.abs(item.transform[5] - baseline) < .1)
+    assert.ok(Math.abs(Math.max(...firstLine.map(item => item.transform[4] + item.width)) - 184 * 72 / 25.4) < 2, 'Body lines must reach the justified right margin')
   }finally{await loading.destroy()}
 })
 

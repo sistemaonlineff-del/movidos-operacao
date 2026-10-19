@@ -13,6 +13,17 @@ const { createClosingTemplate, readClosingSummary, readHistoricalPayments } = aw
 const { readCnabSpreadsheet } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/spreadsheet.mjs`).href)
 const { buildDetails, buildTotals, closingRegistration, closingOperators, closingWindow, allocateClosingPackages, paymentTotalTarget, lossClass, lossesFor, number, splitLosses, lossEditorValues, lossEventPayload, lossBatchPayloads } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/data.mjs`).href)
 const { createCnabInter, pixKeyType, prepareCnabPayments } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/cnab.mjs`).href)
+await build({ entryPoints: ['src/routeImport.ts'], outfile: 'tmp/financial-tests/routes.mjs', bundle: true, platform: 'node', format: 'esm' })
+const { routeImportPlan } = await import(pathToFileURL(`${process.cwd()}/tmp/financial-tests/routes.mjs`).href)
+test('route reimport fills only blank CEPs and preserves different streets with the same CEP', () => {
+  const first = { id: 'one', street: 'Rua Um', neighborhood: 'Centro', city: 'Suzano', zone: 'Leste', route: '1', postal_code: null }
+  const second = { ...first, id: 'two', street: 'Rua Dois', postal_code: '12345-000' }
+  const plan = routeImportPlan([first, second], [{ ...first, postal_code: '12345-000' }, { ...second, postal_code: '99999-000' }, { ...first, id: undefined, street: 'Rua Três', postal_code: '12345-000' }])
+  assert.deepEqual(plan.fills, [{ id: 'one', previous: null, postal_code: '12345-000' }])
+  assert.equal(plan.inserts.length, 1); assert.equal(plan.skipped, 1)
+  assert.throws(() => routeImportPlan([first], [{ ...first, postal_code: '12345-000' }, { ...first, postal_code: '99999-000' }]), /CEPs diferentes/)
+  assert.equal(first.postal_code, null); assert.equal(second.postal_code, '12345-000')
+})
 const periods = [{ id: 'p1', label: '33. 1Q DE AGOSTO', partner: 'IMILE DELIVERY BRAZIL LTDA', financial_view_id: 'v1', net_amount: null }, { id: 'p2', label: '33. 1Q DE AGOSTO', partner: 'J&T EXPRESS LTDA', financial_view_id: 'v1', net_amount: null }]
 const item = { id: 'i1', financial_period_id: 'p1', drop_name_snapshot: 'VNM', quantity_packages: 2168, unit_value: .13, reimbursement: 0 }
 const loss = (id, status, amount, period = 'p1') => ({ id, financial_period_id: period, period_label: periods[0].label, drop_name_snapshot: 'VNM', status, amount })

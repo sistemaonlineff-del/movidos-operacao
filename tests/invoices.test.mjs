@@ -9,6 +9,57 @@ const module=await import(pathToFileURL(`${process.cwd()}/tmp/invoice-tests/api.
 const handler=module.default.default??module.default
 const {invoiceFile}=module
 const pdf=Buffer.from('%PDF-1.7\nTest invoice\n%%EOF').toString('base64')
+test('shared invoice link receives privately, limits uploads and requires authorized review against saved closing',async()=>{
+  const originalEnv={...process.env},originalFetch=globalThis.fetch
+  const periodId='22222222-2222-4222-8222-222222222222',dropId='33333333-3333-4333-8333-333333333333',intakeId='55555555-5555-4555-8555-555555555555'
+  let intake=null,storageWrites=0,admitted=true,role='admin',membership=true,stored=true
+  const invoke=async(body,auth=false,method='POST')=>{
+    let result
+    const response={setHeader(){},status(status){this.code=status;return this},json(value){result={status:this.code,body:value};return this}}
+    await handler({method,headers:auth?{authorization:'Bearer test-only'}:{},body},response)
+    return result
+  }
+  try{
+    Object.assign(process.env,{SUPABASE_URL:'https://shared-test.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'test-only'})
+    globalThis.fetch=async(input,init)=>{
+      const url=new URL(typeof input==='string'?input:input.url??String(input))
+      assert.equal(url.hostname,'shared-test.supabase.co')
+      if(url.pathname.endsWith('/rpc/reserve_invoice_intake')){assert.match(JSON.parse(init.body).bucket_key,/^[a-f0-9]{64}$/);return Response.json(admitted)}
+      if(url.pathname==='/auth/v1/user')return Response.json({id:'11111111-1111-4111-8111-111111111111'})
+      if(url.pathname.endsWith('/user_profiles'))return Response.json([{role,is_active:true}])
+      if(url.pathname.endsWith('/user_module_permissions'))return Response.json([{financeiro_view:true,financeiro_manage:false}])
+      if(url.pathname.endsWith('/financial_periods'))return Response.json([{id:periodId,label:'35. 1Q',partner:'IMILE DELIVERY BRAZIL LTDA',reference_cnpj:'MOVIDOS',is_active:true}])
+      if(url.pathname.endsWith('/financial_payment_history'))return Response.json([])
+      if(url.pathname.endsWith('/financial_drop_items'))return Response.json(membership?[{id:'saved',financial_period_id:periodId,drop_name_snapshot:'DROP',registration_snapshot:{version:1,dropId,responsible:'Davi'},is_active:true}]:[])
+      if(url.pathname.includes('/storage/v1/object/financial-invoices/')){
+        if(init?.method==='POST'){storageWrites++;return Response.json({Key:'private'})}
+        return stored?new Response(Buffer.from(pdf,'base64')):Response.json({message:'missing'},{status:404})
+      }
+      assert.ok(url.pathname.endsWith('/financial_invoice_intake'),url.pathname)
+      if(init?.method==='POST'){intake=JSON.parse(init.body);return Response.json(intake)}
+      if(init?.method==='PATCH'){Object.assign(intake,JSON.parse(init.body));return Response.json(intake)}
+      return Response.json(intake?[intake]:[])
+    }
+    assert.equal((await invoke(undefined,false,'GET')).status,401)
+    const payload={mode:'submit-public',clientUploadId:intakeId,dropName:'DROP',responsible:'Davi',period:'35. 1Q',partner:'IMILE DELIVERY BRAZIL LTDA',referenceCnpj:'MOVIDOS',fileName:'NF.pdf',content:pdf}
+    assert.equal((await invoke({...payload,responsible:''})).status,400)
+    admitted=false;assert.equal((await invoke(payload)).status,429);assert.equal(storageWrites,0)
+    admitted=true
+    const received=await invoke(payload)
+    assert.deepEqual(received,{status:200,body:{status:'pending',protocol:intakeId}})
+    assert.equal(intake.status,'pending');assert.equal(storageWrites,1)
+    assert.equal(received.body.storage_path,undefined);assert.equal(received.body.drop_name,undefined)
+    assert.equal((await invoke({...payload,clientUploadId:'66666666-6666-4666-8666-666666666666'})).body.protocol,intakeId);assert.equal(storageWrites,1)
+    const approval={mode:'intake-approve',intakeId,periodId,dropId}
+    assert.equal((await invoke(approval)).status,401)
+    role='operador';assert.equal((await invoke(approval,true)).status,403)
+    role='admin';membership=false;assert.equal((await invoke(approval,true)).status,400)
+    membership=true;stored=false;assert.equal((await invoke(approval,true)).status,409)
+    stored=true;assert.equal((await invoke(approval,true)).status,200)
+    assert.equal(intake.status,'approved');assert.equal(intake.drop_id,dropId);assert.equal(intake.financial_period_id,periodId)
+    assert.equal((await invoke(approval,true)).status,409)
+  }finally{globalThis.fetch=originalFetch;for(const name of Object.keys(process.env))if(!(name in originalEnv))delete process.env[name];Object.assign(process.env,originalEnv)}
+})
 test('invoice files validate extension, content, size and prohibit XML entities',()=>{
   assert.equal(invoiceFile({fileName:'NF.pdf',content:pdf}).type,'application/pdf')
   assert.equal(invoiceFile({fileName:'NF.xml',content:Buffer.from('<nfeProc><NFe><infNFe>nota</infNFe></NFe></nfeProc>').toString('base64')}).type,'application/xml')
@@ -39,6 +90,7 @@ test('invoice API binds token to registered closing, blocks viewers and keeps du
       if(url.pathname.endsWith('/drops'))return Response.json([{id:dropId,name:'DROP',partner:dropPartner},...(!url.searchParams.has('id')&&ambiguous?[{id:'other',name:'DROP',partner:dropPartner}]:[])])
       if(url.pathname.endsWith('/financial_drop_items'))return Response.json(member&&(!url.searchParams.has('registration_snapshot')||linkedSnapshot)?[{id:'item'}]:[])
       if(url.pathname.endsWith('/financial_payment_history'))return Response.json([])
+      if(url.pathname.endsWith('/financial_invoice_intake'))return Response.json([])
       if(url.pathname.includes('/storage/v1/object/financial-invoices/')){if(init?.method==='GET')return new Response(Buffer.from(pdf,'base64'));storageWrites++;return Response.json({Key:'stored'})}
       if(url.pathname.endsWith('/financial_invoice_requests')){
         if(init?.method==='POST'){request={id:requestId,...JSON.parse(init.body)};return Response.json({id:requestId})}

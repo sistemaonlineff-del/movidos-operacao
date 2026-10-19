@@ -12,6 +12,7 @@
 
 .camera-toast{background:#176b50;color:#fff;padding:8px 12px;border-radius:6px;margin:8px 0;font-weight:600;font-size:14px;text-align:center;animation:fadeIn 0.2s ease-in-out}
 .camera-batch-section{margin-top:10px}
+.label-camera-frame video.portrait-camera{position:absolute;left:50%;top:50%;width:56.25%;height:177.7778%;max-height:none;transform:translate(-50%,-50%) rotate(90deg);object-fit:contain}
 .camera-batch-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px}
 .camera-batch-header h3{margin:0}
 .camera-batch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}

@@ -30,11 +30,11 @@ export function renderContractPdf(paragraphs: ContractParagraph[]) {
     if(paragraph.pageBreak&&cursor>25){pdf.addPage();cursor=25}
     const following=heading&&paragraphs[index+1]?lineHeight*3+5:0
     if(cursor+Math.min(lines.length,3)*lineHeight+following>bottom){pdf.addPage();cursor=25}
-    const align=paragraph.align??(title?'center':'left')
+    const align=title?(paragraph.align??'center'):heading?(paragraph.align??'left'):'justify'
     lines.forEach((line,lineIndex)=>{
       if(cursor+lineHeight>bottom){pdf.addPage();cursor=25}
       const alignment=align==='justify'&&lineIndex===lines.length-1?'left':align
-      pdf.text(line,alignment==='center'?105:alignment==='right'?188:margin,cursor,{align:alignment,maxWidth:width})
+      pdf.text(alignment==='justify'?[line,'']:line,alignment==='center'?105:alignment==='right'?188:margin,cursor,{align:alignment,maxWidth:width})
       cursor+=title?6.5:lineHeight
     })
     cursor+=heading?5:3

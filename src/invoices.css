@@ -6,7 +6,8 @@
 .invoice-scope dt{font-size:13px;color:#56636b}.invoice-scope dd{margin:4px 0;overflow-wrap:anywhere}
 .invoice-public form{display:grid;gap:16px;margin:28px 0}.invoice-public form button{justify-self:start}
 .invoice-public label,.invoice-filters label,.invoice-link label{display:flex;flex-direction:column;gap:7px;min-width:0}
-.invoice-public input,.invoice-link input,.invoice-filters select{max-width:100%;min-width:0;box-sizing:border-box}
+.invoice-public input,.invoice-public select,.invoice-link input,.invoice-filters select{max-width:100%;min-width:0;box-sizing:border-box}
+.invoice-reconciliation label{display:grid;gap:7px;flex:1 1 420px;min-width:0;max-width:100%}.invoice-reconciliation select{width:100%;min-width:0;max-width:100%;box-sizing:border-box}
 .invoice-public li{padding:9px 0;overflow-wrap:anywhere}.invoice-public li small{display:block;color:#56636b}
 .invoice-management>header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .invoice-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:20px 0}
