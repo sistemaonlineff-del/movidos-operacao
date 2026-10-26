@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "./lib/supabase";
 import { DROP_STATUSES, normalizePartner, normalizeZone, statusTone } from "./dropOptions";
+import { CADASTRO_TEXT_FILTERS, applyCadastroFilters, applyRegistrationKind, createCadastroFilters, type CadastroFilters, type RegistrationKind } from "./cadastrosFilters";
 import { useAccess } from "./access";
 import "./cadastros-lista.css";
 
@@ -20,44 +21,16 @@ type DropRow = {
 };
 const PAGE_SIZE = 50;
 const columns = "id,legacy_id,status,name,partner,responsible,phone,address,zone,is_active,deactivated_reason";
-type Filters = {
-  status: string;
-  partner: string;
-  zone: string;
-  query: string;
-  page: number;
-};
 const requests = new Map<string, Promise<{ rows: DropRow[]; count: number }>>();
 
-function readPage(filters: Filters, kind = "drop_off") {
+function readPage(filters: CadastroFilters, kind: RegistrationKind) {
   const identity = JSON.stringify([kind, filters]);
   const pending = requests.get(identity);
   if (pending) return pending;
   const request = (async () => {
     if (!supabase) throw new Error("Não foi possível conectar ao sistema.");
-    let query = supabase.from("drops").select(columns, { count: "exact" });
-    query = kind === "last_mile" ? query.eq("registration_type", "last_mile") : query.or("registration_type.is.null,registration_type.eq.drop_off");
-    if (filters.status) query = query.eq("status", filters.status);
-    if (filters.partner) query = query.eq("partner", filters.partner);
-    if (filters.zone) query = query.eq("zone", filters.zone);
-    // Quote PostgREST values so punctuation cannot become another filter expression.
-    const term = filters.query
-      .trim()
-      .replace(/[%*]/g, "")
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"');
-    if (term) {
-      const terms = [
-        "name",
-        "partner",
-        "responsible",
-        "address",
-        "municipality",
-        "zone",
-      ].map((field) => `${field}.ilike."*${term}*"`);
-      if (/^\d{1,15}$/.test(term)) terms.push(`legacy_id.eq.${Number(term)}`);
-      query = query.or(terms.join(","));
-    }
+    const query = supabase.from("drops").select(columns, { count: "exact" });
+    applyCadastroFilters(query, filters, kind);
     const { data, count, error } = await query
       .order("legacy_id", { ascending: false, nullsFirst: false })
       .order("id")
@@ -73,35 +46,13 @@ function readPage(filters: Filters, kind = "drop_off") {
     .catch(() => {});
   return request;
 }
-function applyFilters(query: any, filters: Filters) {
-  if (filters.status) query = query.eq("status", filters.status);
-  if (filters.partner) query = query.eq("partner", filters.partner);
-  if (filters.zone) query = query.eq("zone", filters.zone);
-  const term = filters.query
-    .trim()
-    .replace(/[%*]/g, "")
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"');
-  if (term) {
-    const terms = [
-      "name",
-      "partner",
-      "responsible",
-      "address",
-      "municipality",
-      "zone",
-    ].map((field) => `${field}.ilike."*${term}*"`);
-    if (/^\d{1,15}$/.test(term)) terms.push(`legacy_id.eq.${Number(term)}`);
-    query = query.or(terms.join(","));
-  }
-  return query;
-}
-async function readAllForExport(filters: Filters, allStatuses = false) {
+async function readAllForExport(filters: CadastroFilters, kind: RegistrationKind, allStatuses = false) {
   if (!supabase) throw new Error("Não foi possível conectar ao sistema.");
   const result: Record<string, unknown>[] = [];
   for (let from = 0; ; from += 1000) {
     const base = supabase.from("drops").select("*");
-    const query = (allStatuses ? base : applyFilters(base, filters))
+    applyCadastroFilters(base, filters, kind, allStatuses);
+    const query = base
       .order("legacy_id", { ascending: false, nullsFirst: false })
       .order("id")
       .range(from, from + 999);
@@ -111,19 +62,18 @@ async function readAllForExport(filters: Filters, allStatuses = false) {
     if ((data ?? []).length < 1000) return result;
   }
 }
-let optionsRequest:
-  | Promise<{ partners: string[]; zones: string[] }>
-  | undefined;
-function readOptions() {
-  if (optionsRequest) return optionsRequest;
+const optionsRequests = new Map<RegistrationKind, Promise<{ partners: string[]; zones: string[] }>>();
+function readOptions(kind: RegistrationKind) {
+  const pending = optionsRequests.get(kind);
+  if (pending) return pending;
   const request = (async () => {
     if (!supabase) throw new Error("Não foi possível conectar ao sistema.");
     const partners = new Set<string>(),
       zones = new Set<string>();
     for (let from = 0; ; from += 1000) {
-      const { data, error } = await supabase
-        .from("drops")
-        .select("partner,zone")
+      const query = supabase.from("drops").select("partner,zone");
+      applyRegistrationKind(query, kind);
+      const { data, error } = await query
         .order("id")
         .range(from, from + 999);
       if (error) throw error;
@@ -135,27 +85,34 @@ function readOptions() {
     }
     return { partners: [...partners].sort(), zones: [...zones].sort() };
   })();
-  optionsRequest = request;
+  optionsRequests.set(kind, request);
   void request
     .finally(() => {
-      if (optionsRequest === request) optionsRequest = undefined;
+      if (optionsRequests.get(kind) === request) optionsRequests.delete(kind);
     })
     .catch(() => {});
   return request;
 }
 
-export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off" | "last_mile" }) {
+export default function CadastrosLista({ kind = "drop_off" }: { kind?: RegistrationKind }) {
   const navigate = useNavigate();
   const { can } = useAccess();
-  const [filters, setFilters] = useState<Filters>({
-    status: "ATIVO",
-    partner: "",
-    zone: "",
-    query: "",
-    page: 0,
-  });
-  const [search, setSearch] = useState(""),
-    [refresh, setRefresh] = useState(0);
+  useLayoutEffect(() => {
+    const existing = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+    const viewport = existing ?? document.createElement("meta");
+    const previousContent = viewport.getAttribute("content");
+    viewport.name = "viewport";
+    viewport.content = "width=device-width, initial-scale=1";
+    if (!existing) document.head.appendChild(viewport);
+    return () => {
+      if (!existing) viewport.remove();
+      else if (previousContent === null) viewport.removeAttribute("content");
+      else viewport.content = previousContent;
+    };
+  }, []);
+  const [filters, setFilters] = useState(createCadastroFilters);
+  const [draft, setDraft] = useState(createCadastroFilters);
+  const [refresh, setRefresh] = useState(0);
   const [rows, setRows] = useState<DropRow[]>([]),
     [count, setCount] = useState(0),
     [loading, setLoading] = useState(true),
@@ -170,14 +127,14 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
     const timeout = setTimeout(
       () =>
         setFilters((current) =>
-          current.query === search
+          Object.keys(draft).every((field) => field === "page" || current[field as keyof CadastroFilters] === draft[field as keyof CadastroFilters])
             ? current
-            : { ...current, query: search, page: 0 },
+            : { ...draft, page: 0 },
         ),
       250,
     );
     return () => clearTimeout(timeout);
-  }, [search]);
+  }, [draft]);
   useEffect(() => {
     let current = true;
     setLoading(true);
@@ -208,7 +165,8 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
   useEffect(() => {
     let current = true;
     setOptionsError("");
-    readOptions()
+    setOptions({ partners: [], zones: [] });
+    readOptions(kind)
       .then((value) => {
         if (current) setOptions(value);
       })
@@ -221,9 +179,9 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
     return () => {
       current = false;
     };
-  }, [refresh]);
-  const change = (field: "status" | "partner" | "zone", value: string) =>
-    setFilters((current) => ({ ...current, [field]: value, page: 0 }));
+  }, [refresh, kind]);
+  const change = (field: Exclude<keyof CadastroFilters, "page">, value: string) =>
+    setDraft((current) => ({ ...current, [field]: value, page: 0 }));
   const deactivate = async (drop: DropRow) => {
     if (!supabase) return;
     const reason = window.prompt(`Informe obrigatoriamente o motivo para desativar ${drop.name}:`)?.trim();
@@ -241,7 +199,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
     setExporting(true);
     setError("");
     try {
-      const all = await readAllForExport(filters, allStatuses);
+      const all = await readAllForExport(filters, kind, allStatuses);
       const rows = all.map((drop) => ({
         ID: drop.legacy_id ?? "",
         Status: drop.status ?? "",
@@ -297,9 +255,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
       await (
         await import("./excelDownload")
       ).downloadExcel(
-        allStatuses
-          ? "todos-cadastros-movidos.xlsx"
-          : "cadastros-filtrados-movidos.xlsx",
+        `cadastros-${kind === "last_mile" ? "last-mile" : "drop"}-filtrados${allStatuses ? "-todos-status" : ""}.xlsx`,
         "Cadastros",
         rows,
       );
@@ -312,6 +268,9 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
     }
   };
   const pages = Math.max(1, Math.ceil(count / PAGE_SIZE));
+  const filtersPending = Object.keys(draft).some((field) => field !== "page" && draft[field as keyof CadastroFilters] !== filters[field as keyof CadastroFilters]);
+  const busy = loading || filtersPending;
+  const kindLabel = kind === "last_mile" ? "Last Mile" : "DROP";
   return (
     <div className="cadastros-list-page">
       <section className="card filter-card">
@@ -323,35 +282,34 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
           <button
             className="secondary"
             onClick={() => {
-              setSearch("");
-              setFilters({
-                status: "",
-                partner: "",
-                zone: "",
-                query: "",
-                page: 0,
-              });
+              const cleared = createCadastroFilters("");
+              setDraft(cleared);
+              setFilters(cleared);
             }}
           >
             Limpar filtros
           </button>
         </div>
-        <div className="filter-grid">
-          <label>
+        <div className="filter-grid cadastro-filter-grid">
+          <label className="cadastro-general-search">
             Busca
             <input
               autoFocus
               aria-label="Busca"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              value={draft.query}
+              onChange={(event) => change("query", event.target.value)}
               placeholder="ID, DROP, responsável ou zona…"
             />
+          </label>
+          <label>
+            ID
+            <input aria-label="ID" inputMode="numeric" value={draft.legacy_id} onChange={(event) => change("legacy_id", event.target.value)} />
           </label>
           <label>
             Status
             <select
               aria-label="Status"
-              value={filters.status}
+              value={draft.status}
               onChange={(event) => change("status", event.target.value)}
             >
               <option value="">Todos</option>
@@ -364,7 +322,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
             Parceiro
             <select
               aria-label="Parceiro"
-              value={filters.partner}
+              value={draft.partner}
               onChange={(event) => change("partner", event.target.value)}
             >
               <option value="">Todos</option>
@@ -373,11 +331,23 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
               ))}
             </select>
           </label>
+          {CADASTRO_TEXT_FILTERS.map((entry) => (
+            <label key={entry.field}>
+              {entry.label}
+              <input
+                aria-label={entry.label}
+                inputMode={"numeric" in entry ? "numeric" : "text"}
+                maxLength={entry.field === "state" ? 2 : undefined}
+                value={draft[entry.field]}
+                onChange={(event) => change(entry.field, entry.field === "state" ? event.target.value.toUpperCase() : event.target.value)}
+              />
+            </label>
+          ))}
           <label>
             Zona
             <select
               aria-label="Zona"
-              value={filters.zone}
+              value={draft.zone}
               onChange={(event) => change("zone", event.target.value)}
             >
               <option value="">Todas</option>
@@ -395,7 +365,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
       )}
       <section className="toolbar">
         <p className="result-count" role="status">
-          {loading
+          {busy
             ? "Carregando…"
             : error
               ? "Não foi possível atualizar a lista."
@@ -404,21 +374,21 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
         <div>
           <button
             className="secondary"
-            disabled={loading || exporting}
+            disabled={busy || exporting}
             onClick={() => void exportRows()}
           >
-            {exporting ? "Gerando Excel…" : "Baixar filtrados"}
+            {exporting ? "Gerando Excel…" : `Baixar ${kindLabel} filtrados`}
           </button>
           <button
             className="secondary"
-            disabled={loading || exporting}
+            disabled={busy || exporting}
             onClick={() => void exportRows(true)}
           >
-            Baixar todos em Excel
+            Baixar {kindLabel} filtrados (todos os status)
           </button>
           <button
             className="secondary"
-            disabled={loading}
+            disabled={busy}
             onClick={() => setRefresh((value) => value + 1)}
           >
             Atualizar
@@ -433,7 +403,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
       </section>
       <section className="card">
         <div className="table-wrap">
-          <table aria-busy={loading}>
+          <table aria-busy={busy}>
             <thead>
               <tr>
                 {[
@@ -486,7 +456,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
               {!rows.length && (
                 <tr>
                   <td colSpan={8} className="empty">
-                    {loading
+                    {busy
                       ? "Carregando cadastros…"
                       : error
                         ? "Tente atualizar a lista novamente."
@@ -499,7 +469,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
         </div>
         <nav className="cadastros-pagination" aria-label="Páginas de cadastros">
           <span>
-            {loading
+            {busy
               ? "Carregando…"
               : count
                 ? `${filters.page * PAGE_SIZE + 1}–${Math.min((filters.page + 1) * PAGE_SIZE, count)} de ${count.toLocaleString("pt-BR")}`
@@ -507,7 +477,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
           </span>
           <div>
             <button
-              disabled={loading || filters.page === 0}
+              disabled={busy || filters.page === 0}
               onClick={() =>
                 setFilters((current) => ({
                   ...current,
@@ -521,7 +491,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: "drop_off
               Página {filters.page + 1} de {pages}
             </span>
             <button
-              disabled={loading || filters.page + 1 >= pages}
+              disabled={busy || filters.page + 1 >= pages}
               onClick={() =>
                 setFilters((current) => ({
                   ...current,

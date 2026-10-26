@@ -13,6 +13,7 @@ import DashboardNotes from "./DashboardNotes";
 import DropPhotos from "./DropPhotos";
 import DropDocuments from "./DropDocuments";
 import MunicipalityInput from "./MunicipalityInput";
+import PostalCodeLookup from "./PostalCodeLookup";
 import { downloadContractPdf } from "./contractPdf";
 const Financeiro = lazy(() => import("./Financeiro"));
 const FinancialInvoices = lazy(() => import("./FinancialInvoices"));
@@ -32,6 +33,7 @@ import { DROP_STATUSES, PARTNERS, PIX_KEY_TYPES, VEHICLE_TYPES, ZONES, normalize
 const Lista = lazy(() => import("./CadastrosLista"));
 const DropMap = lazy(() => import("./DropMap"));
 const LastMileCadastro = lazy(() => import("./LastMileCadastro"));
+const MaisEnvios = lazy(() => import("./MaisEnvios"));
 
 type Drop = {
   id: string;
@@ -616,11 +618,14 @@ function Cadastro() {
   const [saveError, setSaveError] = useState(false);
   const [reason, setReason] = useState("");
   const savingRef = useRef(false);
+  const draftIdRef = useRef(crypto.randomUUID());
+  const savedIdRef = useRef<string | null>(null);
+  const uncertainInsertRef = useRef(false);
   const put = (key: string, value: string) =>
     setValues((v) => ({ ...v, [key]: value }));
   useEffect(() => {
     if (!supabase) return;
-    if (!editId) { setRecord(null); setValues(blank()); setReason(""); setLoading(false); return; }
+    if (!editId) { savedIdRef.current = null; uncertainInsertRef.current = false; draftIdRef.current = crypto.randomUUID(); setRecord(null); setValues(blank()); setReason(""); setLoading(false); return; }
     if (record?.id === editId) return;
     supabase
       .from("drops")
@@ -657,13 +662,9 @@ function Cadastro() {
   const save = async (e: FormEvent) => {
     e.preventDefault();
     if (!supabase || savingRef.current) return;
-    const targetId = editId || record?.id;
+    let targetId = editId || savedIdRef.current || record?.id;
     const stay = (e.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "stay";
     setMessage(""); setSaveError(true);
-    if (!values.name.trim()) {
-      setMessage("Informe o Nome do Drop.");
-      return;
-    }
     if (values.operation_started_at && values.operation_ended_at && values.operation_ended_at < values.operation_started_at) { setMessage("O fim da operação não pode ser anterior ao início."); return; }
     if (!statuses.includes(values.status)) {
       setMessage("Selecione um status válido para o cadastro.");
@@ -690,6 +691,14 @@ function Cadastro() {
     savingRef.current = true;
     setSaving(true);
     try {
+      if (!targetId && uncertainInsertRef.current) {
+        const confirmation = await supabase.from("drops").select("id").eq("id", draftIdRef.current).maybeSingle();
+        if (confirmation.error) throw confirmation.error;
+        if (confirmation.data?.id) {
+          targetId = confirmation.data.id;
+          savedIdRef.current = targetId;
+        }
+      }
       const payload: Record<string, unknown> = {};
       fields.forEach((field) => {
         if (field === "latitude") payload[field] = latitude;
@@ -700,6 +709,7 @@ function Cadastro() {
           payload[field] = values[field] ? Number(values[field]) : null;
         else payload[field] = values[field].trim() || null;
       });
+      payload.name = values.name.trim();
       if (record?.registration_type === "last_mile") {
         lastMileFields.forEach(field => { payload[field] = values[field].trim() || null; });
       }
@@ -720,6 +730,7 @@ function Cadastro() {
           payload.deactivated_by = null;
         }
       }
+      if (!targetId) uncertainInsertRef.current = true;
       const result = targetId
         ? await supabase
             .from("drops")
@@ -727,9 +738,11 @@ function Cadastro() {
             .eq("id", targetId)
             .select()
             .single()
-        : await supabase.from("drops").insert(payload).select().single();
+        : await supabase.from("drops").insert({ ...payload, id: draftIdRef.current }).select().single();
       if (result.error) throw result.error;
       if (!result.data?.id || result.data.status !== payload.status || result.data.is_active !== payload.is_active || (deactivationReason && result.data.deactivated_reason !== deactivationReason)) throw new Error("O banco não confirmou as alterações do cadastro. Confira sua permissão antes de tentar novamente.");
+      savedIdRef.current = result.data.id;
+      uncertainInsertRef.current = false;
       setRecord(result.data as Drop);
       setReason(""); setSaveError(false);
       setMessage(excluding ? "Cadastro desativado e motivo salvo." : "Cadastro salvo com sucesso.");
@@ -854,11 +867,11 @@ function Cadastro() {
               value={values.neighborhood}
               onChange={(v) => put("neighborhood", v)}
             />
-            <Input
-              label="CEP"
+            <PostalCodeLookup
               value={values.postal_code}
               onChange={(v) => put("postal_code", v)}
-              kind="cep"
+              address={{ street: values.address, neighborhood: values.neighborhood, city: values.municipality, state: values.state }}
+              onAddress={address => setValues(current => ({ ...current, address: address.street, neighborhood: address.neighborhood, municipality: address.city, state: address.state }))}
             />
             <MunicipalityInput
               label="Município"
@@ -925,7 +938,7 @@ function Cadastro() {
             <Input label="Número" value={values.company_address_number} onChange={(v) => put("company_address_number", v)} kind="number" />
             <Input label="Complemento" value={values.company_complement} onChange={(v) => put("company_complement", v)} />
             <Input label="Bairro" value={values.company_neighborhood} onChange={(v) => put("company_neighborhood", v)} />
-            <Input label="CEP" value={values.company_postal_code} onChange={(v) => put("company_postal_code", v)} kind="cep" />
+            <PostalCodeLookup value={values.company_postal_code} onChange={value => put("company_postal_code", value)} address={{ street: values.company_address, neighborhood: values.company_neighborhood, city: values.company_municipality, state: values.company_state }} onAddress={address => setValues(current => ({ ...current, company_address: address.street, company_neighborhood: address.neighborhood, company_municipality: address.city, company_state: address.state }))} />
             <MunicipalityInput label="Cidade" value={values.company_municipality} state={values.company_state} onChange={(v) => put("company_municipality", v)} />
             <Select label="UF" value={values.company_state} set={(v) => put("company_state", v)} items={ufs} />
           </div>
@@ -1075,6 +1088,8 @@ function App() {
         />
         <Route path="/cadastros/last-mile" element={<Guard permission="cadastros_view"><Lista kind="last_mile" /></Guard>} />
         <Route path="/cadastros/last-mile/novo" element={<Guard permission="cadastros_create"><LastMileCadastro /></Guard>} />
+        <Route path="/cadastros/mais-envios" element={<Guard permission="cadastros_view"><MaisEnvios /></Guard>} />
+        <Route path="/cadastros/mais-envios/novo" element={<MaisEnvios view="form" />} />
         <Route path="/financeiro/notas-fiscais" element={<Guard permission="financeiro_view"><FinancialInvoices /></Guard>} />
         <Route
           path="/financeiro"
@@ -1173,6 +1188,7 @@ function SecureLayoutInner({
   const loc = useLocation();
   const { can, isAdmin, canReadLabels, canManageDeliveryRoutes } = useAccess();
   const [open, setOpen] = useState(loc.pathname.startsWith("/cadastros"));
+  const [newOpen, setNewOpen] = useState(loc.pathname.endsWith("/novo"));
   const [financeOpen, setFinanceOpen] = useState(
     loc.pathname.startsWith("/financeiro"),
   );
@@ -1182,6 +1198,8 @@ function SecureLayoutInner({
     "/cadastros/novo": "Novo cadastro",
     "/cadastros/last-mile": "Cadastros Last Mile",
     "/cadastros/last-mile/novo": "Novo cadastro Last Mile",
+    "/cadastros/mais-envios": "Cadastros Mais Envios",
+    "/cadastros/mais-envios/novo": "Cadastro Mais Envios",
     "/financeiro": "Financeiro",
     "/financeiro/notas-fiscais": "Notas fiscais",
     "/financeiro/pagamento-total": "Pagamento Total",
@@ -1238,23 +1256,21 @@ function SecureLayoutInner({
                       }
                       onClick={() => nav("/cadastros")}
                     >
-                      Ver cadastros Drop off
+                      Drop off
                     </button>
                   )}
-                  {can("cadastros_create") && (
-                    <button
-                      className={
-                        loc.pathname === "/cadastros/novo" ? "sub-active" : ""
-                      }
-                      onClick={() => nav("/cadastros/novo")}
-                    >
-                      + Novo cadastro Drop off
-                    </button>
-                  )}
-                  {can("cadastros_view") && <button className={loc.pathname === "/cadastros/last-mile" ? "sub-active" : ""} onClick={() => nav("/cadastros/last-mile")}>Ver cadastros Last Mile</button>}
-                  {can("cadastros_create") && <button className={loc.pathname === "/cadastros/last-mile/novo" ? "sub-active" : ""} onClick={() => nav("/cadastros/last-mile/novo")}>+ Novo cadastro Last Mile</button>}
+                  {can("cadastros_view") && <button className={loc.pathname === "/cadastros/last-mile" ? "sub-active" : ""} onClick={() => nav("/cadastros/last-mile")}>Last Mile</button>}
+                  {can("cadastros_view") && <button className={loc.pathname === "/cadastros/mais-envios" ? "sub-active" : ""} onClick={() => nav("/cadastros/mais-envios")}>Mais Envios</button>}
                 </div>
               )}
+              {can("cadastros_create") && <>
+                <button className="nav-parent" onClick={() => setNewOpen(value => !value)}>Novo cadastro <span>{newOpen ? "−" : "+"}</span></button>
+                {newOpen && <div className="nav-submenu">
+                  <button className={loc.pathname === "/cadastros/novo" ? "sub-active" : ""} onClick={() => nav("/cadastros/novo")}>Drop off</button>
+                  <button className={loc.pathname === "/cadastros/last-mile/novo" ? "sub-active" : ""} onClick={() => nav("/cadastros/last-mile/novo")}>Last Mile</button>
+                  <button className={loc.pathname === "/cadastros/mais-envios/novo" ? "sub-active" : ""} onClick={() => nav("/cadastros/mais-envios/novo")}>Mais Envios</button>
+                </div>}
+              </>}
             </>
           )}
           {can("financeiro_view") && (
@@ -1271,6 +1287,7 @@ function SecureLayoutInner({
               </button>
               {financeOpen && (
                 <div className="nav-submenu">
+                  <span className="nav-section-title">iMile</span>
                   <button
                     className={
                       loc.pathname === "/financeiro" ? "sub-active" : ""

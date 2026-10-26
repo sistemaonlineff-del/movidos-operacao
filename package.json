@@ -9,7 +9,8 @@
     "lint": "tsc --noEmit",
     "test": "node --test tests/financial.test.mjs tests/database.test.mjs tests/label-api.test.mjs tests/closing-mail.test.mjs tests/contract-templates.test.mjs tests/invoices.test.mjs",
     "test:browser": "node tests/document-browser.mjs",
-    "test:cadastros": "node tests/cadastros-browser.mjs"
+    "test:cadastros": "node tests/cadastros-browser.mjs",
+    "test:improvements": "node --test --test-concurrency=1 tests/cadastros-filters.test.mjs tests/postal-code.test.mjs tests/mais-envios.test.mjs tests/contract-pdf.test.mjs tests/employee-documents.test.mjs tests/optional-drop-name.test.mjs tests/registration-improvements.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.56.0",

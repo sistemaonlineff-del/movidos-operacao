@@ -274,13 +274,13 @@ try {
       assert.match(download.suggestedFilename(), /\.pdf$/)
       const bytes = await readFile(await download.path())
       assert.equal(bytes.subarray(0, 4).toString(), '%PDF')
-      assert.ok(bytes.toString('latin1').includes('02/09/2026'))
-      if (kind === 'distrato') assert.ok(bytes.toString('latin1').includes('15/09/2026'))
+      assert.ok(bytes.toString('latin1').includes(kind === 'contrato' ? '02/09/2026' : '15/09/2026'))
+      assert.equal(bytes.toString('latin1').includes('Data do contrato:'), false)
       assert.equal(await page.getByLabel('Início da operação', { exact: true }).inputValue(), '')
       assert.equal(await page.getByLabel('Fim da operação', { exact: true }).inputValue(), '')
     }
     assert.equal(writes.length, 0)
-    assert.equal(await page.locator('script[type="module"]').count(), 1)
+    assert.equal(await page.locator('script[type="module"][src*="/src/main.tsx"], script[type="module"][src*="/assets/index-"]').count(), 1)
     console.log('PASS: contract and termination download valid PDFs with blank operation dates and no database writes')
   }
   if (process.env.CAMERA_ONLY !== '1' && process.env.CONTRACT_ONLY !== '1') {

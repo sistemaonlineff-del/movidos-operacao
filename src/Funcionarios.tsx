@@ -2,6 +2,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { supabase } from './lib/supabase'
 import { useAccess } from './access'
+import EmployeeDocuments from './employeeDocuments'
 import './funcionarios.css'
 
 type Employee = Record<string, any>
@@ -32,6 +33,7 @@ export default function Funcionarios() {
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [documentEmployee, setDocumentEmployee] = useState<Employee | null>(null)
   const put = (key: string, next: any) => setValue(current => ({ ...current, [key]: next }))
 
   const load = async () => {
@@ -110,6 +112,7 @@ export default function Funcionarios() {
       <section><div className="dependent-heading"><h3>Dependentes</h3><button className="secondary" type="button" onClick={() => setDependents(current => [...current, { full_name: '', cpf: '', birth_date: '', relationship: '' }])}>+ Adicionar dependente</button></div>{dependents.map((dependent, index) => <div className="dependent-row" key={dependent.id ?? index}><Field label="Nome" value={dependent.full_name} onChange={(next: string) => setDependents(current => current.map((item, position) => position === index ? { ...item, full_name: next } : item))} /><Field label="Parentesco" value={dependent.relationship} onChange={(next: string) => setDependents(current => current.map((item, position) => position === index ? { ...item, relationship: next } : item))} /><Field label="CPF" value={dependent.cpf} onChange={(next: string) => setDependents(current => current.map((item, position) => position === index ? { ...item, cpf: maskCpf(next) } : item))} /><Field label="Nascimento" type="date" value={dependent.birth_date} onChange={(next: string) => setDependents(current => current.map((item, position) => position === index ? { ...item, birth_date: next } : item))} /><button className="danger-action" type="button" onClick={() => removeDependent(dependent, index)}>Desativar</button></div>)}</section>
       {message && <p className="form-message">{message}</p>}<div className="modal-actions"><button type="button" onClick={reset}>Limpar</button><button className="primary compact" disabled={saving}>{saving ? 'Salvando...' : editing ? 'Salvar alterações' : 'Cadastrar funcionário'}</button></div>
     </form>}
-    <section className="card employee-list"><div className="employee-list-head"><h3>Funcionários cadastrados</h3><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Nome, matrícula, e-mail ou setor" /></div><div className="table-wrap"><table><thead><tr><th>Matrícula</th><th>Nome</th><th>Setor</th><th>Cargo</th><th>Acesso</th><th>Situação</th><th>Ações</th></tr></thead><tbody>{shown.map(employee => <tr key={employee.id}><td>{formatRegistration(employee.employee_number)}</td><td><strong>{employee.full_name}</strong><br /><small>{employee.personal_email}</small></td><td>{employee.department || '—'}</td><td>{employee.job_title || '—'}</td><td>{employee.access_role}</td><td>{employee.employment_status}</td><td className="action-cell"><button className="table-action" onClick={() => void edit(employee)}>Editar</button><button className="secondary small-action" onClick={() => void invite(employee)}>Convidar</button></td></tr>)}</tbody></table></div></section>
+    {documentEmployee && <EmployeeDocuments key={documentEmployee.id} employeeId={documentEmployee.id} employeeName={documentEmployee.full_name} onClose={() => setDocumentEmployee(null)} />}
+    <section className="card employee-list"><div className="employee-list-head"><h3>Funcionários cadastrados</h3><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Nome, matrícula, e-mail ou setor" /></div><div className="table-wrap"><table><thead><tr><th>Matrícula</th><th>Nome</th><th>Setor</th><th>Cargo</th><th>Acesso</th><th>Situação</th><th>Ações</th></tr></thead><tbody>{shown.map(employee => <tr key={employee.id}><td>{formatRegistration(employee.employee_number)}</td><td><strong>{employee.full_name}</strong><br /><small>{employee.personal_email}</small></td><td>{employee.department || '—'}</td><td>{employee.job_title || '—'}</td><td>{employee.access_role}</td><td>{employee.employment_status}</td><td className="action-cell"><button className="table-action" onClick={() => void edit(employee)}>Editar</button><button className="secondary small-action" onClick={() => void invite(employee)}>Convidar</button><button type="button" className="secondary small-action" aria-pressed={documentEmployee?.id === employee.id} onClick={() => setDocumentEmployee(employee)}>Documentos</button></td></tr>)}</tbody></table></div></section>
   </section>
 }
