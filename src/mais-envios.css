@@ -1,0 +1,61 @@
+.app:has(.mais-envios) > .content, .mais-envios { min-width: 0; }
+.mais-envios { --me-ink: #223231; --me-accent: #087e83; --me-border: #cbd9d8; color: var(--me-ink); }
+.mais-envios *, .mais-envios *::before, .mais-envios *::after { box-sizing: border-box; letter-spacing: 0; }
+.mais-envios .me-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.mais-envios h1 { margin: 0; font-size: 25px; line-height: 1.3; }
+.mais-envios h2 { margin: 0; font-size: 18px; }
+.mais-envios button { display: inline-flex; justify-content: center; align-items: center; min-height: 42px; padding: 9px 14px; border: 1px solid var(--me-border); border-radius: 5px; background: #fff; color: var(--me-ink); font: inherit; font-size: 14px; cursor: pointer; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.mais-envios button:hover:not(:disabled) { background: #edf6f5; border-color: var(--me-accent); }
+.mais-envios button.me-primary { background: var(--me-accent); border-color: var(--me-accent); color: #fff; }
+.mais-envios button.me-primary:hover:not(:disabled) { background: #05686c; }
+.mais-envios button:disabled { opacity: .5; cursor: default; }
+.mais-envios :is(button, input, select):focus-visible { outline: 3px solid #c47b0b; outline-offset: 2px; }
+.mais-envios .me-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mais-envios label { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 14px; }
+.mais-envios :is(input, select) { width: 100%; min-width: 0; max-width: 100%; min-height: 44px; font: inherit; font-size: 16px; border: 1px solid var(--me-border); border-radius: 5px; padding: 10px; background: #fff; color: var(--me-ink); }
+.mais-envios select { text-overflow: ellipsis; }
+.mais-envios .me-filters { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(200px, 1.3fr) auto; gap: 16px; align-items: end; padding: 18px 0; border-top: 1px solid var(--me-border); border-bottom: 1px solid var(--me-border); }
+.mais-envios .me-table-wrap { overflow: auto; margin-top: 18px; }
+.mais-envios .me-table { width: 100%; min-width: 950px; border-collapse: collapse; font-size: 14px; }
+.mais-envios .me-table th { background: #f1f5f4; font-size: 12px; text-transform: uppercase; }
+.mais-envios .me-table :is(td, th) { padding: 13px 12px; border-bottom: 1px solid var(--me-border); text-align: left; vertical-align: top; overflow-wrap: anywhere; max-width: 260px; }
+.mais-envios .me-table td small { display: block; margin-top: 5px; }
+.mais-envios .me-stage-label { display: block; max-width: 230px; font-size: 13px; }
+.mais-envios .me-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 18px 0; font-size: 14px; }
+.mais-envios .me-error { padding: 12px; background: #fff1f0; color: #a12825; border-left: 3px solid #a12825; overflow-wrap: anywhere; }
+.mais-envios .me-success { padding: 12px; background: #edf7ef; color: #23663e; border-left: 3px solid #23663e; }
+.mais-envios .me-stages { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); list-style: none; padding: 0; margin: 0 0 24px; border-bottom: 1px solid var(--me-border); gap: 0; }
+.mais-envios .me-stage { display: flex; gap: 8px; padding: 14px 10px 18px; border-top: 3px solid #d3dcdb; min-width: 0; font-size: 12px; line-height: 1.5; }
+.mais-envios .me-stage > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.mais-envios .me-stage span span { display: block; }
+.mais-envios .me-stage small { display: block; font-size: 11px; font-weight: 700; margin-bottom: 4px; color: #526360; }
+.mais-envios .me-stage-number { flex: 0 0 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid #a9b9b7; border-radius: 50%; font-weight: 700; }
+.mais-envios .me-stage-concluida { border-top-color: #3d8963; }
+.mais-envios .me-stage-concluida .me-stage-number { background: #e6f1e9; border-color: #3d8963; color: #225b3c; }
+.mais-envios .me-stage-atual { border-top-color: var(--me-accent); background: #edf7f6; }
+.mais-envios .me-stage-atual .me-stage-number { background: var(--me-accent); border-color: var(--me-accent); color: #fff; }
+.mais-envios .me-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.mais-envios .me-form legend { font-size: 18px; font-weight: 700; padding: 0; margin-bottom: 16px; }
+.mais-envios .me-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 20px 0; }
+.mais-envios .me-address { padding: 20px 0 0; border-top: 1px solid var(--me-border); }
+.mais-envios .me-full { width: 100%; }
+.mais-envios .me-history { margin-top: 30px; border-top: 1px solid var(--me-border); padding-top: 20px; }
+.mais-envios .me-history ol { list-style: none; margin: 0; padding: 0; }
+.mais-envios .me-history li { padding: 12px 0; border-bottom: 1px solid var(--me-border); display: grid; gap: 6px; font-size: 14px; overflow-wrap: anywhere; }
+.mais-envios .me-history :is(time, small) { color: #526360; font-size: 12px; }
+@media (max-width: 1100px) {
+  .mais-envios .me-stages { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .mais-envios .me-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 850px) {
+  .app:has(.mais-envios) { grid-template-columns: minmax(0, 1fr); }
+  .app:has(.mais-envios) > aside { min-width: 0; max-width: 100%; }
+  .mais-envios .me-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 540px) {
+  .mais-envios .me-stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mais-envios .me-stage { min-height: 122px; }
+  .mais-envios .me-fields, .mais-envios .me-filters { grid-template-columns: minmax(0, 1fr); }
+  .mais-envios .me-heading { align-items: flex-start; }
+  .mais-envios .me-heading h1 { font-size: 23px; }
+}

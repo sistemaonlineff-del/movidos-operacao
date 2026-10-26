@@ -1,10 +1,13 @@
 .app:has(.cadastros-list-page) .content, .cadastros-list-page, .cadastros-list-page .card { min-width: 0; }
 .cadastros-list-page .table-wrap { overflow: auto; }
+.cadastros-list-page table { min-width: 900px; }
 .cadastro-phone { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .cadastro-phone:hover { text-decoration: underline; }
 .cadastro-row { cursor: pointer; }
 .cadastro-row:hover { background: #f2fbfb; }
-.cadastros-list-page td:last-child, .cadastros-list-page th:last-child { position: sticky; right: 0; background: inherit; box-shadow: -8px 0 12px rgba(16, 24, 32, .06); }
+.cadastros-list-page td:last-child, .cadastros-list-page th:last-child { position: sticky; right: 0; background: #fff; box-shadow: -8px 0 12px rgba(16, 24, 32, .06); }
+.cadastro-row:hover td:last-child { background: #f2fbfb; }
+.inactive-record td:last-child { background: #eef0f2; }
 .inactive-record { background: #eef0f2 !important; color: #72777d; }
 .inactive-record strong, .inactive-record a { color: #72777d; }
 .inactive-record .pill { filter: grayscale(1); opacity: .75; }
@@ -13,10 +16,23 @@
 .cadastros-pagination > div { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; }
 .app .cadastros-pagination button { display: inline-block; background: #e8f6f5; color: #087e83; padding: .6rem .8rem; }
 .app .cadastros-pagination button:disabled { opacity: .45; cursor: default; }
+.app .cadastros-list-page .cadastro-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: .85rem; min-width: 0; }
+.cadastro-filter-grid > label { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
+.app .cadastro-filter-grid input, .app .cadastro-filter-grid select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
+.cadastro-general-search { grid-column: 1 / -1; }
+.cadastros-list-page .filter-title { flex-wrap: wrap; gap: .75rem; }
+.cadastros-list-page .filter-title > div { min-width: 0; }
+.app .cadastros-list-page .toolbar { flex-wrap: wrap; min-width: 0; }
+.cadastros-list-page .toolbar > div { display: flex; flex-wrap: wrap; gap: .5rem; min-width: 0; max-width: 100%; }
+.app .cadastros-list-page .toolbar button, .app .cadastros-list-page .filter-title button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.app .cadastros-list-page .cadastros-pagination { min-width: 0; width: 100%; }
 @media (max-width: 850px) {
-  .app:has(.cadastros-list-page) aside { min-width: 0; flex-wrap: wrap; gap: .5rem; }
-  .app:has(.cadastros-list-page) nav { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+  .app:has(.cadastros-list-page) { grid-template-columns: minmax(0, 1fr); }
+  .app:has(.cadastros-list-page) > aside { position: static; height: auto; max-height: none; min-width: 0; display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: .5rem; }
+  .app:has(.cadastros-list-page) aside > nav { display: flex; flex: 1 1 100%; min-width: 0; max-width: 100%; flex-wrap: wrap; gap: .35rem; }
+  .app:has(.cadastros-list-page) aside nav button { display: inline-flex !important; max-width: 100%; white-space: normal; }
   .app:has(.cadastros-list-page) .nav-submenu { display: flex; flex-wrap: wrap; width: 100%; }
   .app:has(.cadastros-list-page) nav .nav-submenu button { display: block; }
-  .cadastros-list-page table { min-width: 900px; }
+  .app .cadastros-pagination button { display: inline-block !important; }
+  .app .cadastro-filter-grid input, .app .cadastro-filter-grid select { font-size: 16px; }
 }

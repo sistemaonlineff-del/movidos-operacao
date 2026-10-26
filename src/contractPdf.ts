@@ -30,7 +30,7 @@ export function renderContractPdf(paragraphs: ContractParagraph[]) {
     if(paragraph.pageBreak&&cursor>25){pdf.addPage();cursor=25}
     const following=heading&&paragraphs[index+1]?lineHeight*3+5:0
     if(cursor+Math.min(lines.length,3)*lineHeight+following>bottom){pdf.addPage();cursor=25}
-    const align=title?(paragraph.align??'center'):heading?(paragraph.align??'left'):'justify'
+    const align=paragraph.align??(title?'center':heading?'left':'justify')
     lines.forEach((line,lineIndex)=>{
       if(cursor+lineHeight>bottom){pdf.addPage();cursor=25}
       const alignment=align==='justify'&&lineIndex===lines.length-1?'left':align
@@ -58,11 +58,11 @@ export async function downloadContractPdf(template: string, data: Record<string,
     .map(paragraph => {
       const namespace='http://schemas.openxmlformats.org/wordprocessingml/2006/main'
       const runs=[...paragraph.getElementsByTagNameNS(namespace,'r')].filter(run=>run.getElementsByTagNameNS(namespace,'t').length)
-      const text=[...paragraph.getElementsByTagNameNS(namespace,'t')].map(node=>node.textContent??'').join('').trim()
+      const text=[...paragraph.getElementsByTagNameNS(namespace,'*')].map(node=>node.localName==='t'?node.textContent??'':['br','cr'].includes(node.localName)?'\n':node.localName==='tab'?'\t':'').join('').trim()
       const alignment=paragraph.getElementsByTagNameNS(namespace,'jc')[0]?.getAttributeNS(namespace,'val')
       return {text,bold:runs.length>0&&runs.every(run=>[...run.getElementsByTagNameNS(namespace,'b')].some(node=>!['0','false'].includes(node.getAttributeNS(namespace,'val')??''))),align:(alignment==='both'?'justify':['left','center','right'].includes(alignment??'')?alignment:undefined) as ContractParagraph['align'],pageBreak:paragraph.getElementsByTagNameNS(namespace,'pageBreakBefore').length>0}
     }).filter(paragraph=>paragraph.text)
-  const contractFields = [data.dataContrato ? `Data do contrato: ${data.dataContrato}` : '']
+  const contractFields: string[] = []
   if (template.includes('distrato')) contractFields.push(
     data.dataDistrato ? `Data do distrato: ${data.dataDistrato}` : '',
     data.motivoDistrato ? `Motivo do distrato: ${data.motivoDistrato}` : '',

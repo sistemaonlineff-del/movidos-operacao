@@ -2,6 +2,26 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Melhorias cadastrais (23/10/2026)
+
+Implementacao local, sem importacao da planilha pessoal e sem alterar dados ou arquivos de producao. Antes de publicar, o responsavel deve revisar backup e executar pessoalmente os scripts novos abaixo, na ordem. Nao reaplicar schema inicial nem guards antigos depois destes sucessores:
+
+1. [Documentos de funcionarios](supabase/migrations/20261023120000_employee_documents.sql): depende do modulo de funcionarios e das funcoes existentes de usuario ativo/permissao. Cria metadados e bucket privado, acesso por permissoes de funcionarios, arquivos ate 15 MB. Upload incompleto permanece pendente, com confirmacao ou exclusao pela interface; nao e apresentado como concluido. Download exige arquivo confirmado. Exclusao remove o arquivo e preserva metadados auditados. Validacao de formato nao substitui antivirus.
+2. [Mais Envios](supabase/migrations/20261023130000_mais_envios.sql): tabela propria, historico imutavel das seis etapas com usuario/data e RLS por permissoes de cadastros. Exige visualizar para criar/editar, sem liberar permissao automaticamente. Nao integra drops nem financeiro. Atualizacoes comparam a versao para evitar sobrescrever outra pessoa.
+3. [Nome opcional do Drop](supabase/migrations/20261023140000_optional_drop_name.sql): requer o guard de sucessores de 14/10. Permite nome vazio sem comparar rascunhos como duplicados; nomes preenchidos mantem protecao contra duplicidade e operacoes sobrepostas. Nao altera registros existentes, NOT NULL, permissoes nem valores financeiros.
+
+CEP: ViaCEP nos enderecos de Drop off, empresa, Last Mile e Mais Envios. Oito digitos disparam consulta; numero/complemento permanecem manuais. Divergencia de endereco exige Aplicar endereco, preservando edicoes durante a consulta. CEP geral nao apaga campos; falha permite repetir e nao bloqueia salvar. O CEP e enviado ao ViaCEP, sem outros dados cadastrais. Nao consulta coordenadas nem garante disponibilidade do servico externo.
+
+Listas Drop off/Last Mile: filtros combinaveis de ID, status, nome, parceiro, responsavel, telefone, CNPJ, logradouro, numero, complemento, bairro, municipio, UF, CEP e zona. Exportacoes usam os mesmos filtros/tipo; Todos os status remove somente filtro de status. Salvar e permanecer reutiliza o ID confirmado; resposta perdida pode ser conferida na nova tentativa pelo mesmo UUID, sem novo cadastro. Nome do Drop pode ser vazio apos o terceiro SQL.
+
+Menu: Cadastros e Novo cadastro, cada um com Drop off, Last Mile e Mais Envios. Financeiro existente identificado como iMile. Mais Envios inclui listagem, consulta, criacao/edicao e progresso das seis etapas, atualizadas manualmente; nao gera contratos nem cria Smart/logins, envios de kits ou agendamentos externos. Os 12 registros da planilha enviada nao foram importados.
+
+PDFs: removida a linha extra Data do contrato no topo; data legal do documento permanece. Preserva quebras de linha e centralizacao do DOCX em assinaturas, nome, CNPJ, papeis e testemunhas existentes. Modelos privados nao foram alterados e nao ha garantia de conversao Word integral. PDFs ja emitidos permanecem intactos.
+
+Pendentes por falta de especificacao: financeiro Mais Envios/J&T e respectivas regras/planilhas. Nao criar telas financeiras vazias nem copiar calculos da iMile. Geocodificacao e otimizacao de rotas nao fazem parte desta entrega.
+
+Validacao: `npm test`, `npm run build`, `npm run test:improvements` e `npm run test:cadastros`. Os dois ultimos testes integrados requerem servidor Vite em `http://127.0.0.1:5173` (iniciar com `npm run dev -- --host 127.0.0.1 --port 5173 --strictPort`); testes dedicados usam banco local PGlite e rede simulada. Homologar SQL e storage em ambiente autorizado antes do uso real e conferir PDFs/modelos privados e Safari no aparelho. Nenhum SQL foi executado em producao.
+
 ## Download de contratos (19/10/2026)
 
 O gerador de contrato/distrato passa a ser carregado com a aplicacao, sem importacao dinamica no clique que poderia solicitar um chunk antigo apos um deploy. Isso aumenta o pacote inicial; nao altera modelos, datas ou permissoes. Inicio/fim da operacao continuam opcionais e independentes da data do contrato/distrato. A data do proprio documento continua exigida. Sem SQL adicional. Apos publicar, salvar o cadastro antes de atualizar abas antigas. O teste CONTRACT_ONLY=1 npm run test:browser baixa ambos os PDFs com datas operacionais vazias, banco simulado e nenhuma gravacao. Nao garante funcionamento offline nem corrige outras falhas de rede ou modulos de outras telas.
