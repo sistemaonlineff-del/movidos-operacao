@@ -399,6 +399,33 @@ test('CNAB accepts absent date and document columns without accepting malformed 
   result.payments[0].pix = '12345678901'
   assert.equal(createCnabInter(result.payments).split('\r\n')[3].slice(17, 32), '100012345678901')
 })
+test('CNAB accepts legacy matching Pix email in document without extracting its numbers', async () => {
+  const XLSX = await import('xlsx')
+  for (const email of ['pessoa@example.com', 'pessoa123@example.com', '12345678901@example.com', '12345678901234@example.com']) {
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['DROP', 'RESPONSAVEL', 'TOTAL DROP', 'PIX', 'CPF/CNPJ'],
+      ['TESTE', 'Pessoa', 10, email, email.toUpperCase()],
+    ]), 'Pagamentos')
+    const imported = await readCnabSpreadsheet({ arrayBuffer: async () => XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) })
+    assert.deepEqual(imported.errors, [])
+    const grouped = prepareCnabPayments([{ drop: 'TESTE', receivable: 10, pix: email, document: email.toUpperCase() }])
+    assert.equal(grouped[0].document, email.toUpperCase())
+    for (const payments of [imported.payments, grouped]) {
+      const lines = createCnabInter(payments).split('\r\n').filter(line => line !== '')
+      assert.ok(lines.every(line => line.length === 240))
+      assert.equal(lines[3].slice(14, 17), '02 ')
+      assert.equal(lines[3].slice(17, 32), '000000000000000')
+      assert.equal(lines[3].slice(127, 226).trim(), email.toUpperCase())
+    }
+  }
+  const base = { drop: 'TESTE', responsible: '', value: 10, pix: 'pessoa123@example.com', pixHolderName: '', paymentDate: '', document: '' }
+  for (const document of ['outra@example.com', 'invalido@', '1234']) {
+    assert.throws(() => createCnabInter([{ ...base, document }]), /CPF\/CNPJ/)
+  }
+  assert.throws(() => createCnabInter([{ ...base, pix: '12345678901', document: 'pessoa@example.com' }]), /CPF\/CNPJ/)
+})
+
 test('CNAB reads native Excel dates independently of display format and rejects invalid dates', async () => {
   const XLSX = await import('xlsx')
   for (const date1904 of [false, true]) {

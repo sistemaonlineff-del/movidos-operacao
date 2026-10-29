@@ -238,13 +238,15 @@ try {
     await countIs(mobile, 1003)
     const geometry = await mobile.evaluate(() => ({
       width: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth,
+      viewport: document.querySelector('meta[name="viewport"]')?.getAttribute('content'),
       inputsFit: [...document.querySelectorAll('.cadastro-filter-grid input, .cadastro-filter-grid select, .toolbar button')].every(element => {
         const bounds = element.getBoundingClientRect()
         return bounds.left >= -1 && bounds.right <= document.documentElement.clientWidth + 1
       }),
       tableScroll: document.querySelector('.table-wrap').scrollWidth > document.querySelector('.table-wrap').clientWidth,
     }))
-    assert.ok(Math.abs(geometry.width - viewport.width) <= 1, 'Cadastros must use the actual device width')
+    assert.equal(geometry.viewport, 'width=980')
+    assert.ok(Math.abs(geometry.width - 980) <= 1, 'Cadastros must preserve the shared desktop viewport on phones')
     assert.ok(geometry.scroll <= geometry.width + 1, JSON.stringify(geometry))
     assert.ok(geometry.inputsFit, JSON.stringify(geometry))
     assert.ok(geometry.tableScroll, 'Table must scroll inside its own viewport')
@@ -253,9 +255,12 @@ try {
     await mobile.screenshot({ path: `${output}/filters-mobile-${viewport.width}.png`, fullPage: true })
     await mobile.getByRole('button', { name: 'Documentos', exact: true }).click()
     await mobile.waitForFunction(() => document.querySelector('meta[name="viewport"]')?.getAttribute('content') === 'width=980')
+    assert.ok(Math.abs(await mobile.evaluate(() => document.documentElement.clientWidth) - 980) <= 1)
     await mobile.goBack({ waitUntil: 'domcontentloaded' })
+    await mobile.getByLabel('Nome DROP', { exact: true }).fill('')
     await countIs(mobile, 1003)
-    assert.equal(await mobile.evaluate(() => document.documentElement.clientWidth), viewport.width)
+    assert.equal(await mobile.locator('meta[name="viewport"]').getAttribute('content'), 'width=980')
+    assert.ok(Math.abs(await mobile.evaluate(() => document.documentElement.clientWidth) - 980) <= 1)
     await mobileContext.close()
   }
   assert.deepEqual(writes, [])

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase'
 import { useAccess } from './access'
@@ -239,19 +239,6 @@ export default function MaisEnvios({ view = 'list' }: { view?: 'list' | 'form' }
   const { loading, can, profile } = useAccess()
   const [params] = useSearchParams()
   const editId = params.get('edit')
-  useLayoutEffect(() => {
-    const existing = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
-    const viewport = existing ?? document.createElement('meta')
-    const previous = viewport.getAttribute('content')
-    viewport.name = 'viewport'
-    viewport.content = 'width=device-width, initial-scale=1'
-    if (!existing) document.head.appendChild(viewport)
-    return () => {
-      if (!existing) viewport.remove()
-      else if (previous === null) viewport.removeAttribute('content')
-      else viewport.content = previous
-    }
-  }, [])
   const allowed = Boolean(profile?.is_active && can('cadastros_view'))
   return <div className="mais-envios">
     {loading ? <p role="status">Carregando permissoes...</p> : !allowed ? <p role="alert">Sem permissao para acessar Mais Envios.</p>

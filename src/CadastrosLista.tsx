@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "./lib/supabase";
 import { DROP_STATUSES, normalizePartner, normalizeZone, statusTone } from "./dropOptions";
@@ -97,19 +97,6 @@ function readOptions(kind: RegistrationKind) {
 export default function CadastrosLista({ kind = "drop_off" }: { kind?: RegistrationKind }) {
   const navigate = useNavigate();
   const { can } = useAccess();
-  useLayoutEffect(() => {
-    const existing = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
-    const viewport = existing ?? document.createElement("meta");
-    const previousContent = viewport.getAttribute("content");
-    viewport.name = "viewport";
-    viewport.content = "width=device-width, initial-scale=1";
-    if (!existing) document.head.appendChild(viewport);
-    return () => {
-      if (!existing) viewport.remove();
-      else if (previousContent === null) viewport.removeAttribute("content");
-      else viewport.content = previousContent;
-    };
-  }, []);
   const [filters, setFilters] = useState(createCadastroFilters);
   const [draft, setDraft] = useState(createCadastroFilters);
   const [refresh, setRefresh] = useState(0);

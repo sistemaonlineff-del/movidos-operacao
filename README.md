@@ -2,6 +2,12 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Celular e CNAB (29/10/2026)
+
+Listas Drop off/Last Mile e Mais Envios deixam de alterar o viewport para largura de celular e passam a herdar o modo global de computador (`width=980`), como as demais telas. Leitor de etiquetas continua com largura do aparelho; camera e fila nao foram alteradas.
+
+CNAB: aceita o formato legado em que a coluna CPF/CNPJ repete exatamente a chave Pix por e-mail (comparacao sem diferenciar maiusculas). Nesse caso nao extrai os numeros do e-mail como documento: usa chave tipo e-mail, inscricao nao informada (tipo 0 e zeros), como o fluxo ja existente para documento vazio. Documento real valido continua preservado; e-mail divergente ou documento numerico de tamanho invalido bloqueia. Vale tanto para planilha quanto para dados preparados do financeiro. Nao grava dados, nao transmite pagamentos e nao garante aceitacao do arquivo pelo Banco Inter: homologar documento nao informado no banco e preferir CPF/CNPJ real do favorecido quando disponivel. Sem SQL novo, implementacao local ate publicacao.
+
 ## Melhorias cadastrais (23/10/2026)
 
 Implementacao local, sem importacao da planilha pessoal e sem alterar dados ou arquivos de producao. Antes de publicar, o responsavel deve revisar backup e executar pessoalmente os scripts novos abaixo, na ordem. Nao reaplicar schema inicial nem guards antigos depois destes sucessores:
