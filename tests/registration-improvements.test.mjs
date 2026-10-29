@@ -143,6 +143,12 @@ async function openDrop(page) {
   await page.locator('.cadastro-form').getByRole('heading', { name: 'Novo cadastro', exact: true }).waitFor()
 }
 
+async function assertSharedViewport(page, mobile) {
+  assert.equal(await page.locator('meta[name="viewport"]').getAttribute('content'), 'width=980')
+  const width = await page.evaluate(() => document.documentElement.clientWidth)
+  assert.ok(Math.abs(width - (mobile ? 980 : 1440)) <= 1, `${page.url()}: unexpected layout width ${width}`)
+}
+
 function stayButton(page) {
   return page.getByRole('button', { name: 'Salvar e permanecer', exact: true })
 }
@@ -306,16 +312,19 @@ test('Registration improvements: current App, isolated browser integration', asy
         if (mobile) {
           await page.goto(`${origin}/cadastros/mais-envios`, { waitUntil: 'domcontentloaded' })
           await page.getByText('Nenhum cadastro encontrado.', { exact: true }).waitFor()
+          await assertSharedViewport(page, mobile)
           assert.equal(await page.locator('[role="alert"]').count(), 0)
           await page.screenshot({ path: path.join(output, 'mais-envios-list-mobile.png'), fullPage: true })
           await page.getByRole('button', { name: 'Novo cadastro', exact: true }).click()
           await page.waitForURL(`${origin}/cadastros/mais-envios/novo`)
           await page.getByRole('heading', { name: 'Novo Mais Envios', exact: true }).waitFor()
+          await assertSharedViewport(page, mobile)
           assert.equal(await page.getByLabel('Smart (nome)', { exact: true }).isVisible(), true)
           assert.equal(await page.locator('[role="alert"]').count(), 0)
           await page.screenshot({ path: path.join(output, 'mais-envios-form-mobile.png'), fullPage: true })
         }
         await openDrop(page)
+        await assertSharedViewport(page, mobile)
         const nav = page.locator('aside nav')
         const groups = [
           { label: /^Cadastros\s/, paths: ['/cadastros', '/cadastros/last-mile', '/cadastros/mais-envios'], surfaces: ['table', 'table', '.mais-envios .me-table'] },
@@ -336,6 +345,7 @@ test('Registration improvements: current App, isolated browser integration', asy
             await submenu.getByRole('button', { name: label, exact: true }).click()
             await page.waitForURL(url => url.pathname === group.paths[index])
             await page.locator(group.surfaces[index]).waitFor()
+            await assertSharedViewport(page, mobile)
             if (index === 2) {
               if (group.paths[index].endsWith('/novo')) {
                 await page.getByRole('heading', { name: 'Novo Mais Envios', exact: true }).waitFor()

@@ -197,18 +197,22 @@ test('Mais Envios navegador: lista, filtros, CRUD sem DELETE, CEP, concorrencia,
   let browser
   try {
     browser = await chromium.launch({ channel: 'msedge', headless: true })
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
     const externalRequests = [], errors = []
-    await context.route('**/*', route => {
-      if (route.request().url().startsWith(`${origin}/`)) return route.continue()
-      if (route.request().url() === 'https://viacep.com.br/ws/01001000/json/') return route.fulfill({ contentType: 'application/json',
-        headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ cep: '01001-000', logradouro: 'Rua do teste', bairro: 'Centro', localidade: 'Sao Paulo', uf: 'SP' }) })
-      externalRequests.push(route.request().url()); return route.abort()
-    })
-    await context.addInitScript(`globalThis.__maisTest={client:(${createMaisEnviosMock.toString()})(),
-      access:{loading:false,profile:{is_active:true},can:name=>['cadastros_view','cadastros_create','cadastros_edit'].includes(name)}}`)
+    async function createContext(options = {}) {
+      const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, ...options })
+      await context.route('**/*', route => {
+        if (route.request().url().startsWith(`${origin}/`)) return route.continue()
+        if (route.request().url() === 'https://viacep.com.br/ws/01001000/json/') return route.fulfill({ contentType: 'application/json',
+          headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ cep: '01001-000', logradouro: 'Rua do teste', bairro: 'Centro', localidade: 'Sao Paulo', uf: 'SP' }) })
+        externalRequests.push(route.request().url()); return route.abort()
+      })
+      await context.addInitScript(`globalThis.__maisTest={client:(${createMaisEnviosMock.toString()})(),
+        access:{loading:false,profile:{is_active:true},can:name=>['cadastros_view','cadastros_create','cadastros_edit'].includes(name)}}`)
+      context.on('page', page => page.on('pageerror', error => errors.push(error.message)))
+      return context
+    }
+    const context = await createContext()
     const page = await context.newPage()
-    page.on('pageerror', error => errors.push(error.message))
     await page.goto(`${origin}/cadastros/mais-envios`)
     await page.getByText('56 cadastros | Pagina 1 de 3', { exact: true }).waitFor()
     assert.equal(await page.locator('tbody tr').count(), 25)
@@ -272,14 +276,34 @@ test('Mais Envios navegador: lista, filtros, CRUD sem DELETE, CEP, concorrencia,
     assert.ok(updateCall.filters.some(([field]) => field === 'updated_at'))
     await mkdir('tmp/mais-envios', { recursive: true })
     await page.screenshot({ path: 'tmp/mais-envios/form-desktop.png', fullPage: true })
+    for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }]) {
+      const mobileContext = await createContext({ viewport, isMobile: true, hasTouch: true })
+      try {
+        const mobile = await mobileContext.newPage()
+        for (const path of ['/cadastros/mais-envios', '/cadastros/mais-envios/novo']) {
+          await mobile.goto(`${origin}${path}`)
+          await mobile.locator(path.endsWith('/novo') ? '.me-form' : '.me-table').waitFor()
+          assert.equal(await mobile.locator('meta[name="viewport"]').getAttribute('content'), 'width=980')
+          assert.ok(Math.abs(await mobile.evaluate(() => document.documentElement.clientWidth) - 980) <= 1,
+            'Mais Envios must preserve the shared desktop viewport on phones')
+          await mobile.screenshot({ path: `tmp/mais-envios/${path.endsWith('/novo') ? 'form' : 'list'}-mobile-${viewport.width}.png`, fullPage: true })
+        }
+        await mobile.getByRole('button', { name: 'Voltar para lista', exact: true }).click()
+        await mobile.getByText('56 cadastros | Pagina 1 de 3', { exact: true }).waitFor()
+        assert.equal(await mobile.locator('meta[name="viewport"]').getAttribute('content'), 'width=980')
+        assert.ok(Math.abs(await mobile.evaluate(() => document.documentElement.clientWidth) - 980) <= 1)
+      } finally { await mobileContext.close() }
+    }
     for (const width of [390, 844]) {
       await page.setViewportSize({ width, height: 900 })
+      assert.equal(await page.evaluate(() => document.documentElement.clientWidth), width)
+      assert.equal(await page.locator('meta[name="viewport"]').getAttribute('content'), 'width=980')
       assert.equal(await page.locator('.mais-envios').evaluate(element => element.getBoundingClientRect().right <= innerWidth + 1), true)
       assert.equal(await page.locator('.me-stages').evaluate(element => element.scrollWidth <= element.clientWidth + 1), true)
       for (const control of await page.locator('.mais-envios input, .mais-envios select, .mais-envios button').all()) {
         assert.equal(await control.evaluate(element => element.getBoundingClientRect().right <= innerWidth + 1), true)
       }
-      await page.screenshot({ path: `tmp/mais-envios/form-${width}.png`, fullPage: true })
+      await page.screenshot({ path: `tmp/mais-envios/form-isolated-responsive-${width}.png`, fullPage: true })
     }
     await page.evaluate(() => { __maisTest.access.can = name => name === 'cadastros_view'; __maisTest.render() })
     await page.getByRole('button', { name: 'Salvar cadastro', exact: true }).waitFor({ state: 'detached' })
@@ -288,7 +312,7 @@ test('Mais Envios navegador: lista, filtros, CRUD sem DELETE, CEP, concorrencia,
     await page.getByText('57 cadastros | Pagina 1 de 3', { exact: true }).waitFor()
     assert.equal(await page.getByRole('button', { name: 'Novo cadastro', exact: true }).count(), 0)
     assert.equal(await page.getByRole('button', { name: /^Editar / }).count(), 0)
-    await page.screenshot({ path: 'tmp/mais-envios/list-mobile.png', fullPage: true })
+    await page.screenshot({ path: 'tmp/mais-envios/list-isolated-responsive.png', fullPage: true })
     await page.evaluate(() => { __maisTest.access.profile.is_active = false; __maisTest.access.can = () => true; __maisTest.render() })
     await page.getByRole('alert').filter({ hasText: 'Sem permissao' }).waitFor()
     const afterDenied = await page.evaluate(() => __maisTest.client.state.calls.length)

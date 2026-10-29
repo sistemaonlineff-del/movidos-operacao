@@ -77,7 +77,7 @@ export function prepareCnabPayments(rows: DataRow[]): CnabPayment[] {
       current.pix ||= String(row.pix ?? '').trim()
       current.pixHolderName ||= String(row.pixHolderName ?? '').trim()
       current.paymentDate ||= String(row.paymentDate ?? '').trim()
-      current.document ||= digits(row.document)
+      current.document ||= String(row.document ?? '').trim()
     } else {
       grouped.set(identity, {
         drop: String(row.drop ?? '').trim(),
@@ -86,7 +86,7 @@ export function prepareCnabPayments(rows: DataRow[]): CnabPayment[] {
         pix: String(row.pix ?? '').trim(),
         pixHolderName: String(row.pixHolderName ?? '').trim(),
         paymentDate: String(row.paymentDate ?? '').trim(),
-        document: digits(row.document),
+        document: String(row.document ?? '').trim(),
       })
     }
   }
@@ -119,7 +119,12 @@ export function createCnabInter(payments: CnabPayment[], generatedAt = new Date(
     ]))
     sequence += 1
     const type = pixKeyType(payment.pix)
-    const document = digits(payment.document || (type === '03' ? payment.pix : ''))
+    const suppliedDocument = String(payment.document ?? '').trim()
+    const emailDocument = suppliedDocument.includes('@')
+    if (emailDocument && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(suppliedDocument) || type !== '02' || suppliedDocument.toLowerCase() !== payment.pix.trim().toLowerCase())) {
+      throw new Error(`CPF/CNPJ no DROP ${payment.drop}: o e-mail deve ser igual a chave Pix; informe o documento real ou deixe vazio.`)
+    }
+    const document = emailDocument ? '' : digits(suppliedDocument || (type === '03' ? payment.pix : ''))
     if (document && ![11, 14].includes(document.length)) throw new Error(`CPF/CNPJ inválido no DROP ${payment.drop}.`)
     lines.push(record([
       [1, 3, COMPANY.bank], [4, 4, '0001'], [8, 1, '3'], [9, 5, numberField(sequence, 5)], [14, 1, 'B'],
