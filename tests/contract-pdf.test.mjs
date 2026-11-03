@@ -141,8 +141,9 @@ test('bundled contract and termination keep legal text, final date and existing 
     }
     if (kind === 'distrato') {
       assert.ok(text.includes(`Data do distrato: ${fixture.dataDistrato}`))
-      assert.ok(text.includes(`Motivo do distrato: ${fixture.motivoDistrato}`))
     }
+    assert.doesNotMatch(text, /Motivo do distrato:/)
+    assert.ok(!text.includes(fixture.motivoDistrato))
     const closingDate = `Suzano, ${fixture.dataHoje}.`
     const signatureStart = items.findLastIndex(item => item.str === closingDate)
     assert.ok(signatureStart >= 0, `Missing legal closing date in ${kind}`)
@@ -178,6 +179,8 @@ test('active custom models preserve their text, explicit signature breaks and wi
     assert.ok(text.includes('Texto juridico proprio: CONTRATADA e CONTRATANTE preservam o acordo.'))
     assert.ok(text.includes(`Suzano, ${fixture.dataHoje}.`))
     assert.doesNotMatch(text, /Data do contrato:|Rogerio|Isabel|RG:/)
+    assert.doesNotMatch(text, /Motivo do distrato:/)
+    assert.ok(!text.includes(fixture.motivoDistrato))
     const signatures = [fixture.nomeEmpresarial, 'EMPRESA CONTRATANTE DE TESTE', `CNPJ: ${fixture.cnpj}`, 'CONTRATADA', 'CONTRATANTE']
     for (const signature of signatures) {
       const lines = items.filter(item => item.str === signature)

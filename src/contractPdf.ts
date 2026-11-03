@@ -65,7 +65,6 @@ export async function downloadContractPdf(template: string, data: Record<string,
   const contractFields: string[] = []
   if (template.includes('distrato')) contractFields.push(
     data.dataDistrato ? `Data do distrato: ${data.dataDistrato}` : '',
-    data.motivoDistrato ? `Motivo do distrato: ${data.motivoDistrato}` : '',
   )
   const extra:ContractParagraph[]=contractFields.filter(Boolean).map(text=>({text}))
   renderContractPdf([paragraphs[0],...extra,...paragraphs.slice(1)].filter(Boolean)).save(filename)
