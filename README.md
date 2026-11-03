@@ -2,6 +2,12 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Encerramento de operacao e menu (03/11/2026)
+
+Antes de usar a correcao do ultimo dia trabalhado, o responsavel deve revisar backup e executar pessoalmente [20261103120000_allow_operation_interval_reduction.sql](supabase/migrations/20261103120000_allow_operation_interval_reduction.sql). Requer o guard e as colunas de vigencia existentes. Em 03/11/2026, o responsavel confirmou ter executado o SQL; o assistente nao executou nem verificou a aplicacao em producao. Permite reduzir estritamente o periodo de um cadastro existente, com nome/parceiro/municipio/tipo e situacao preservados, mesmo quando existem sobreposicoes legadas. Datas nulas representam limites abertos. Nao permite ampliar o periodo sobreposto, inserir nova duplicidade ou inverter datas. Nao corrige automaticamente outros cadastros e nao recalcula historico financeiro; sobreposicoes residuais ainda exigem conferencia antes de importar fechamentos. Nao reaplicar guards antigos depois deste sucessor.
+
+Menu financeiro organizado em iMile, J&T Express e Mais Envios, conforme solicitado. iMile preserva as rotas atuais e identifica Notas Fiscais Drops. Pagamento total/detalhes dos dois novos grupos ficam desabilitados, com indicacao de que aguardam modelos/regras: nao apontam para dados iMile nem criam calculos presumidos. Cadastros/Novo cadastro mantem os tres tipos existentes. Publicacao e homologacao real pendentes.
+
 ## Celular e CNAB (29/10/2026)
 
 Listas Drop off/Last Mile e Mais Envios deixam de alterar o viewport para largura de celular e passam a herdar o modo global de computador (`width=980`), como as demais telas. Leitor de etiquetas continua com largura do aparelho; camera e fila nao foram alteradas.
