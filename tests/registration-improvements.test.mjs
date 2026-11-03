@@ -326,6 +326,12 @@ test('Registration improvements: current App, isolated browser integration', asy
         await openDrop(page)
         await assertSharedViewport(page, mobile)
         const nav = page.locator('aside nav')
+        await nav.getByRole('button', { name: /^Financeiro\s/ }).click()
+        const financeMenu = nav.getByRole('button', { name: /^Financeiro\s/ }).locator('xpath=following-sibling::*[1][self::div]')
+        assert.deepEqual(await financeMenu.locator('.nav-section-title').allTextContents(), ['iMile', 'J&T Express', 'Mais Envios'])
+        assert.equal(await financeMenu.locator('button:disabled').count(), 4)
+        assert.equal(await financeMenu.getByRole('button', { name: 'Notas Fiscais Drops', exact: true }).isEnabled(), true)
+        await nav.getByRole('button', { name: /^Financeiro\s/ }).click()
         const groups = [
           { label: /^Cadastros\s/, paths: ['/cadastros', '/cadastros/last-mile', '/cadastros/mais-envios'], surfaces: ['table', 'table', '.mais-envios .me-table'] },
           { label: /^Novo cadastro\s/, paths: ['/cadastros/novo', '/cadastros/last-mile/novo', '/cadastros/mais-envios/novo'], surfaces: ['.cadastro-form', '.last-mile-cadastro', '.mais-envios .me-form'] },

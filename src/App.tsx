@@ -1328,7 +1328,13 @@ function SecureLayoutInner({
                   >
                     Gerar CNAB
                   </button>
-                  <button className={loc.pathname === '/financeiro/notas-fiscais' ? 'sub-active' : ''} onClick={() => nav('/financeiro/notas-fiscais')}>Notas fiscais</button>
+                  <button className={loc.pathname === '/financeiro/notas-fiscais' ? 'sub-active' : ''} onClick={() => nav('/financeiro/notas-fiscais')}>Notas Fiscais Drops</button>
+                  <span className="nav-section-title">J&amp;T Express</span>
+                  <button type="button" disabled title="Aguardando modelo e regras do financeiro J&T Express">Pagamento total</button>
+                  <button type="button" disabled title="Aguardando modelo e regras do financeiro J&T Express">Pagamento detalhes</button>
+                  <span className="nav-section-title">Mais Envios</span>
+                  <button type="button" disabled title="Aguardando modelo e regras do financeiro Mais Envios">Pagamento total</button>
+                  <button type="button" disabled title="Aguardando modelo e regras do financeiro Mais Envios">Pagamento detalhes</button>
                 </div>
               )}
             </>
