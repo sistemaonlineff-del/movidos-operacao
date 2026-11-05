@@ -2,6 +2,14 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Desativacao de cadastro (05/11/2026)
+
+Para corrigir o bloqueio ao selecionar EXCLUIDO em cadastros com sobreposicoes legadas, o responsavel deve revisar backup e executar pessoalmente [20261105120000_allow_legacy_operation_deactivation.sql](supabase/migrations/20261105120000_allow_legacy_operation_deactivation.sql), depois do sucessor de 03/11. Nenhum SQL desta entrega foi executado em producao pelo assistente. A nova excecao permite apenas desativar um cadastro ativo com mesma identidade normalizada (nome, parceiro, municipio e tipo), mantendo ou reduzindo seu periodo. Nao permite ampliar datas sobrepostas, mudar identidade para contornar duplicidade, reativar duplicados ou criar nova duplicidade. Datas invertidas continuam rejeitadas. Preserva permissoes, triggers e historico financeiro; nao remove sobreposicoes antigas nem recalcula fechamentos. Nao reaplicar guards anteriores depois deste sucessor.
+
+O formulario mostra um unico campo Motivo da desativacao ao selecionar EXCLUIDO, sem janela prompt. O motivo continua obrigatorio para desativar, permanece preenchido em caso de falha e e salvo com usuario/data. Ao reabrir um cadastro ja desativado, o motivo salvo aparece somente para leitura. Sem exclusao fisica ou alteracao de PDFs.
+
+Validacao local: `node --test tests/operation-deactivation.test.mjs tests/operation-interval-reduction.test.mjs`, `node --test tests/registration-improvements.test.mjs` com Vite em 127.0.0.1:5173, e `npm run build`. Banco PGlite e rede simulada, sem gravacoes reais. Conferencia do cadastro real apos aplicacao manual do SQL permanece necessaria.
+
 ## Encerramento de operacao e menu (03/11/2026)
 
 Antes de usar a correcao do ultimo dia trabalhado, o responsavel deve revisar backup e executar pessoalmente [20261103120000_allow_operation_interval_reduction.sql](supabase/migrations/20261103120000_allow_operation_interval_reduction.sql). Requer o guard e as colunas de vigencia existentes. Em 03/11/2026, o responsavel confirmou ter executado o SQL; o assistente nao executou nem verificou a aplicacao em producao. Permite reduzir estritamente o periodo de um cadastro existente, com nome/parceiro/municipio/tipo e situacao preservados, mesmo quando existem sobreposicoes legadas. Datas nulas representam limites abertos. Nao permite ampliar o periodo sobreposto, inserir nova duplicidade ou inverter datas. Nao corrige automaticamente outros cadastros e nao recalcula historico financeiro; sobreposicoes residuais ainda exigem conferencia antes de importar fechamentos. Nao reaplicar guards antigos depois deste sucessor.
