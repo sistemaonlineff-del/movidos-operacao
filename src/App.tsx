@@ -684,7 +684,7 @@ function Cadastro() {
     const excluding = values.status.includes("EXCLU");
     let deactivationReason = "";
     if (excluding && (!editId || record?.is_active !== false)) {
-      deactivationReason = reason.trim() || window.prompt("Informe obrigatoriamente o motivo para desativar este cadastro:")?.trim() || "";
+      deactivationReason = reason.trim();
       if (!deactivationReason) { setMessage("A observação é obrigatória. O cadastro não foi desativado."); return; }
       setReason(deactivationReason);
     }
@@ -1003,7 +1003,7 @@ function Cadastro() {
         </section>
         <DropPhotos dropId={editId || record?.id || null} />
         <DropDocuments dropId={editId || record?.id || null} />
-        {values.status.includes("EXCLU") && reason && <label className="deactivation-reason">Motivo da desativação<textarea value={reason} disabled={saving} onChange={event => setReason(event.target.value)} /></label>}
+        {values.status.includes("EXCLU") && <label className="deactivation-reason">Motivo da desativação<textarea aria-label="Motivo da desativação" value={reason || (record?.is_active === false ? record.deactivated_reason || "" : "")} disabled={saving || record?.is_active === false} onChange={event => setReason(event.target.value)} /></label>}
         {message && <p className={saveError ? "error" : "form-message"} role={saveError ? "alert" : "status"}>{message}</p>}
         <div className="modal-actions">
           <button

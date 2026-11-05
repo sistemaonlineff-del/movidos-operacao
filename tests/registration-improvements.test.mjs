@@ -185,6 +185,46 @@ await mkdir(output, { recursive: true })
 test('Registration improvements: current App, isolated browser integration', async suite => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true })
   try {
+    for (const mobile of [false, true]) {
+      await suite.test(`Deactivation: one visible reason, no prompt and retry preserves input (${mobile ? 'mobile' : 'desktop'})`, async scenario => {
+        const { page, state } = await fixture(browser, scenario, 'deactivation-reason', mobile)
+        const id = randomUUID()
+        state.rows.push({ id, name: 'DROP FICTICIO DESATIVACAO', status: 'ATIVO', is_active: true, partner: 'IMILE', municipality: 'Suzano', operation_started_at: '2026-10-01', operation_ended_at: null })
+        const dialogs = []
+        page.on('dialog', async dialog => { dialogs.push(dialog.message()); await dialog.dismiss() })
+        await page.goto(`${origin}/cadastros/novo?edit=${id}`, { waitUntil: 'domcontentloaded' })
+        await page.getByRole('heading', { name: 'Editar cadastro', exact: true }).waitFor()
+        const status = page.locator('.cadastro-form label').filter({ hasText: /^Status/ }).locator('select')
+        await status.selectOption({ label: 'EXCLUÍDO' })
+        const reason = page.getByLabel('Motivo da desativação', { exact: true })
+        await reason.waitFor({ state: 'visible' })
+        assert.equal(await reason.count(), 1)
+        await stayButton(page).click()
+        await failed(page, /observação é obrigatória/)
+        assert.equal(state.writes.length, 0)
+        await reason.fill('Encerramento solicitado no teste')
+        state.denied = true
+        await stayButton(page).click()
+        await failed(page, /Permissao negada/)
+        assert.equal(await reason.inputValue(), 'Encerramento solicitado no teste')
+        assert.equal(state.rows[0].is_active, true)
+        state.denied = false
+        await stayButton(page).click()
+        await page.getByRole('status').filter({ hasText: 'Cadastro desativado e motivo salvo.' }).waitFor()
+        assert.equal(state.rows[0].is_active, false)
+        assert.equal(state.rows[0].deactivated_reason, 'Encerramento solicitado no teste')
+        assert.equal(state.rows[0].deactivated_by, user.id)
+        assert.ok(Number.isFinite(Date.parse(state.rows[0].deactivated_at)))
+        assert.equal(state.rows[0].operation_started_at, '2026-10-01')
+        assert.equal(state.rows[0].operation_ended_at, null)
+        assert.ok(state.writes.every(write => write.method === 'PATCH' && write.id === id))
+        await page.reload({ waitUntil: 'domcontentloaded' })
+        await page.getByRole('heading', { name: 'Editar cadastro', exact: true }).waitFor()
+        assert.equal(await reason.inputValue(), 'Encerramento solicitado no teste')
+        assert.equal(await reason.isDisabled(), true)
+        assert.deepEqual(dialogs, [])
+      })
+    }
     await suite.test('Drop off: empty name, first stay POST and second stay PATCH use one UUID', async scenario => {
       const { page, state } = await fixture(browser, scenario, 'empty-name-stay')
       await openDrop(page)
