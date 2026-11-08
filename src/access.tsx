@@ -2,6 +2,7 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from './lib/supabase'
 import { canManageDeliveryRoutes } from './routeAccess'
+import { canAccessPrivateFinances } from './financasAccess'
 
 const AccessContext = createContext<any>({ loading: true, isAdmin: false, can: () => false, refresh: async () => {} })
 export const permissionLabels: Record<string, string> = {
@@ -29,7 +30,7 @@ export function AccessProvider({ children }: any) {
   useEffect(() => { void refresh() }, [])
   const isAdmin = state.profile?.role === 'admin' && state.profile?.is_active
   const can = (name: string) => Boolean(isAdmin || state.permissions?.[name])
-  return <AccessContext.Provider value={{ ...state, isAdmin, can, refresh }}>{children}</AccessContext.Provider>
+  return <AccessContext.Provider value={{ ...state, isAdmin, can, refresh, canAccessFinancas: canAccessPrivateFinances(state.profile?.email, state.profile?.is_active) }}>{children}</AccessContext.Provider>
 }
 export const useAccess = () => useContext(AccessContext)
 export function Guard({ permission, children }: any) {
