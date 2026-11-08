@@ -1,0 +1,561 @@
+:root {
+  --ft-font: 'DM Sans', 'Segoe UI', sans-serif;
+  --ft-bg: #f6f8f8;
+  --ft-surface: #ffffff;
+  --ft-soft: #f0f4f2;
+  --ft-hover: #edf4f2;
+  --ft-ink: #1b292e;
+  --ft-label: #334441;
+  --ft-muted: #64746f;
+  --ft-border: #e0e6e5;
+  --ft-input-border: #d5ddda;
+  --ft-teal: #008a81;
+  --ft-teal-dark: #006b64;
+  --ft-teal-soft: #e5f2f0;
+  --ft-menu: #101d20;
+  --ft-menu-hover: #192d2e;
+  --ft-menu-active: #17443f;
+  --ft-menu-text: #b1bfbd;
+  --ft-green: #238261;
+  --ft-green-soft: #e8f5ed;
+  --ft-red: #b54445;
+  --ft-red-soft: #faeded;
+  --ft-amber: #8a6116;
+  --ft-amber-soft: #fbf4df;
+  font-family: var(--ft-font);
+  color: var(--ft-ink);
+  background-color: var(--ft-bg);
+  color-scheme: light;
+  letter-spacing: 0;
+}
+
+body {
+  background-color: var(--ft-bg);
+}
+
+.app,
+.app > .content,
+.auth-page,
+.invoice-public {
+  font-family: var(--ft-font);
+  color: var(--ft-ink);
+  background-color: var(--ft-bg);
+  letter-spacing: 0;
+}
+
+.app > aside {
+  color: var(--ft-menu-text);
+  background-color: var(--ft-menu);
+  border-right-color: #2b3b3b;
+  scrollbar-color: #4b7972 var(--ft-menu);
+}
+
+.app > aside .side-brand {
+  color: #b8d7d0;
+  letter-spacing: 0;
+  font-weight: 700;
+}
+
+.app > aside .side-brand div {
+  color: #ffffff;
+  background-color: var(--ft-teal);
+  border-radius: 6px;
+}
+
+.app > aside .side-logo {
+  filter: none;
+}
+
+.app > aside nav button,
+.app > aside .side-bottom button {
+  font-family: var(--ft-font);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--ft-menu-text);
+  background-color: transparent;
+  border-color: transparent;
+  border-radius: 5px;
+  box-shadow: none;
+}
+
+.app > aside nav button:hover:not(:disabled),
+.app > aside .side-bottom button:hover:not(:disabled) {
+  color: #ffffff;
+  background-color: var(--ft-menu-hover);
+}
+
+.app > aside nav button.active,
+.app > aside nav .nav-submenu button.sub-active,
+.app > aside nav button.active:hover:not(:disabled),
+.app > aside nav .nav-submenu button.sub-active:hover:not(:disabled) {
+  color: #9ae8d7;
+  background-color: var(--ft-menu-active);
+  box-shadow: inset 3px 0 #23c7ae;
+}
+
+.app > aside nav .nav-submenu {
+  border-left-color: #2b3b3b;
+}
+
+.app > aside nav .nav-submenu button {
+  color: #a8b7b4;
+}
+
+.app > aside .nav-section-title {
+  color: #86a69d;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.app > aside .side-bottom {
+  border-top-color: #2b3b3b;
+}
+
+.app > aside .side-bottom small {
+  color: #91aaa3;
+}
+
+.app > aside button:focus-visible {
+  outline: 2px solid #7fe0cc;
+  outline-offset: 2px;
+}
+
+.app > .content > header {
+  color: var(--ft-ink);
+  background-color: transparent;
+  box-shadow: 0 1px 0 var(--ft-border);
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :where(h1, h2, h3, h4, legend):not(:where(.financas-module, .financas-module *)) {
+  font-family: var(--ft-font);
+  color: var(--ft-ink);
+  letter-spacing: 0;
+  font-weight: 700;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :where(.eyebrow, .empty-state > span, .label-badge):not(:where(.financas-module, .financas-module *)) {
+  letter-spacing: 0;
+  font-weight: 600;
+}
+
+.app > .content :where(.eyebrow, .form-section h3):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-teal-dark);
+}
+
+.app > .content :where(.card, .metric, .form-section, .employee-form > section, .empty-state, .photo-card, .document-upload, .permission-item, .route-plans article, .label-batch-list li, .camera-batch-item):not(:where(.financas-module, .financas-module *)) {
+  background-color: var(--ft-surface);
+  border-color: var(--ft-border);
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.app > .content :where(.metric):not(:where(.financas-module, .financas-module *)) {
+  border-top-color: var(--ft-teal);
+}
+
+.app > .content :where(.metric.green):not(:where(.financas-module, .financas-module *)) {
+  border-top-color: var(--ft-green);
+}
+
+.app > .content :where(.metric.yellow):not(:where(.financas-module, .financas-module *)) {
+  border-top-color: #c29839;
+}
+
+.app > .content :where(.metric.red):not(:where(.financas-module, .financas-module *)) {
+  border-top-color: var(--ft-red);
+}
+
+.app > .content :where(.metric strong):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-ink);
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.app > .content :where(.metric span, .card-title p, .filter-title p:not(.eyebrow), .form-title p:not(.eyebrow), .employee-title p:not(.eyebrow), .employee-locked p:last-child, .employee-document-list small, .settings-head p:not(.eyebrow), .settings-intro p, .permission-top p, .route-title p, .route-plans p, .map-heading > span, .map-legend, .map-legend small, .finance-upload p:not(.eyebrow), .visual-heading p:not(.eyebrow), .financial-hint, .table-subtitle, .label-muted, .label-clean-fields dt, .empty, .empty-inline, .empty-state p):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-muted);
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(button, .secondary, .table-action, .small-action, .upload-button, .history-upload, .label-file):not(:where(.financas-module, .financas-module *)) {
+  font-family: var(--ft-font);
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--ft-label);
+  background-color: var(--ft-surface);
+  border-color: var(--ft-input-border);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--ft-input-border);
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(button, .secondary, .table-action, .small-action, .upload-button, .history-upload, .label-file):not(:where(.financas-module, .financas-module *)):hover:not(:disabled):not(.disabled) {
+  background-color: var(--ft-hover);
+  border-color: #b7ccc5;
+  box-shadow: inset 0 0 0 1px #b7ccc5;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(button.primary, .primary.secondary, .upload-button, .label-file.primary, button.me-primary):not(:where(.financas-module, .financas-module *)) {
+  color: #ffffff;
+  background-color: var(--ft-teal);
+  border-color: var(--ft-teal);
+  box-shadow: none;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(button.primary, .primary.secondary, .upload-button, .label-file.primary, button.me-primary):not(:where(.financas-module, .financas-module *)):hover:not(:disabled):not(.disabled) {
+  color: #ffffff;
+  background-color: var(--ft-teal-dark);
+  border-color: var(--ft-teal-dark);
+  box-shadow: none;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(.table-action, button.small-action):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-teal-dark);
+  background-color: var(--ft-teal-soft);
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(.link-button, .modal-title button):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-teal-dark);
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.app > .content :is(.danger-action, .history-upload):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-red);
+  background-color: var(--ft-red-soft);
+  border-color: #e5c6c6;
+  box-shadow: inset 0 0 0 1px #e5c6c6;
+}
+
+.app > .content :is(.danger-action, .history-upload):not(:where(.financas-module, .financas-module *)):hover:not(:disabled):not(.disabled) {
+  color: #923536;
+  background-color: #f5dede;
+  border-color: #dcb4b4;
+  box-shadow: inset 0 0 0 1px #dcb4b4;
+}
+
+.app > .content .employee-document-delete {
+  color: var(--ft-red) !important;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(button, input, select, textarea):not(:where(.financas-module, .financas-module *)):disabled {
+  color: var(--ft-muted);
+  background-color: #f0f3f2;
+  border-color: var(--ft-border);
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(button.primary, button.me-primary):not(:where(.financas-module, .financas-module *)):disabled {
+  color: #ffffff;
+  background-color: #587b75;
+  border-color: #587b75;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(input, select, textarea):not(:where(.financas-module, .financas-module *, [type='hidden'], [type='file'], [type='checkbox'], [type='radio'], [type='range'], [type='color'])) {
+  font-family: var(--ft-font);
+  color: #273d36;
+  background-color: var(--ft-surface);
+  border-color: var(--ft-input-border);
+  border-radius: 5px;
+  outline-color: var(--ft-teal);
+  letter-spacing: 0;
+  box-shadow: none;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(input, textarea):not(:where(.financas-module, .financas-module *)):read-only {
+  background-color: #f4f7f6;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(input, select, textarea):not(:where(.financas-module, .financas-module *)):disabled {
+  color: var(--ft-muted);
+  background-color: #f0f3f2;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :where(label):not(:where(.financas-module, .financas-module *, .label-file, .upload-button, .history-upload)) {
+  color: var(--ft-label);
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(input[type='checkbox'], input[type='radio']):not(:where(.financas-module, .financas-module *)) {
+  accent-color: var(--ft-teal);
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(button, a, input, select, textarea, summary):not(:where(.financas-module, .financas-module *)):focus-visible {
+  outline: 2px solid #009b90;
+  outline-offset: 2px;
+}
+
+.app > .content .label-file:focus-within {
+  outline: 2px solid #009b90;
+  outline-offset: 2px;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :is(input, select, textarea)[aria-invalid='true']:not(:where(.financas-module, .financas-module *)) {
+  border-color: var(--ft-red);
+  outline-color: var(--ft-red);
+}
+
+.app > .content textarea.label-raw {
+  font-family: 'Consolas', 'Courier New', monospace;
+  background-color: #f4f7f6;
+}
+
+.app > .content :where(.ready-message pre):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-ink);
+}
+
+:is(.app > .content, .invoice-public) :where(table):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+:is(.app > .content, .invoice-public) :where(thead, th):not(:where(.financas-module, .financas-module *)) {
+  color: #596e65;
+  background-color: var(--ft-soft);
+  border-bottom-color: var(--ft-border);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+:is(.app > .content, .invoice-public) :where(td):not(:where(.financas-module, .financas-module *)) {
+  border-bottom-color: #edf0ef;
+}
+
+.app > .content :where(tbody tr):not(:where(.financas-module *, .inactive-record, .financial-totals)):hover {
+  background-color: #f4f8f6;
+}
+
+.app > .content .cadastros-list-page :is(td:last-child, th:last-child) {
+  background-color: var(--ft-surface);
+  box-shadow: -6px 0 10px rgb(16 29 32 / 5%);
+}
+
+.app > .content .cadastros-list-page th:last-child {
+  background-color: var(--ft-soft);
+}
+
+.app > .content .cadastro-row:not(.inactive-record):hover td:last-child {
+  background-color: #f4f8f6;
+}
+
+.app > .content .inactive-record td:last-child {
+  background-color: #eef0f2;
+}
+
+.app > .content :where(.pill, .label-badge, .batch-status-tag):not(:where(.financas-module, .financas-module *)) {
+  border-radius: 4px;
+  letter-spacing: 0;
+}
+
+.app > .content :where(.pill):not(:where(.financas-module, .financas-module *)) {
+  color: #5d6c65;
+  background-color: #eef1f0;
+}
+
+.app > .content :where(.pill.ativo, .pill.status-active, .label-badge):not(:where(.financas-module, .financas-module *)) {
+  color: #276e50;
+  background-color: var(--ft-green-soft);
+}
+
+.app > .content :where(.pill.problema, .pill.status-problem):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-red);
+  background-color: var(--ft-red-soft);
+}
+
+.app > .content :where(.pill.congelado, .pill.status-frozen):not(:where(.financas-module, .financas-module *)) {
+  color: #5b5d85;
+  background-color: #ededf5;
+}
+
+.app > .content :where(.pill.status-progress):not(:where(.financas-module, .financas-module *)) {
+  color: #356f91;
+  background-color: #eaf2f8;
+}
+
+.app > .content :where(.financial-totals):not(:where(.financas-module, .financas-module *)) {
+  color: #285340;
+  background-color: var(--ft-green-soft);
+}
+
+.app > .content .financial-totals th {
+  color: inherit;
+  background-color: inherit;
+}
+
+.app > .content .finance-visual-page .financial-net-column {
+  border-left-color: var(--ft-teal);
+  border-right-color: var(--ft-teal);
+}
+
+.app > .content .losses-table td.duplicate-waybill {
+  color: #694b12;
+  background-color: #fff2bd;
+  box-shadow: inset 3px 0 #bd8100;
+}
+
+.app > .content :where(.positive-value, .camera-ready, .route-saved, .batch-concluido, .item-route-result strong, .item-route-result span):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-green);
+}
+
+.app > .content :where(.loss-value, .financial-loss-total strong, .field-error, .batch-erro, .postal-code-error, .postal-code-not-found):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-red);
+}
+
+.app > .content :where(.financial-notes .dashboard-note, .closing-allocation, .closing-allocation fieldset, .employee-documents, .employee-document-list li, .dependent-row, .invoice-link, .invoice-reconciliation, .invoice-archive, .invoice-scope, .me-filters, .me-address, .me-history, .me-history li):not(:where(.financas-module, .financas-module *)) {
+  border-color: var(--ft-border);
+}
+
+.app > .content :where(.route-plans article):not(:where(.financas-module, .financas-module *)) {
+  border-top-color: var(--ft-teal);
+  background-color: #fafcfb;
+}
+
+.app > .content :where(.route-plans strong):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-teal-dark);
+}
+
+.app > .content .mais-envios {
+  --me-ink: #1b292e;
+  --me-accent: #008a81;
+  --me-border: #e0e6e5;
+}
+
+.app > .content .mais-envios .me-stage-atual {
+  background-color: var(--ft-teal-soft);
+}
+
+.app > .content .mais-envios .me-stage-concluida {
+  border-top-color: var(--ft-green);
+}
+
+.app > .content .mais-envios .me-stage-concluida .me-stage-number {
+  color: #276e50;
+  background-color: var(--ft-green-soft);
+  border-color: var(--ft-green);
+}
+
+.app > .content :where(.label-placeholder):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-muted);
+  background-color: #f4f7f6;
+  border-color: #b8cbc2;
+  border-radius: 6px;
+}
+
+.app > .content :where(.label-route-now > div):not(:where(.financas-module, .financas-module *)) {
+  background-color: var(--ft-teal-soft);
+  border-color: var(--ft-teal);
+  border-radius: 6px;
+}
+
+.app > .content :where(.label-route-now strong):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-teal-dark);
+}
+
+.app > .content :where(.label-route-now span):not(:where(.financas-module, .financas-module *)) {
+  color: #4d6e61;
+}
+
+.app > .content .camera-batch-item:hover {
+  border-color: var(--ft-teal);
+  background-color: #f4f8f6;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :where(.notice, .form-message, .success, .me-success, .route-saved):not(:where(.financas-module, .financas-module *)) {
+  color: #276e50;
+  background-color: var(--ft-green-soft);
+  border-color: #c3ddce;
+  border-radius: 6px;
+}
+
+:is(.app > .content, .auth-page, .invoice-public) :where(.error, .error-card, .me-error):not(:where(.financas-module, .financas-module *)),
+:is(.app > .content, .invoice-public) :where(.invoice-management [role='alert'], [role='alert'].error):not(:where(.financas-module, .financas-module *)),
+.invoice-public [role='alert'] {
+  color: var(--ft-red);
+  background-color: var(--ft-red-soft);
+  border-color: #e5c6c6;
+  border-radius: 6px;
+}
+
+.app > .content :where(.label-warning, .label-zone-missing, .route-source-note, .batch-status-tag.tag-reading):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-amber);
+  background-color: var(--ft-amber-soft);
+  border-color: #d9b451;
+  border-radius: 6px;
+}
+
+.app > .content :where(.batch-status-tag.tag-error):not(:where(.financas-module, .financas-module *)) {
+  color: var(--ft-red);
+  background-color: var(--ft-red-soft);
+}
+
+.app > .content :where(.camera-toast):not(:where(.financas-module, .financas-module *)) {
+  color: #ffffff;
+  background-color: var(--ft-green);
+}
+
+.app > .content :where(.modal, .permission-panel, .financial-editor):not(:where(.financas-module, .financas-module *)) {
+  font-family: var(--ft-font);
+  color: var(--ft-ink);
+  background-color: var(--ft-surface);
+  border-color: var(--ft-border);
+  border-radius: 6px;
+  box-shadow: 0 24px 70px rgb(16 29 32 / 18%);
+}
+
+.app > .content :where(.modal-backdrop, .permission-modal):not(:where(.financas-module, .financas-module *)),
+.app > .content .financial-editor::backdrop {
+  background-color: rgb(16 29 32 / 55%);
+}
+
+.app > .content .financial-editor .modal-actions {
+  background-color: var(--ft-surface);
+}
+
+.auth-page .auth-hero {
+  color: #ffffff;
+  background-color: var(--ft-menu);
+  background-image: none;
+}
+
+.auth-page .auth-hero h1 {
+  font-size: 3rem;
+  color: #ffffff;
+}
+
+.auth-page .auth-hero :is(em, .eyebrow) {
+  color: #9ae8d7;
+}
+
+.auth-page .auth-hero > p:not(.eyebrow),
+.auth-page .hero-stat span {
+  color: #b8d7d0;
+}
+
+.auth-page .hero-stat {
+  border-left-color: #23c7ae;
+}
+
+.auth-page .auth-panel {
+  color: var(--ft-ink);
+  background-color: var(--ft-bg);
+}
+
+.auth-page .auth-panel > p {
+  color: var(--ft-muted);
+}
+
+.auth-page .auth-panel .brand-mark {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.invoice-public {
+  background-color: var(--ft-surface);
+}
+
+.invoice-public :where(.invoice-scope, .invoice-link, .invoice-reconciliation, .invoice-archive) {
+  border-color: var(--ft-border);
+}
+
+.invoice-public :where(.invoice-scope dt, li small) {
+  color: var(--ft-muted);
+}
+
+.app .cadastro-form label { min-width: 0; }
+.app .cadastro-form input, .app .cadastro-form select, .app .cadastro-form textarea { min-width: 0; max-width: 100%; }

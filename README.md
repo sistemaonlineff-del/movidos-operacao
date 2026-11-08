@@ -2,6 +2,16 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Financas privadas e visual integrado (08/11/2026)
+
+Integracao local das nove telas existentes em Movidos-Financeiro sob `/financas`, com o login atual e menu Financas somente para os perfis ativos de `fabioaf9@gmail.com` e `talitapreviatti@gmail.com`. Outros administradores nao recebem acesso automatico. O modulo reutiliza calculos, importacao CSV, planejamento, projecao e CNAB da origem; funcionalidades ainda ausentes na origem nao foram inventadas. Financeiro iMile continua separado, com suas rotas, dados e regras existentes.
+
+O responsavel deve revisar backup e executar integralmente [20261108120000_private_finances.sql](supabase/migrations/20261108120000_private_finances.sql) no Supabase atual. Este e o unico SQL novo desta integracao. Requer ambas as contas Auth existentes/confirmadas e a tabela user_profiles existente; nao cria contas, nao ativa perfis e nao concede privilegios nos modulos antigos. Cria namespace `financas_*`, RLS restrito aos dois usuarios, livro inicialmente vazio, RPC com revisao/lock e historico privado. Nao executar o schema inicial do projeto externo. Nenhum SQL ou carga real desta entrega foi executado pelo assistente.
+
+Dados locais nao entram no frontend publico: exportar a base ativa pelo app fonte e restaurar em Financas > Configuracoes usando a conta autorizada, depois do SQL. A restauracao substitui somente o livro novo e arquiva seu estado anterior; nao mescla nem altera fechamentos iMile. Conferir quantidades e totais antes/depois. Procedimento completo e limites em [docs/FINANCAS.md](docs/FINANCAS.md).
+
+Visual: camada CSS global inspirada no financeiro, DM Sans local, menu escuro, superficies claras e controles teal; sem alteracao dos calculos, permissoes anteriores ou comportamento da camera. Mantido o viewport global width=980 e a excecao do leitor. Validacao: `npm test`, `npm run test:financas`, `npm run test:financas-browser`, `npm run test:financas-app` (Vite em localhost:5173) e `npm run build`. Testes usam dados sinteticos/PGlite e bloqueiam rede real. SQL remoto, importacao real, dispositivos reais e CNAB bancario continuam exigindo homologacao. Entrega ainda local, sem publicacao automatica.
+
 ## Desativacao de cadastro (05/11/2026)
 
 Para corrigir o bloqueio ao selecionar EXCLUIDO em cadastros com sobreposicoes legadas, o responsavel deve revisar backup e executar pessoalmente [20261105120000_allow_legacy_operation_deactivation.sql](supabase/migrations/20261105120000_allow_legacy_operation_deactivation.sql), depois do sucessor de 03/11. Nenhum SQL desta entrega foi executado em producao pelo assistente. A nova excecao permite apenas desativar um cadastro ativo com mesma identidade normalizada (nome, parceiro, municipio e tipo), mantendo ou reduzindo seu periodo. Nao permite ampliar datas sobrepostas, mudar identidade para contornar duplicidade, reativar duplicados ou criar nova duplicidade. Datas invertidas continuam rejeitadas. Preserva permissoes, triggers e historico financeiro; nao remove sobreposicoes antigas nem recalcula fechamentos. Nao reaplicar guards anteriores depois deste sucessor.

@@ -16,6 +16,7 @@ import MunicipalityInput from "./MunicipalityInput";
 import PostalCodeLookup from "./PostalCodeLookup";
 import { downloadContractPdf } from "./contractPdf";
 const Financeiro = lazy(() => import("./Financeiro"));
+const Financas = lazy(() => import("./financas/App"));
 const FinancialInvoices = lazy(() => import("./FinancialInvoices"));
 const InvoiceUpload = lazy(() => import("./FinancialInvoices").then(module => ({ default: module.InvoiceUpload })));
 const CnabUpload = lazy(() => import("./CnabUpload"));
@@ -1090,6 +1091,7 @@ function App() {
         <Route path="/cadastros/last-mile/novo" element={<Guard permission="cadastros_create"><LastMileCadastro /></Guard>} />
         <Route path="/cadastros/mais-envios" element={<Guard permission="cadastros_view"><MaisEnvios /></Guard>} />
         <Route path="/cadastros/mais-envios/novo" element={<MaisEnvios view="form" />} />
+        <Route path="/financas/*" element={<FinancasGate />} />
         <Route path="/financeiro/notas-fiscais" element={<Guard permission="financeiro_view"><FinancialInvoices /></Guard>} />
         <Route
           path="/financeiro"
@@ -1186,7 +1188,7 @@ function SecureLayoutInner({
 }) {
   const nav = useNavigate();
   const loc = useLocation();
-  const { can, isAdmin, canReadLabels, canManageDeliveryRoutes } = useAccess();
+  const { can, isAdmin, canReadLabels, canManageDeliveryRoutes, canAccessFinancas } = useAccess();
   const [open, setOpen] = useState(loc.pathname.startsWith("/cadastros"));
   const [newOpen, setNewOpen] = useState(loc.pathname.endsWith("/novo"));
   const [financeOpen, setFinanceOpen] = useState(
@@ -1339,6 +1341,7 @@ function SecureLayoutInner({
               )}
             </>
           )}
+          {canAccessFinancas && <button className={loc.pathname.startsWith("/financas") ? "active" : ""} onClick={() => nav("/financas")}>Finanças</button>}
           {can("funcionarios_view") && (
             <button
               className={loc.pathname === "/funcionarios" ? "active" : ""}
@@ -1389,7 +1392,7 @@ function SecureLayoutInner({
         <header>
           <div>
             <p className="eyebrow">SISTEMA MOVIDOS</p>
-            <h1>{labels[loc.pathname] ?? loc.pathname.slice(1)}</h1>
+            <h1>{loc.pathname.startsWith("/financas") ? "Finanças" : labels[loc.pathname] ?? loc.pathname.slice(1)}</h1>
           </div>
         </header>
         <Suspense
@@ -1404,6 +1407,12 @@ function SecureLayoutInner({
       </main>
     </div>
   );
+}
+function FinancasGate() {
+  const { loading, canAccessFinancas } = useAccess();
+  if (loading) return <section className="card" role="status">Carregando permissões...</section>;
+  if (!canAccessFinancas) return <section className="card employee-locked"><h2>Acesso restrito</h2><p>Esta área está disponível somente para Fábio e Talita.</p></section>;
+  return <Financas />;
 }
 function RouteManagementGate() {
   const { loading, canManageDeliveryRoutes } = useAccess();
