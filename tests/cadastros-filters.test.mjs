@@ -40,7 +40,8 @@ test('phone, CNPJ and CEP match masked and unmasked values without skipping digi
     for (const input of [digits, masked]) {
       const { query, calls } = recorder()
       applyCadastroFilters(query, { ...createCadastroFilters(), [field]: input }, 'drop_off')
-      const [, , operator, pattern] = calls.find(call => call[0] === 'filter' && call[1] === field)
+      const [, , operator, pattern] = field === 'phone' ? ['filter', field, 'match', numericMaskPattern(input)] : calls.find(call => call[0] === 'filter' && call[1] === field)
+      if (field === 'phone') assert.ok(calls.some(call => call[0] === 'or' && call[1] === `phone.match."${pattern}",alternate_phone.match."${pattern}"`))
       assert.equal(operator, 'match')
       assert.equal(pattern, numericMaskPattern(digits))
       assert.ok(new RegExp(pattern).test(digits))
@@ -68,7 +69,7 @@ test('numeric general search keeps ID search and adds normalized contact matches
   const { query, calls } = recorder()
   applyCadastroFilters(query, { ...createCadastroFilters(), query: '01234567' }, 'last_mile')
   assert.match(calls.at(-1)[1], /legacy_id\.eq\.1234567/)
-  for (const field of ['phone', 'cnpj', 'postal_code']) assert.ok(calls.at(-1)[1].includes(`${field}.match."${numericMaskPattern('01234567')}"`))
+  for (const field of ['phone', 'alternate_phone', 'cnpj', 'postal_code']) assert.ok(calls.at(-1)[1].includes(`${field}.match."${numericMaskPattern('01234567')}"`))
 })
 
 test('real Supabase builder retains both OR groups and pagination without a network request', async () => {
@@ -86,11 +87,22 @@ test('real Supabase builder retains both OR groups and pagination without a netw
   const { error } = await query.order('legacy_id', { ascending: false }).range(100, 149)
   assert.equal(error, null)
   const params = captured[0].searchParams
-  assert.equal(params.getAll('or').length, 2)
+  assert.equal(params.getAll('or').length, 3)
   assert.equal(params.getAll('or')[0], '(registration_type.is.null,registration_type.eq.drop_off)')
-  assert.match(params.getAll('or')[1], /name\.ilike/)
-  assert.equal(params.get('phone'), `match.${numericMaskPattern(filters.phone)}`)
+  assert.equal(params.getAll('or')[1], `(phone.match."${numericMaskPattern(filters.phone)}",alternate_phone.match."${numericMaskPattern(filters.phone)}")`)
+  assert.match(params.getAll('or')[2], /name\.ilike/)
   assert.equal(params.get('status'), 'eq.ATIVO')
   assert.equal(params.get('offset'), '100')
   assert.equal(params.get('limit'), '50')
+})
+
+test('four-digit phone fragment matches either contact across masks without skipping numeric digits', () => {
+  const { query, calls } = recorder()
+  applyCadastroFilters(query, { ...createCadastroFilters(''), phone: '0728' }, 'drop_off')
+  const expression = calls.at(-1)[1]
+  assert.equal(expression, 'phone.match."0[^0-9]*7[^0-9]*2[^0-9]*8",alternate_phone.match."0[^0-9]*7[^0-9]*2[^0-9]*8"')
+  const pattern = new RegExp(numericMaskPattern('0728'))
+  assert.ok(pattern.test('+55 (16) 98830-0728'))
+  assert.ok(pattern.test('16988300728'))
+  assert.ok(!pattern.test('169883007928'))
 })

@@ -2,6 +2,26 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Financeiro Mais Envios (09/11/2026)
+
+Modelo novo recebido e VBA inspecionado estaticamente, sem executar macros ou importar dados privados: financeiro em `/financeiro/mais-envios/pagamento-total` e `/financeiro/mais-envios/pagamento-detalhes`. Importa os CSVs Marketplace/Postagem, revisa codigos e status manuais, vincula a Smart das postagens, calcula resumo por Smart, exporta Excel/PDF/ZIP, prepara rascunho com PDF anexo e permite envio direto explicitamente confirmado usando a conexao de e-mail existente. Confirmacao salva snapshot imutavel de linhas, contatos e texto; nao altera fechamentos iMile, Financas privadas ou cadastros.
+
+Novo SQL obrigatorio antes do deploy: [20261109130000_mais_envios_closings.sql](supabase/migrations/20261109130000_mais_envios_closings.sql), a executar pessoalmente pelo responsavel. Nao foi aplicado pelo assistente. Regras reais, correcoes das formulas, limites, permissao financeira, envio sem repeticao e testes em [docs/MAIS-ENVIOS-FINANCEIRO.md](docs/MAIS-ENVIOS-FINANCEIRO.md). A divisao 15%/85% e a remuneracao de objetos sao do fechamento Smart/+Envios, nao uma regra de lucro da Movidos. Nenhuma regra adicional de custo, imposto ou ganho proprio foi presumida.
+
+## Leitor dos motoristas e busca de cadastros (09/11/2026)
+
+Entrada isolada `/bipar`, com o login/primeiro acesso atuais, sem menu geral e sem criar ficha de funcionario. Cada motorista cria sua conta e confirma o email; um administrador seleciona **Somente leitor de etiquetas** em Configuracoes. O botao **Copiar link do leitor** compartilha somente o endereco, nao uma credencial. Para revogar, aplicar **Sem acesso** ou retirar a permissao de leitor. Administradores ativos continuam tendo acesso completo e nao devem ser usados como contas de motoristas. Nao ha nova autorizacao a outros modulos; perfis rapidos agora concedem apenas as permissoes declaradas, sem adicionar o leitor implicitamente.
+
+Antes de liberar novas contas, o responsavel deve executar manualmente [20261109120000_label_reader_opt_in.sql](supabase/migrations/20261109120000_label_reader_opt_in.sql). Altera somente o DEFAULT do leitor para false; nao modifica contas existentes, outras permissoes ou RLS. Nao reaplicar 05/06 antigos depois desta migracao, pois voltariam a conceder acesso automatico. O assistente nao executou SQL remoto. A tela consulta permissoes a cada 15 segundos enquanto ativa e ao recuperar foco/visibilidade; navegadores podem atrasar tarefas em segundo plano. Todas as operacoes do leitor continuam exigindo identidade/perfil ativo/permissao atuais no servidor. A revogacao nao apaga informacao ja vista nem desfaz leituras ja aceitas. Camera, OCR e validacao de enderecos foram mantidos.
+
+Cadastros aceita qualquer trecho numerico do telefone (por exemplo os quatro ultimos digitos), com ou sem mascara, no telefone principal **ou alternativo**, tanto no filtro Telefone quanto na busca geral. Os demais filtros continuam combinados, incluindo o status inicial ATIVO. Para achar um interessado aprovado, selecionar INTERESSADO ou limpar o status.
+
+Um envio publico recebido fica em **Cadastros > Pre-cadastros**, nao em Interessados. Revisar e aprovar cria INTERESSADO, sem ativar operacao. A revisao agora busca nome, responsavel, municipio, protocolo e trecho dos telefones **entre os registros carregados**; ajustar Status e usar Carregar mais quando necessario. Nenhum cadastro foi ativado ou alterado na producao.
+
+O arquivo novo do Mais Envios foi fornecido depois desta etapa inicial; a implementacao e o SQL proprio estao na secao acima. Os arquivos financeiros anteriores nao foram usados como fonte das novas regras. Nenhum e-mail real foi disparado ou dado privado importado.
+
+Verificacoes: `npm test`, `npm run test:drop-registration`, `node --test tests/cadastros-filters.test.mjs`, `npm run build`. `npm run test:label-reader` usa o App real com Vite em 127.0.0.1:5174 (ou LABEL_BASE_URL), contas/base sinteticas e rede externa bloqueada; confere login movel, isolamento desktop/celular, revogacao/reliberacao, conta inativa e saida. Capturas em tmp/label-reader/screenshots. Testes SQL em PGlite; sem homologacao de dispositivo fisico/Safari ou banco remoto. Alteracoes locais, sem commit/push/PR/deploy automaticos.
+
 ## Fechamentos e cadastro publico (08/11/2026)
 
 Nova aba Financas > Fechamentos para revisar Talita/Jorge e valor da NF, escolher destino empresa/pessoal, classificar, planejar/confirmar recebimento e calcular imposto com base/aliquota explicitas. Preserva origem e snapshots, bloqueia reimportacao e nao presume pagamento, lucro ou regra fiscal. O financeiro Mais Envios continua aguardando a planilha da cliente.

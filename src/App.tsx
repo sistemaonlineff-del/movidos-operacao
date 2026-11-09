@@ -21,6 +21,7 @@ const FinancialInvoices = lazy(() => import("./FinancialInvoices"));
 const InvoiceUpload = lazy(() => import("./FinancialInvoices").then(module => ({ default: module.InvoiceUpload })));
 const PublicDropRegistration = lazy(() => import("./PublicDropRegistration"));
 const DropRegistrationReview = lazy(() => import("./DropRegistrationReview"));
+const LabelReaderPortal = lazy(() => import("./LabelReaderPortal"));
 const CnabUpload = lazy(() => import("./CnabUpload"));
 const ContractTemplateManager = lazy(() => import("./ContractTemplateManager"));
 const FinanceiroVisuais = lazy(() => import("./FinanceiroVisuais"));
@@ -30,13 +31,14 @@ const RouteManagement = lazy(() => import("./RouteManagement"));
 const ReadyMessages = lazy(() => import("./ReadyMessages"));
 const Documents = lazy(() => import("./Documents"));
 import { AccessProvider, Guard, useAccess } from "./access";
-import LabelReaderGate from "./LabelReaderGate";
+import LabelReaderGate, { useReaderViewport } from "./LabelReaderGate";
 import { DROP_STATUSES, PARTNERS, PIX_KEY_TYPES, VEHICLE_TYPES, ZONES, normalizePartner, normalizeZone } from "./dropOptions";
 
 const Lista = lazy(() => import("./CadastrosLista"));
 const DropMap = lazy(() => import("./DropMap"));
 const LastMileCadastro = lazy(() => import("./LastMileCadastro"));
 const MaisEnvios = lazy(() => import("./MaisEnvios"));
+const MaisEnviosFinanceiro = lazy(() => import("./MaisEnviosFinanceiro"));
 
 type Drop = {
   id: string;
@@ -1048,6 +1050,7 @@ function App() {
   const location = useLocation();
   const [logged, setLogged] = useState(false);
   const [checking, setChecking] = useState(true);
+  useReaderViewport(location.pathname.replace(/\/+$/, '') === '/bipar' && !logged);
   useEffect(() => {
     if (!supabase) {
       setChecking(false);
@@ -1070,6 +1073,7 @@ function App() {
     await supabase?.auth.signOut();
     setLogged(false);
   };
+  if (location.pathname.replace(/\/+$/, '') === '/bipar') return <AccessProvider revalidateMs={15000}><Suspense fallback={<main>Carregando leitor...</main>}><LabelReaderPortal onExit={() => void exit()} /></Suspense></AccessProvider>;
   return (
     <SecureLayout onExit={() => void exit()}>
       <Routes>
@@ -1096,6 +1100,7 @@ function App() {
         <Route path="/cadastros/mais-envios" element={<Guard permission="cadastros_view"><MaisEnvios /></Guard>} />
         <Route path="/cadastros/mais-envios/novo" element={<MaisEnvios view="form" />} />
         <Route path="/financas/*" element={<FinancasGate />} />
+        <Route path="/financeiro/mais-envios/*" element={<Guard permission="financeiro_view"><MaisEnviosFinanceiro /></Guard>} />
         <Route path="/financeiro/notas-fiscais" element={<Guard permission="financeiro_view"><FinancialInvoices /></Guard>} />
         <Route
           path="/financeiro"
@@ -1209,6 +1214,8 @@ function SecureLayoutInner({
     "/cadastros/mais-envios/novo": "Cadastro Mais Envios",
     "/financeiro": "Financeiro",
     "/financeiro/notas-fiscais": "Notas fiscais",
+    "/financeiro/mais-envios/pagamento-total": "Mais Envios - Pagamento total",
+    "/financeiro/mais-envios/pagamento-detalhes": "Mais Envios - Pagamento detalhes",
     "/financeiro/pagamento-total": "Pagamento Total",
     "/financeiro/pagamento-detalhes": "Pagamento Detalhes",
     "/financeiro/cnab": "Gerar CNAB",
@@ -1341,8 +1348,8 @@ function SecureLayoutInner({
                   <button type="button" disabled title="Aguardando modelo e regras do financeiro J&T Express">Pagamento total</button>
                   <button type="button" disabled title="Aguardando modelo e regras do financeiro J&T Express">Pagamento detalhes</button>
                   <span className="nav-section-title">Mais Envios</span>
-                  <button type="button" disabled title="Aguardando modelo e regras do financeiro Mais Envios">Pagamento total</button>
-                  <button type="button" disabled title="Aguardando modelo e regras do financeiro Mais Envios">Pagamento detalhes</button>
+                  <button type="button" className={loc.pathname === "/financeiro/mais-envios/pagamento-total" ? "sub-active" : ""} onClick={() => nav("/financeiro/mais-envios/pagamento-total")}>Pagamento total</button>
+                  <button type="button" className={loc.pathname === "/financeiro/mais-envios/pagamento-detalhes" ? "sub-active" : ""} onClick={() => nav("/financeiro/mais-envios/pagamento-detalhes")}>Pagamento detalhes</button>
                 </div>
               )}
             </>

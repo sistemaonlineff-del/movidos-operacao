@@ -11,7 +11,7 @@ export const permissionLabels: Record<string, string> = {
   funcionarios_view: 'Ver Funcionários', funcionarios_manage: 'Gerenciar Funcionários', configuracoes_manage: 'Configurações',
   label_reader_access: 'Leitor de etiquetas'
 }
-export function AccessProvider({ children }: any) {
+export function AccessProvider({ children, revalidateMs = 0 }: any) {
   const [state, setState] = useState<any>({ loading: true, profile: null, permissions: {} })
   const refresh = async () => {
     if (!supabase) return setState({ loading: false, profile: null, permissions: {} })
@@ -28,6 +28,15 @@ export function AccessProvider({ children }: any) {
     setState({ loading: false, profile, permissions: permissions ?? {}, canReadLabels: Boolean(profile?.is_active && (profile?.role === 'admin' || permissions?.label_reader_access)), canManageDeliveryRoutes: Boolean(profile?.is_active && (profile?.role === 'admin' || canManageDeliveryRoutes(auth.user.email))) })
   }
   useEffect(() => { void refresh() }, [])
+  useEffect(() => {
+    if (!revalidateMs) return
+    const check = () => { void refresh().catch(() => setState({ loading: false, profile: null, permissions: {} })) }
+    const visible = () => { if (document.visibilityState === 'visible') check() }
+    const timer = window.setInterval(check, revalidateMs)
+    window.addEventListener('focus', check)
+    document.addEventListener('visibilitychange', visible)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', check); document.removeEventListener('visibilitychange', visible) }
+  }, [revalidateMs])
   const isAdmin = state.profile?.role === 'admin' && state.profile?.is_active
   const can = (name: string) => Boolean(isAdmin || state.permissions?.[name])
   return <AccessContext.Provider value={{ ...state, isAdmin, can, refresh, canAccessFinancas: canAccessPrivateFinances(state.profile?.email, state.profile?.is_active) }}>{children}</AccessContext.Provider>
