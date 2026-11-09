@@ -4,6 +4,7 @@ import { supabase } from "./lib/supabase";
 import { DROP_STATUSES, normalizePartner, normalizeZone, statusTone } from "./dropOptions";
 import { CADASTRO_TEXT_FILTERS, applyCadastroFilters, applyRegistrationKind, createCadastroFilters, type CadastroFilters, type RegistrationKind } from "./cadastrosFilters";
 import { useAccess } from "./access";
+import { DropRegistrationLinkActions } from "./DropRegistrationReview";
 import "./cadastros-lista.css";
 
 type DropRow = {
@@ -386,6 +387,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: Registrat
           >
             + Novo cadastro
           </button>
+          {kind === "drop_off" && <DropRegistrationLinkActions />}
         </div>
       </section>
       <section className="card">

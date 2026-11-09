@@ -14,6 +14,7 @@ const routes = [
   ['', 'Visao geral'], ['caixa', 'Fluxo de caixa'], ['planejamento', 'Planejamento'],
   ['analise', 'Planejado x realizado'], ['projecao', 'Projecao de caixa'],
   ['categorias', 'Categorias'], ['pagamentos', 'Pagamentos / CNAB'],
+  ['fechamentos', 'Fechamentos'],
   ['auditoria', 'Conferencia da origem'], ['configuracoes', 'Configuracoes'],
 ];
 const payload = emptyState();
@@ -47,7 +48,7 @@ function matches(row, params) {
   });
 }
 
-async function fixture(browser, { email, authEmail = email, role = 'admin', active = true, mobile = false, permissions = {}, allowed = false }) {
+async function fixture(browser, { email, authEmail = email, role = 'admin', active = true, mobile = false, permissions = {}, allowed = false, logged = true }) {
   const context = await browser.newContext({
     viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 },
     isMobile: mobile, hasTouch: mobile, serviceWorkers: 'block',
@@ -55,13 +56,13 @@ async function fixture(browser, { email, authEmail = email, role = 'admin', acti
   const user = { id: randomUUID(), email: authEmail, aud: 'authenticated' };
   const jwt = ['synthetic', Buffer.from(JSON.stringify({ sub: user.id, exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url'), 'local-only'].join('.');
   const state = { rows: [], reads: [], writes: [], rpcs: [], bootstrap: [], blocked: [], errors: [], continued: [], consoleErrors: [] };
-  await context.addInitScript(({ origin, user, jwt }) => {
-    if (location.origin !== origin) return;
+  await context.addInitScript(({ origin, user, jwt, logged }) => {
+    if (location.origin !== origin || !logged) return;
     localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token', JSON.stringify({
       access_token: jwt, refresh_token: 'synthetic-local-only', token_type: 'bearer',
       expires_at: Math.floor(Date.now() / 1000) + 3600, expires_in: 3600, user,
     }));
-  }, { origin, user, jwt });
+  }, { origin, user, jwt, logged });
   await context.routeWebSocket('**/*', socket => {
     const url = new URL(socket.url());
     if (url.origin === origin.replace('http:', 'ws:')) socket.connectToServer();
@@ -115,6 +116,13 @@ async function fixture(browser, { email, authEmail = email, role = 'admin', acti
         return json(singular ? row : [row]);
       }
       if (url.origin === origin) {
+        if (url.pathname === '/api/drop-registration') {
+          assert.equal(logged && active && (role === 'admin' || (permissions.cadastros_create && permissions.cadastros_edit)), true);
+          assert.equal(request.method(), 'GET');
+          assert.equal(request.headers().authorization, `Bearer ${jwt}`);
+          state.reads.push('drop_registration_intake');
+          return json({ submissions: [], nextOffset: null });
+        }
         if (url.pathname === '/api/bootstrap-admin') {
           state.bootstrap.push(request.method());
           assert.equal(authEmail, 'talitapreviatti@gmail.com', 'Bootstrap only for the authorized identity');
@@ -280,7 +288,7 @@ async function authorized(browser, mobile) {
     await page.locator('.financas-module .page-footer').waitFor();
     assert.equal(await page.locator('.app > aside').getByRole('button', { name: 'Finan\u00e7as', exact: true }).isVisible(), true);
     const module = page.locator('section.financas-module');
-    assert.equal(await module.locator('.financas-subnav a').count(), 9);
+    assert.equal(await module.locator('.financas-subnav a').count(), routes.length);
     const chartProof = await dashboard(page, name);
     for (const [path, title] of routes) {
       await module.getByRole('link', { name: title, exact: true }).click();
@@ -290,7 +298,7 @@ async function authorized(browser, mobile) {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1), false, `Unexpected global overflow ${name}/${path}`);
       await visibleCommandsAndLabels(module);
       if (await module.locator('select, input:not([type=checkbox]):not([type=file])').count()) await clearControls(module);
-      assert.equal(state.writes.length, 0, 'All nine finance routes are browsed read-only');
+      assert.equal(state.writes.length, 0, 'All finance routes are browsed read-only');
       assert.equal(state.rpcs.length, 0);
     }
     await module.getByRole('link', { name: 'Fluxo de caixa', exact: true }).click();
@@ -333,7 +341,7 @@ async function authorized(browser, mobile) {
     assert.equal(state.writes.length, 1);
     assert.deepEqual(state.bootstrap, []);
     clean(state);
-    console.log(`PASS Fabio ${name}: 9 rotas somente leitura; grafico ${JSON.stringify(chartProof)}; cadastro POST=1; Financas writes/RPC=0; viewport=980; sidebar=#101d20.`);
+    console.log(`PASS Fabio ${name}: ${routes.length} rotas somente leitura; grafico ${JSON.stringify(chartProof)}; cadastro POST=1; Financas writes/RPC=0; viewport=980; sidebar=#101d20.`);
   } finally { await current.context.close(); }
 }
 
@@ -343,13 +351,13 @@ async function accessScenarios(browser) {
     await talita.page.goto(`${origin}/financas`, { waitUntil: 'domcontentloaded' });
     await talita.page.locator('.financas-module .page-footer').waitFor();
     assert.equal(await talita.page.locator('.app > aside').getByRole('button', { name: 'Finan\u00e7as', exact: true }).isVisible(), true);
-    assert.equal(await talita.page.locator('.financas-subnav a').count(), 9);
+    assert.equal(await talita.page.locator('.financas-subnav a').count(), routes.length);
     assert.ok(talita.state.bootstrap.length > 0);
     assert.ok(talita.state.bootstrap.every(method => method === 'POST'));
     assert.ok(talita.state.reads.includes('financas_books'));
     assert.equal(talita.state.writes.length, 0);
     clean(talita.state);
-    console.log('PASS Talita ativa: App autenticado, 9 abas, acesso sem role admin/permissoes; bootstrap autorizado e interceptado.');
+    console.log(`PASS Talita ativa: App autenticado, ${routes.length} abas, acesso sem role admin/permissoes; bootstrap autorizado e interceptado.`);
   } finally { await talita.context.close(); }
 
   const allPermissions = Object.fromEntries(['cadastros_view', 'cadastros_create', 'cadastros_edit', 'cadastros_delete', 'financeiro_view', 'financeiro_manage', 'financas_view', 'financas_manage', 'financas_access', 'funcionarios_view', 'configuracoes_manage'].map(name => [name, true]));
@@ -390,6 +398,36 @@ async function accessScenarios(browser) {
   }
 }
 
+async function registrationRoutes(browser) {
+  const anonymous = await fixture(browser, { email: 'public@example.test', logged: false, mobile: true });
+  try {
+    await anonymous.page.goto(`${origin}/cadastrar-drop`, { waitUntil: 'domcontentloaded' });
+    await anonymous.page.getByRole('heading', { name: 'Pre-cadastro Drop', exact: true }).waitFor();
+    assert.equal(await anonymous.page.locator('.app, .auth-panel').count(), 0);
+    assert.equal(await anonymous.page.locator('meta[name=viewport]').getAttribute('content'), 'width=device-width, initial-scale=1');
+    await anonymous.page.locator('.dr-header img').evaluate(image => image.decode());
+    assert.deepEqual(anonymous.state.reads, []);
+    await capture(anonymous.page, 'public-registration-mobile');
+    clean(anonymous.state);
+  } finally { await anonymous.context.close(); }
+  for (const mobile of [false, true]) {
+    const reviewer = await fixture(browser, { email: 'fabioaf9@gmail.com', allowed: true, mobile });
+    try {
+      await reviewer.page.goto(`${origin}/cadastros/pre-cadastros`, { waitUntil: 'domcontentloaded' });
+      await reviewer.page.getByRole('heading', { name: 'Pre-cadastros de Drop', exact: true }).waitFor();
+      await reviewer.page.getByText('Nenhum pre-cadastro neste status.', { exact: true }).waitFor();
+      assert.equal(await reviewer.page.getByRole('button', { name: 'Copiar link de pre-cadastro' }).isVisible(), true);
+      assert.ok((await reviewer.page.locator('.app > .content > header').boundingBox()).y < 120, 'Review starts at top of panel');
+      assert.ok(reviewer.state.reads.includes('drop_registration_intake'));
+      assert.equal(reviewer.state.writes.length, 0);
+      assert.equal(await reviewer.page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1), false);
+      await capture(reviewer.page, `registration-review-${mobile ? 'mobile' : 'desktop'}`);
+      clean(reviewer.state);
+    } finally { await reviewer.context.close(); }
+  }
+  console.log('PASS rotas reais: cadastro publico sem login/leitura privada e revisao autenticada desktop/mobile, sem escritas.');
+}
+
 const response = await fetch(`${origin}/`, { signal: AbortSignal.timeout(5000) }).catch(error => {
   throw new Error(`Vite localhost:5173 indisponivel; nenhum servidor foi iniciado. ${error.message}`);
 });
@@ -399,9 +437,10 @@ assert.ok(html.includes('/@vite/client') && html.includes('/src/main.tsx'), 'Req
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ channel: 'msedge', headless: true });
 try {
+  await registrationRoutes(browser);
   await accessScenarios(browser);
   await authorized(browser, false);
   await authorized(browser, true);
-  console.log('PASS FINANCAS APP: 6 contextos autenticados; 18 navegacoes Financas; 2 cadastros sinteticos; zero producao, zero gravacoes financeiras, zero RPC; leitor e frontend inalterados.');
+  console.log(`PASS FINANCAS APP: 6 contextos autenticados; ${routes.length * 2} navegacoes Financas; 2 cadastros sinteticos; zero producao, zero gravacoes financeiras, zero RPC.`);
   console.log(`Screenshots sinteticos:\n${captures.map(path => path.replaceAll('\\', '/')).join('\n')}`);
 } finally { await browser.close(); }

@@ -53,7 +53,7 @@ if(process.argv.includes('--serve')) {
   const page=await context.newPage();const errors=[];const external=[];
   page.on('pageerror',error=>errors.push(error.message));
   await context.route('**/*',route=>{if(route.request().url().startsWith(url))return route.continue();external.push(route.request().url());return route.abort();});
-  const paths=['','caixa','planejamento','analise','projecao','categorias','pagamentos','auditoria','configuracoes'];
+  const paths=['','caixa','planejamento','analise','projecao','categorias','pagamentos','fechamentos','auditoria','configuracoes'];
   const go=async path=>{await page.goto(`${url}/financas/${path}`);await page.locator('.page-footer').waitFor();};
   const dialog=()=>page.getByRole('dialog');
   const clickSave=async()=>{await dialog().getByRole('button',{name:'Salvar',exact:true}).click();await dialog().waitFor({state:'hidden'});};
@@ -61,7 +61,7 @@ if(process.argv.includes('--serve')) {
   const downloaded=async button=>{const pending=page.waitForEvent('download');await button.click();const download=await pending;const stream=await download.createReadStream();const chunks=[];for await(const chunk of stream)chunks.push(chunk);return {name:download.suggestedFilename(),content:Buffer.concat(chunks)};};
   try {
     await go('');
-    assert.equal(await page.locator('.financas-subnav a').count(),9);
+    assert.equal(await page.locator('.financas-subnav a').count(),10);
     assert.equal(await page.locator('#outer-button').evaluate(element=>getComputedStyle(element).backgroundColor),'rgb(201, 202, 203)');
     assert.equal(await page.locator('#outer-header h1').evaluate(element=>getComputedStyle(element).fontSize),'18px');
     for(const label of ['Fluxo de caixa','Planejamento','Configuracoes','Visao geral']) {
@@ -126,7 +126,7 @@ if(process.argv.includes('--serve')) {
     await page.goto(`${url}/financas/unknown`);await page.locator('.page-footer').waitFor();assert.equal(new URL(page.url()).pathname,'/financas');
     await page.evaluate(()=>window.__financasTest.access=false);await page.getByRole('button',{name:'Atualizar base',exact:true}).click();await page.getByRole('alert').waitFor();assert.equal(await page.locator('.page-footer').count(),0);assert.equal(await page.locator('input[type=password]').count(),0);
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-    console.log('PASS: 9 rotas, CRUD/falha/conflito, CSV, planejamento, projecao, CNAB, categorias, auditoria, export/restore, portal/CSS, desktop/390/360; apenas dados sinteticos, zero rede externa.');
+    console.log('PASS: 10 rotas, CRUD/falha/conflito, CSV, planejamento, projecao, CNAB, categorias, auditoria, export/restore, portal/CSS, desktop/390/360; apenas dados sinteticos, zero rede externa.');
   } catch (failure) {
     console.error('Harness diagnostics:',JSON.stringify({errors,external,text:await page.locator('#root').innerText()}));
     throw failure;

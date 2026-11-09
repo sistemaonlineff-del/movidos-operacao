@@ -19,6 +19,8 @@ const Financeiro = lazy(() => import("./Financeiro"));
 const Financas = lazy(() => import("./financas/App"));
 const FinancialInvoices = lazy(() => import("./FinancialInvoices"));
 const InvoiceUpload = lazy(() => import("./FinancialInvoices").then(module => ({ default: module.InvoiceUpload })));
+const PublicDropRegistration = lazy(() => import("./PublicDropRegistration"));
+const DropRegistrationReview = lazy(() => import("./DropRegistrationReview"));
 const CnabUpload = lazy(() => import("./CnabUpload"));
 const ContractTemplateManager = lazy(() => import("./ContractTemplateManager"));
 const FinanceiroVisuais = lazy(() => import("./FinanceiroVisuais"));
@@ -1061,6 +1063,7 @@ function App() {
     return () => listener.subscription.unsubscribe();
   }, []);
   if (location.pathname === '/enviar-nf') return <Suspense fallback={<main>Carregando...</main>}><InvoiceUpload /></Suspense>;
+  if (location.pathname.replace(/\/+$/, '') === '/cadastrar-drop') return <Suspense fallback={<main>Carregando...</main>}><PublicDropRegistration /></Suspense>;
   if (checking) return <main className="auth-page" />;
   if (!logged) return <Login onSuccess={() => setLogged(true)} />;
   const exit = async () => {
@@ -1088,6 +1091,7 @@ function App() {
           }
         />
         <Route path="/cadastros/last-mile" element={<Guard permission="cadastros_view"><Lista kind="last_mile" /></Guard>} />
+        <Route path="/cadastros/pre-cadastros" element={<DropRegistrationReview onOpenDrop={id => { window.location.assign(`/cadastros/novo?edit=${encodeURIComponent(id)}`); }} />} />
         <Route path="/cadastros/last-mile/novo" element={<Guard permission="cadastros_create"><LastMileCadastro /></Guard>} />
         <Route path="/cadastros/mais-envios" element={<Guard permission="cadastros_view"><MaisEnvios /></Guard>} />
         <Route path="/cadastros/mais-envios/novo" element={<MaisEnvios view="form" />} />
@@ -1198,6 +1202,7 @@ function SecureLayoutInner({
     "/": "Visão Geral - Detalhada",
     "/cadastros": "Cadastros",
     "/cadastros/novo": "Novo cadastro",
+    "/cadastros/pre-cadastros": "Pre-cadastros recebidos",
     "/cadastros/last-mile": "Cadastros Last Mile",
     "/cadastros/last-mile/novo": "Novo cadastro Last Mile",
     "/cadastros/mais-envios": "Cadastros Mais Envios",
@@ -1263,6 +1268,7 @@ function SecureLayoutInner({
                   )}
                   {can("cadastros_view") && <button className={loc.pathname === "/cadastros/last-mile" ? "sub-active" : ""} onClick={() => nav("/cadastros/last-mile")}>Last Mile</button>}
                   {can("cadastros_view") && <button className={loc.pathname === "/cadastros/mais-envios" ? "sub-active" : ""} onClick={() => nav("/cadastros/mais-envios")}>Mais Envios</button>}
+                  {can("cadastros_create") && can("cadastros_edit") && <button className={loc.pathname === "/cadastros/pre-cadastros" ? "sub-active" : ""} onClick={() => nav("/cadastros/pre-cadastros")}>Pre-cadastros</button>}
                 </div>
               )}
               {can("cadastros_create") && <>

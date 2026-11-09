@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const moduleRoot = resolve(root, 'src/financas');
 const source = process.env.FINANCAS_SOURCE || fileURLToPath(new URL('../../../Movidos-Financeiro/src/', import.meta.url));
 test('todos os seletores CSS sao privados, inclusive dialogs e media queries', () => {
-  for (const name of ['styles.css','projection.css']) {
+  for (const name of ['styles.css','projection.css','closing.css']) {
     const css = readFileSync(resolve(moduleRoot,name),'utf8');
     postcss.parse(css).walkRules(rule => {
       for (const selector of rule.selectors) assert.ok(selector.startsWith('.financas-module'),selector);

@@ -2,6 +2,14 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Fechamentos e cadastro publico (08/11/2026)
+
+Nova aba Financas > Fechamentos para revisar Talita/Jorge e valor da NF, escolher destino empresa/pessoal, classificar, planejar/confirmar recebimento e calcular imposto com base/aliquota explicitas. Preserva origem e snapshots, bloqueia reimportacao e nao presume pagamento, lucro ou regra fiscal. O financeiro Mais Envios continua aguardando a planilha da cliente.
+
+Novo link publico `/cadastrar-drop` para contato, endereco, PIX, fotos e localizacao, com recebimento pendente e revisao em Cadastros > Pre-cadastros. Aprovar cria INTERESSADO, sem iniciar operacao. Dados e fotos privados, sem lista publica. **Unico SQL novo desta rodada:** [20261108140000_public_drop_registration.sql](supabase/migrations/20261108140000_public_drop_registration.sql), a executar manualmente antes do deploy. Nao confundir com o SQL de Financas ja informado como aplicado pelo usuario. Nenhum SQL desta rodada foi executado pelo assistente.
+
+Decisoes conservadoras, campos/origens, passos, limites e testes em [docs/NOVAS-SOLICITACOES-20261108.md](docs/NOVAS-SOLICITACOES-20261108.md). Implementacao local, sem commit/push/PR automaticamente.
+
 ## Financas privadas e visual integrado (08/11/2026)
 
 Integracao local das nove telas existentes em Movidos-Financeiro sob `/financas`, com o login atual e menu Financas somente para os perfis ativos de `fabioaf9@gmail.com` e `talitapreviatti@gmail.com`. Outros administradores nao recebem acesso automatico. O modulo reutiliza calculos, importacao CSV, planejamento, projecao e CNAB da origem; funcionalidades ainda ausentes na origem nao foram inventadas. Financeiro iMile continua separado, com suas rotas, dados e regras existentes.
