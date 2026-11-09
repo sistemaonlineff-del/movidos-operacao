@@ -11,6 +11,8 @@ import { csvExport, mergeStatement, previewStatement } from './csv';
 import type { ImportPreview } from './csv';
 import { createCnab } from './cnab';
 import { readBackup } from './backup';
+import Closing from './ClosingReview';
+import { assertClosingSnapshots } from './closing';
 import '@fontsource/dm-sans/400.css';
 import '@fontsource/dm-sans/500.css';
 import '@fontsource/dm-sans/600.css';
@@ -21,6 +23,7 @@ import './projection.css';
 const navigation = [
   ['', 'Visao geral', LayoutDashboard], ['caixa', 'Fluxo de caixa', ArrowLeftRight], ['planejamento', 'Planejamento', CalendarDays],
   ['analise', 'Planejado x realizado', BarChart3], ['projecao', 'Projecao de caixa', TrendingUp], ['categorias', 'Categorias', Tags], ['pagamentos', 'Pagamentos / CNAB', CreditCard],
+  ['fechamentos', 'Fechamentos', ClipboardList],
   ['auditoria', 'Conferencia da origem', FileCheck2], ['configuracoes', 'Configuracoes', Settings2],
 ] as const;
 const today = () => new Date().toLocaleDateString('sv-SE');
@@ -74,7 +77,7 @@ export default function FinancasModule() {
   const save: SaveData = async data => {
     if (!envelope || lock.current || loading) return false;
     lock.current=true; setBusy(true); setError('');
-    try { const next = await saveState(envelope,data); setEnvelope(next); setNotice(`Alteracoes salvas. Revisao ${next.revision}.`); return true; }
+    try { assertClosingSnapshots(envelope.data,data); const next = await saveState(envelope,data); setEnvelope(next); setNotice(`Alteracoes salvas. Revisao ${next.revision}.`); return true; }
     catch (failure) { setError(message(failure)); return false; } finally { lock.current=false; setBusy(false); }
   };
   if (!envelope) return <section className="financas-module"><div className="startup"><h1>Financas</h1>{loading ? <p>Carregando base financeira...</p> : <><p role="alert">{error}</p><button onClick={()=>void reload()}><RefreshCw size={16}/>Tentar novamente</button></>}</div></section>;
@@ -96,6 +99,7 @@ export default function FinancasModule() {
       <Route path="projecao" element={<Projection state={state} save={save} busy={busy} report={setError}/>}/>
       <Route path="categorias" element={<Categories state={state} save={save} busy={busy}/>}/>
       <Route path="pagamentos" element={<Payments state={state} edit={item=>setEditor({kind:'payment',item})} save={save} busy={busy} report={setError}/>}/>
+      <Route path="fechamentos" element={<Closing state={state} save={save} busy={busy}/>}/>
       <Route path="auditoria" element={<Audit state={state}/>}/>
       <Route path="configuracoes" element={<Settings state={state} save={save} revision={envelope.revision} busy={busy} report={setError}/>}/>
       <Route path="*" element={<Navigate to="/financas" replace/>}/>

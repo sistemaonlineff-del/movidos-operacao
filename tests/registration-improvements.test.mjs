@@ -379,7 +379,7 @@ test('Registration improvements: current App, isolated browser integration', asy
         for (const group of groups) {
           const parent = nav.getByRole('button', { name: group.label })
           const submenu = parent.locator('xpath=following-sibling::*[1][self::div]')
-          assert.deepEqual(await submenu.locator('button').allTextContents(), ['Drop off', 'Last Mile', 'Mais Envios'])
+          assert.deepEqual(await submenu.locator('button').allTextContents(), group.paths[0] === '/cadastros' ? ['Drop off', 'Last Mile', 'Mais Envios', 'Pre-cadastros'] : ['Drop off', 'Last Mile', 'Mais Envios'])
           await parent.click()
           assert.equal(await submenu.count(), 0, 'Group must collapse')
           await parent.click()
