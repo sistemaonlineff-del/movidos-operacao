@@ -7,6 +7,7 @@ const userId='11111111-1111-4111-8111-111111111111', id='22222222-2222-4222-8222
 const snapshot={name:'Drop Teste',responsible:'Pessoa Teste',phone:'11999999999',address:'Rua Teste',address_number:'10',neighborhood:'Centro',municipality:'Suzano',state:'SP',postal_code:'08600000',pix_key:'teste@example.invalid',pix_holder_name:'Pessoa Teste',latitude:-23.5,longitude:-46.3}
 const manifest=[{path:`submissions/${id}/33333333-3333-4333-8333-333333333333.png`,hash:'b'.repeat(64),size:70,type:'image/png',name:'foto.png',caption:''}]
 const migration=await readFile('supabase/migrations/20261108140000_public_drop_registration.sql','utf8')
+const photoMigration=await readFile('supabase/migrations/20261109150000_drop_registration_three_to_five_photos.sql','utf8')
 const literal=value=>`'${JSON.stringify(value).replaceAll("'","''")}'::jsonb`
 
 test('isolated intake SQL: anon/storage deny, atomic quotas, retry, actual guards and approval never activates',async()=>{
@@ -46,6 +47,12 @@ test('isolated intake SQL: anon/storage deny, atomic quotas, retry, actual guard
     await assert.rejects(db.exec(`select drop_registration_finalize('${id}','${'a'.repeat(64)}')`),/sem confirmacao/)
     await db.exec(`insert into storage.objects(bucket_id,name,metadata) values('drop-registration-private','${manifest[0].path}','{"size":70,"mimetype":"image/png"}')`)
     await db.exec(`select drop_registration_finalize('${id}','${'a'.repeat(64)}')`)
+    await db.exec('reset role')
+    const savedLegacy=(await db.query('select * from drop_registration_intake')).rows
+    const policies=(await db.query('select * from pg_policies order by schemaname,tablename,policyname')).rows
+    await db.exec(photoMigration);await db.exec(photoMigration)
+    assert.deepEqual((await db.query('select * from drop_registration_intake')).rows,savedLegacy)
+    assert.deepEqual((await db.query('select * from pg_policies order by schemaname,tablename,policyname')).rows,policies)
     await db.exec('reset role;set role authenticated')
     const approve=`select drop_registration_review('${id}',1,'approve',${literal(snapshot)},null,null,null,'${userId}') as result`
     assert.equal((await db.query('select * from drop_registration_intake')).rows.length,1)
@@ -77,6 +84,7 @@ test('isolated intake SQL: anon/storage deny, atomic quotas, retry, actual guard
     await assert.rejects(db.exec(approve.replace(userId,'99999999-9999-4999-8999-999999999999')),/Sem permissao/)
     await db.exec('reset role')
     await db.exec(migration)
+    await db.exec(photoMigration)
     assert.deepEqual((await db.query("select prosrc from pg_proc where oid='guard_drop_duplicate()'::regprocedure")).rows,guard)
     await assert.rejects(db.exec(`select drop_registration_validate(${literal({...snapshot,is_active:true})})`),/Campo nao permitido/)
     await assert.rejects(db.exec(`select drop_registration_validate(${literal({...snapshot,cpf:'11111111111'})})`),/documento/)
@@ -113,10 +121,21 @@ test('isolated intake SQL: anon/storage deny, atomic quotas, retry, actual guard
     await db.exec('reset role')
     assert.equal((await db.query("select count(*) from drops where is_active=true and status='INTERESSADO'")).rows[0].count,2)
     assert.equal((await db.query('select count(*) from audit_logs')).rows[0].count,2)
+    const photoId='66666666-6666-4666-8666-666666666666'
+    const photoManifest=(count,clientId)=>Array.from({length:count},(_,index)=>({...manifest[0],path:`submissions/${clientId}/33333333-3333-4333-8333-${String(index).padStart(12,'0')}.png`,hash:String(index+1).repeat(64)}))
+    const photoReserve=(count,clientId=photoId)=>`select drop_registration_reserve('${clientId}','${'a'.repeat(64)}',${literal(snapshot)},${literal(photoManifest(count,clientId))},'${'c'.repeat(64)}') as record`
+    await db.exec('set role service_role')
+    for (const count of [0,1,2,6]) await assert.rejects(db.exec(photoReserve(count)),/tres e cinco/)
+    for (const count of [3,4,5]) {
+      const clientId=`66666666-6666-4666-8666-${String(count).padStart(12,'0')}`
+      assert.equal((await db.query(photoReserve(count,clientId))).rows[0].record.photos.length,count)
+      assert.equal((await db.query(photoReserve(count,clientId))).rows[0].record.id,clientId)
+    }
+    await db.exec('reset role')
     await db.exec(`update drop_registration_limits set attempts=20 where bucket='${'c'.repeat(64)}';set role service_role`)
-    assert.equal((await db.query(reserve)).rows[0].record,null)
+    assert.equal((await db.query(photoReserve(3))).rows[0].record,null)
     await db.exec(`reset role;update drop_registration_limits set attempts=500 where bucket='global';set role service_role`)
-    assert.equal((await db.query(reserve.replaceAll('c'.repeat(64),'e'.repeat(64)))).rows[0].record,null)
+    assert.equal((await db.query(photoReserve(3).replaceAll('c'.repeat(64),'e'.repeat(64)))).rows[0].record,null)
     await db.exec('reset role')
     await db.exec(await readFile('tests/drop-registration-rollback.sql','utf8'))
     await db.exec('set role authenticated')
@@ -125,7 +144,8 @@ test('isolated intake SQL: anon/storage deny, atomic quotas, retry, actual guard
     await assert.rejects(db.exec(reserve),/permission denied/)
     await db.exec('reset role')
     assert.equal((await db.query('select count(*) from drops')).rows[0].count,2)
-    assert.equal((await db.query('select count(*) from drop_registration_intake')).rows[0].count,2)
+    assert.equal((await db.query('select count(*) from drop_registration_intake')).rows[0].count,5)
     await db.exec(migration)
+    await db.exec(photoMigration)
   } finally {await db.close()}
 })

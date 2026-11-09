@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { MAX_PHOTOS, MAX_PHOTO_BYTES, MAX_TOTAL_PHOTO_BYTES } from './dropRegistrationShared.js'
+import { MIN_PHOTOS, MAX_PHOTOS, MAX_PHOTO_BYTES, MAX_TOTAL_PHOTO_BYTES } from './dropRegistrationShared.js'
 
 export const registrationHash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 
@@ -75,7 +75,7 @@ export function registrationImage(content: Buffer) {
 }
 
 export function registrationFiles(input: unknown) {
-  if (!Array.isArray(input) || input.length<1 || input.length>MAX_PHOTOS) throw new Error('Envie de uma a tres fotos.')
+  if (!Array.isArray(input) || input.length<MIN_PHOTOS || input.length>MAX_PHOTOS) throw new Error('Envie de tres a cinco fotos.')
   let total=0
   const hashes=new Set<string>()
   return input.map((photo: unknown) => {

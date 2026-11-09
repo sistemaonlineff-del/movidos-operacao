@@ -10,6 +10,8 @@ export const snapshot = {name:'Drop Sintetico',responsible:'Pessoa Teste',phone:
 test('public snapshot whitelist, explicit coordinates and actual delegated permissions', () => {
   for (const field of ['status','is_active','monthly_value','created_by','operation_started_at','visited']) assert.throws(()=>shared.validateRegistration({...snapshot,[field]:'forged'}),/Campo nao permitido/)
   assert.equal(shared.MAX_REQUEST_BYTES,4_500_000)
+  assert.equal(shared.MIN_PHOTOS,3)
+  assert.equal(shared.MAX_PHOTOS,5)
   assert.equal(shared.validateRegistration({...snapshot,pix_key:'',pix_holder_name:''}).pix_key,null)
   assert.equal(shared.validateRegistration({...snapshot,neighborhood:''}).neighborhood,null)
   assert.throws(()=>shared.validateRegistration({...snapshot,name:'Nome\ncom controle'}),/invalido/)
