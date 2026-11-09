@@ -2,6 +2,12 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Textos e fotos do pre-cadastro (09/11/2026)
+
+O formulario publico `/cadastrar-drop` inclui a orientacao do Google Maps junto a latitude/longitude, o campo "Fale um pouco sobre voce e suas experiencias" e o pedido de fotos da fachada e espaco interno. Novos envios exigem **3 a 5 fotos** no formulario, API e reserva do banco. Mantidos formatos JPEG/PNG/WebP, 2 MB no total, privacidade, quotas, protocolo de recuperacao e aprovacao sem ativacao automatica.
+
+Novo SQL incremental: [20261109150000_drop_registration_three_to_five_photos.sql](supabase/migrations/20261109150000_drop_registration_three_to_five_photos.sql), depois da migracao original de pre-cadastros. O usuario informou em 09/11/2026 que ja o aplicou; o assistente nao executou nem verificou o banco remoto. Preserva linhas e fotos antigas com 1 ou 2 arquivos, que continuam disponiveis para revisao; nao reaplicar scripts antigos por cima desta migracao. Nao altera a chave `notes` nem os textos/dados ja recebidos. Testes: `npm run test:drop-registration` (inclui limites 0/1/2/3/4/5/6, banco repetivel, preservacao de RLS/dados, textos e navegador celular/desktop).
+
 ## Financeiro Mais Envios (09/11/2026)
 
 Modelo novo recebido e VBA inspecionado estaticamente, sem executar macros ou importar dados privados: financeiro em `/financeiro/mais-envios/pagamento-total` e `/financeiro/mais-envios/pagamento-detalhes`. Importa os CSVs Marketplace/Postagem, revisa codigos e status manuais, vincula a Smart das postagens, calcula resumo por Smart, exporta Excel/PDF/ZIP, prepara rascunho com PDF anexo e permite envio direto explicitamente confirmado usando a conexao de e-mail existente. Confirmacao salva snapshot imutavel de linhas, contatos e texto; nao altera fechamentos iMile, Financas privadas ou cadastros.
