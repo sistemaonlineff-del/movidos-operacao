@@ -42,6 +42,7 @@ export default function DropRegistrationReview({onApproved,onOpenDrop}:{onApprov
   const [rows,setRows]=useState<DropRegistration[]>([]),[loading,setLoading]=useState(true),[failed,setFailed]=useState(false),[nextOffset,setNextOffset]=useState<number|null>(null)
   const [selected,setSelected]=useState<DropRegistration|null>(null),[values,setValues]=useState<RegistrationValues|null>(null),[partner,setPartner]=useState(''),[note,setNote]=useState('')
   const [status,setStatus]=useState('pending'),[busy,setBusy]=useState(false),[message,setMessage]=useState(''),[notice,setNotice]=useState('')
+  const [query,setQuery]=useState('')
   const [duplicates,setDuplicates]=useState<DuplicateResult|null>(null),[acknowledged,setAcknowledged]=useState(false),[photoUrls,setPhotoUrls]=useState<string[]>([])
   const lock=useRef(false),generation=useRef(0),photoGeneration=useRef(0)
   const load=async(offset=0)=>{
@@ -96,13 +97,21 @@ export default function DropRegistrationReview({onApproved,onOpenDrop}:{onApprov
   }
   if(accessLoading)return <section className="drop-registration dr-review" role="status">Carregando permissoes...</section>
   if(!permitted)return <section className="drop-registration dr-review" role="alert"><h2>Acesso restrito</h2><p>Requer perfil ativo e permissao de criar e editar cadastros, ou administrador.</p></section>
+  const term=query.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+  const digits=term.replace(/\D/g,'')
+  const filtered=rows.filter(row=>{
+    if(status!=='all'&&row.status!==status)return false
+    const snapshot=row.review_snapshot??row.snapshot
+    const identity=[row.id,snapshot.name,snapshot.responsible,snapshot.municipality,snapshot.phone,snapshot.alternate_phone].join(' ').toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    return !term||identity.includes(term)||(/^[\d\s()+./-]+$/.test(term)&&digits.length>0&&[snapshot.phone,snapshot.alternate_phone].some(phone=>String(phone??'').replace(/\D/g,'').includes(digits)))
+  })
   return <section className="drop-registration dr-review">
     <header className="dr-review-header"><div><h1>Pre-cadastros de Drop</h1><p>Recebimento e revisao</p></div><div className="dr-review-tools"><DropRegistrationLinkActions includeReviewLink={false}/><button type="button" className="dr-icon" disabled={busy||loading} onClick={()=>{setSelected(null);setValues(null);setPhotoUrls([]);void load()}} title="Atualizar pre-cadastros" aria-label="Atualizar pre-cadastros"><RefreshCw size={18}/></button></div></header>
-    <div className="dr-review-filter"><label>Status<select aria-label="Status" value={status} disabled={busy} onChange={event=>{setStatus(event.target.value);setSelected(null);setValues(null);setPhotoUrls([]);photoGeneration.current++}}><option value="all">Todos</option>{Object.entries(statusLabels).map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label><span>{rows.filter(row=>status==='all'||row.status===status).length} carregados</span></div>
+    <div className="dr-review-filter"><label>Status<select aria-label="Status" value={status} disabled={busy} onChange={event=>{setStatus(event.target.value);setSelected(null);setValues(null);setPhotoUrls([]);photoGeneration.current++}}><option value="all">Todos</option>{Object.entries(statusLabels).map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label><label>Buscar nos pre-cadastros carregados<input type="search" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Nome, protocolo ou telefone"/></label><span>{filtered.length} de {rows.length} carregados</span></div>
     {message&&<p role="alert" className="dr-error">{message}</p>}{notice&&<p role="status" className="dr-notice">{notice}</p>}
     {loading&&<p role="status">Carregando pre-cadastros...</p>}
-    {!loading&&!failed&&!rows.some(row=>status==='all'||row.status===status)&&<p className="dr-empty">Nenhum pre-cadastro neste status.</p>}
-    <div className="dr-table-scroll"><table><thead><tr><th>Drop / responsavel</th><th>Cidade</th><th>Recebido</th><th>Status</th><th>Revisao</th></tr></thead><tbody>{rows.filter(row=>status==='all'||row.status===status).map(row=><tr key={row.id} aria-selected={selected?.id===row.id}><td><strong>{row.snapshot.name}</strong><small>{row.snapshot.responsible}</small></td><td>{row.snapshot.municipality} / {row.snapshot.state}</td><td>{new Date(row.created_at).toLocaleString('pt-BR')}</td><td><span className={`dr-status dr-status-${row.status}`}>{statusLabels[row.status]}</span></td><td><button type="button" className="dr-icon" disabled={busy} title={`Revisar ${row.snapshot.name}`} aria-label={`Revisar ${row.snapshot.name}`} onClick={()=>select(row)}><Eye size={18}/></button></td></tr>)}</tbody></table></div>
+    {!loading&&!failed&&!filtered.length&&<p className="dr-empty">Nenhum pre-cadastro neste status.</p>}
+    <div className="dr-table-scroll"><table><thead><tr><th>Drop / responsavel</th><th>Cidade</th><th>Recebido</th><th>Status</th><th>Revisao</th></tr></thead><tbody>{filtered.map(row=><tr key={row.id} aria-selected={selected?.id===row.id}><td><strong>{row.snapshot.name}</strong><small>{row.snapshot.responsible}</small></td><td>{row.snapshot.municipality} / {row.snapshot.state}</td><td>{new Date(row.created_at).toLocaleString('pt-BR')}</td><td><span className={`dr-status dr-status-${row.status}`}>{statusLabels[row.status]}</span></td><td><button type="button" className="dr-icon" disabled={busy} title={`Revisar ${row.snapshot.name}`} aria-label={`Revisar ${row.snapshot.name}`} onClick={()=>select(row)}><Eye size={18}/></button></td></tr>)}</tbody></table></div>
     {nextOffset!==null&&<button type="button" disabled={loading||busy} onClick={()=>void load(nextOffset)}>Carregar mais</button>}
     {selected&&values&&<section className="dr-review-editor" aria-label="Revisao do pre-cadastro"><div className="dr-section-heading"><div><h2>{selected.snapshot.name}</h2><span className="dr-protocol">Protocolo {selected.id}</span></div><button type="button" className="dr-icon" disabled={busy} title="Fechar revisao" aria-label="Fechar revisao" onClick={()=>{setSelected(null);setValues(null);setPhotoUrls([]);photoGeneration.current++}}><X size={18}/></button></div>
       <div className="dr-photo-heading"><span>{selected.photos.length} foto(s)</span><button type="button" disabled={busy} onClick={()=>void photos()}><Image size={18} aria-hidden="true"/>Ver fotos privadas</button></div>

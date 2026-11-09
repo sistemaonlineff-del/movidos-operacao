@@ -66,7 +66,10 @@ export function applyCadastroFilters(query: FilterQuery, filters: CadastroFilter
   for (const { field } of CADASTRO_TEXT_FILTERS) {
     const value = filters[field].trim();
     if (!value) continue;
-    if (["phone", "cnpj", "postal_code"].includes(field) && /\d/.test(value)) {
+    if (field === "phone" && /\d/.test(value)) {
+      const pattern = quoted(numericMaskPattern(value));
+      query.or(`phone.match.${pattern},alternate_phone.match.${pattern}`);
+    } else if (["phone", "cnpj", "postal_code"].includes(field) && /\d/.test(value)) {
       query.filter(field, "match", numericMaskPattern(value));
     } else {
       const term = literalPattern(value);
@@ -79,7 +82,7 @@ export function applyCadastroFilters(query: FilterQuery, filters: CadastroFilter
       .map((field) => `${field}.ilike.${quoted(`*${term}*`)}`);
     if (/^\d{1,15}$/.test(term)) terms.push(`legacy_id.eq.${Number(term)}`);
     if (/^[\d\s()+./-]+$/.test(filters.query.trim()) && /\d/.test(filters.query)) {
-      for (const field of ["phone", "cnpj", "postal_code"]) {
+      for (const field of ["phone", "alternate_phone", "cnpj", "postal_code"]) {
         terms.push(`${field}.match.${quoted(numericMaskPattern(filters.query))}`);
       }
     }

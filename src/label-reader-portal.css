@@ -1,0 +1,7 @@
+.label-reader-portal{max-width:1100px;margin:0 auto;padding:16px;min-width:0}
+.reader-portal-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.reader-portal-header>div{display:flex;align-items:center;gap:10px;min-width:0}
+.reader-portal-header h1{font-size:22px;margin:0;line-height:1.2;overflow-wrap:anywhere;letter-spacing:0}
+.reader-portal-header button{display:inline-flex;align-items:center;gap:8px;flex-shrink:0;background:#fff;border:1px solid #cbd9d8;border-radius:6px;color:#23413d}
+.label-reader-portal>.label-reader{min-width:0}
+@media(max-width:600px){.label-reader-portal{padding:10px}.reader-portal-header h1{font-size:18px}}

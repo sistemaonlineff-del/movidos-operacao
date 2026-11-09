@@ -70,6 +70,12 @@ test('label authorization validates identity, active profile and reader permissi
       await handler({ method: name === 'label-volume' ? 'POST' : 'GET', headers: {}, body: { baseId: 'test', scanKey: 'local-test-scan-12345' } }, response)
       assert.equal(status, 401, name)
       assert.equal(typeof body.error, 'string')
+      profile = { role: 'operador', is_active: true }
+      permissions = { label_reader_access: false }
+      permissionFailure = false
+      await handler({ method: name === 'label-volume' ? 'POST' : 'GET', headers: request.headers, body: { baseId: 'test', scanKey: 'local-test-scan-12345' } }, response)
+      assert.equal(status, 403, `${name}: revoked permission with an existing valid token`)
+      assert.equal(typeof body.error, 'string')
     }
   } finally {
     globalThis.fetch = originalFetch

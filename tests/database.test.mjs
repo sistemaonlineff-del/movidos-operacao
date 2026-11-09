@@ -5,6 +5,27 @@ import { PGlite } from '@electric-sql/pglite'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
 
+test('new label-reader accounts require explicit opt-in without changing existing permissions', async () => {
+  const database = new PGlite()
+  try {
+    await database.exec(`create role authenticated;
+      create table user_module_permissions(user_id integer primary key,label_reader_access boolean not null default true,cadastros_view boolean not null default false);
+      alter table user_module_permissions enable row level security;
+      create policy existing_permissions on user_module_permissions for select to authenticated using(false);
+      insert into user_module_permissions values(1,true,true),(2,false,false);`)
+    const before = (await database.query('select * from user_module_permissions order by user_id')).rows
+    const policies = (await database.query('select * from pg_policies')).rows
+    const migration = await readFile('supabase/migrations/20261109120000_label_reader_opt_in.sql', 'utf8')
+    await database.exec(migration); await database.exec(migration)
+    assert.deepEqual((await database.query('select * from user_module_permissions order by user_id')).rows, before)
+    assert.deepEqual((await database.query('select * from pg_policies')).rows, policies)
+    await database.exec('insert into user_module_permissions(user_id) values(3)')
+    assert.deepEqual((await database.query('select * from user_module_permissions where user_id=3')).rows, [{ user_id: 3, label_reader_access: false, cadastros_view: false }])
+    await database.exec('update user_module_permissions set label_reader_access=true where user_id=3')
+    assert.equal((await database.query('select label_reader_access from user_module_permissions where user_id=3')).rows[0].label_reader_access, true)
+  } finally { await database.close() }
+})
+
 test('shared invoice intake migration is repeatable, private and enforces atomic daily quotas',async()=>{
   const database=new PGlite()
   try{
