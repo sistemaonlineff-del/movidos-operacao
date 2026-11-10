@@ -98,6 +98,9 @@ try{
     assert.ok(state.calls.includes('/api/label-read'))
     const geometry=await page.evaluate(()=>({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth}))
     assert.ok(geometry.scroll<=geometry.width+1,JSON.stringify(geometry))
+    assert.equal(await page.locator('.label-reader > :last-child').getAttribute('class'),'label-dispatch')
+    const order=await page.evaluate(()=>({photo:document.querySelector('.label-grid').getBoundingClientRect().bottom,result:document.querySelector('.label-route-details').getBoundingClientRect().bottom,dispatch:document.querySelector('.label-dispatch').getBoundingClientRect().top}))
+    assert.ok(order.dispatch>=Math.max(order.photo,order.result),JSON.stringify(order))
     await page.screenshot({path:`tmp/label-reader/screenshots/reader-${mobile?'mobile':'desktop'}.png`,fullPage:true})
     state.allowed=false
     await page.clock.fastForward(15050)
