@@ -1,1 +1,6 @@
-{ "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }] }
+{
+	"rewrites": [
+		{ "source": "/api/label-dispatch", "destination": "/api/label-volume?__labelDispatch=1" },
+		{ "source": "/(.*)", "destination": "/index.html" }
+	]
+}

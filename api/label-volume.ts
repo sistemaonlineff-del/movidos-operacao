@@ -1,9 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { authorizeLabelReaderContext, LabelApiError } from '../server/label-auth.js'
+import dispatch from '../server/label-dispatch.js'
 
 const dateInBrazil = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()).split('/').reverse().join('-')
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.query?.__labelDispatch === '1') return dispatch(req, res)
   res.setHeader('Cache-Control', 'private, no-store, max-age=0'); res.setHeader('Vary', 'Authorization')
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'Método não permitido.' }) }
   try {

@@ -2,6 +2,12 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Limite de funcoes Vercel Hobby (10/11/2026)
+
+A expedicao acrescentou uma 13a funcao e excedeu o limite de 12 do plano Hobby. A correcao mantem `/api/label-dispatch`, mas encaminha essa URL em `vercel.json` para a funcao existente `/api/label-volume`; sua implementacao fica como modulo interno em `server/label-dispatch.ts`, fora da descoberta de funcoes. Total: 12 pontos de entrada em `api/`, sem remover recursos ou mudar autenticacao/permissoes. O rewrite especifico deve permanecer antes do fallback da SPA. Nao exige plano pago, novo SQL, variavel de ambiente ou mudanca de URL no frontend.
+
+Publicar a correcao e fazer deploy do novo commit; repetir o deploy do commit anterior continua com 13 funcoes. `npm run test:label-dispatch` confere o limite, o rewrite e a autorizacao do endpoint consolidado. Validacao local nao substitui conferir o resultado do deploy na Vercel.
+
 ## Mapa publico e expedicao por motorista (10/11/2026)
 
 Publicacao por PR, sem merge ou SQL remoto automaticos. O usuario informou em 10/11/2026 que aplicou os dois SQLs corrigidos abaixo; o assistente nao executou nem verificou o banco remoto. Em outros ambientes, aplicar pessoalmente nesta ordem antes de publicar frontend e APIs:
