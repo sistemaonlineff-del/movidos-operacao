@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
-import { MapPin, Search, RotateCcw, Navigation, RefreshCw } from 'lucide-react'
+import { MapPin, Search, RotateCcw, Navigation, RefreshCw, Phone } from 'lucide-react'
 import 'leaflet/dist/leaflet.css'
 import { supabase } from './lib/supabase'
 import { useDropRegistrationViewport } from './dropRegistrationClient'
 import './public-drop-map.css'
 
-type Point = { id: string; name: string | null; address: string | null; address_number: string | null; neighborhood: string | null; municipality: string | null; state: string | null; postal_code: string | null; latitude: number; longitude: number }
+type Point = { id: string; name: string | null; address: string | null; address_number: string | null; neighborhood: string | null; municipality: string | null; state: string | null; postal_code: string | null; latitude: number; longitude: number; phone?: string | null }
 const normalized = (value: string | null) => (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR')
 const addressOf = (point: Point) => [point.address, point.address_number, point.neighborhood, point.municipality, point.state, point.postal_code].filter(Boolean).join(', ')
+const phoneLink = (phone: string) => `tel:${phone.trim().startsWith('+') ? '+' : ''}${phone.replace(/\D/g, '')}`
 
 export default function PublicDropMap() {
   const [points, setPoints] = useState<Point[]>([]), [search, setSearch] = useState(''), [city, setCity] = useState(''), [neighborhood, setNeighborhood] = useState('')
@@ -53,6 +54,7 @@ export default function PublicDropMap() {
     for (const point of filtered) {
       const location: [number, number] = [Number(point.latitude), Number(point.longitude)], popup = document.createElement('div')
       for (const text of [point.name ?? 'Drop', addressOf(point)]) { const line = document.createElement('div'); line.textContent = text; popup.append(line) }
+      if (point.phone?.trim()) { const contact = document.createElement('a'); contact.href = phoneLink(point.phone); contact.textContent = point.phone; popup.append(contact) }
       L.circleMarker(location, { radius: 8, color: '#155e48', fillColor: '#24a276', fillOpacity: 0.9, weight: 2 }).bindPopup(popup).addTo(layer)
       bounds.push(location)
     }
@@ -69,7 +71,7 @@ export default function PublicDropMap() {
       <button type="button" title="Atualizar pontos" aria-label="Atualizar pontos" disabled={loading} onClick={() => setVersion(value => value + 1)}><RefreshCw size={19}/></button>
     </form>
     {error && <p role="alert">{error}</p>}
-    <div className="pdm-workspace"><section className="pdm-results" aria-label="Drops ativos"><p role="status">{loading ? 'Carregando pontos...' : `${filtered.length} ponto(s) encontrado(s)`}</p>{!loading && !error && !filtered.length && <p>Nenhum ponto encontrado.</p>}{filtered.map(point => <article key={point.id}><h2><MapPin size={17}/>{point.name || 'Drop'}</h2><p>{addressOf(point)}</p><div><button type="button" onClick={() => map.current?.setView([Number(point.latitude), Number(point.longitude)], 16)}>Ver no mapa</button><a href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${point.latitude},${point.longitude}`)}&travelmode=driving`} target="_blank" rel="noreferrer"><Navigation size={16}/>Como chegar</a></div></article>)}</section><div className="pdm-map" ref={holder} aria-label="Mapa dos pontos de coleta"/></div>
+    <div className="pdm-workspace"><section className="pdm-results" aria-label="Drops ativos"><p role="status">{loading ? 'Carregando pontos...' : `${filtered.length} ponto(s) encontrado(s)`}</p>{!loading && !error && !filtered.length && <p>Nenhum ponto encontrado.</p>}{filtered.map(point => <article key={point.id}><h2><MapPin size={17}/>{point.name || 'Drop'}</h2><p>{addressOf(point)}</p>{point.phone?.trim() && <p><a href={phoneLink(point.phone)}><Phone size={16} aria-hidden="true"/>{point.phone}</a></p>}<div><button type="button" onClick={() => map.current?.setView([Number(point.latitude), Number(point.longitude)], 16)}>Ver no mapa</button><a href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${point.latitude},${point.longitude}`)}&travelmode=driving`} target="_blank" rel="noreferrer"><Navigation size={16}/>Como chegar</a></div></article>)}</section><div className="pdm-map" ref={holder} aria-label="Mapa dos pontos de coleta"/></div>
     <footer>Movidos</footer>
   </main>
 }

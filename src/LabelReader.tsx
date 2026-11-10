@@ -349,7 +349,6 @@ export default function LabelReader() {
   const pendingCount = cameraItems.filter(i => i.status === 'na_fila' || i.status === 'lendo').length
 
   return <div className="label-reader">
-    <LabelDispatchPanel driverId={driverId} onDriverChange={chooseDriver} revision={dispatchRevision}/>
     <section className="card label-intro"><span className="label-badge">OPERAÇÃO RÁPIDA</span><h2>Leia a etiqueta e consulte a base</h2><p>Fotografe de perto, com o endereço inteiro e boa iluminação. Na câmera contínua, você pode disparar foto por foto sem parar; a leitura roda em segundo plano.</p><p className="label-muted">Base: {base.records.length} registros · {[...new Set(base.records.map(record => record.city))].join(' · ')}.</p></section>
     {aiConfigured !== true && <section className="card" role="status"><h3>{aiConfigured === null ? 'Preparando leitura...' : 'Leitura automática indisponível'}</h3><p>{baseError || 'A consulta digitada à base continua disponível.'}</p><button onClick={() => { setAiConfigured(null); setRetry(value => value + 1) }}>Tentar novamente</button></section>}
     <div className="label-grid">
@@ -428,6 +427,7 @@ export default function LabelReader() {
     </section>
     <details className="card"><summary>Ver base completa ({base.records.length} registros)</summary><p className="label-muted">Arquivos: {base.source}. Dados importados como recebidos, sem validação cadastral externa.</p><div className="label-table-wrap"><table><thead><tr><th>Região / ROTA</th><th>Rua / Logradouro</th><th>Bairro</th><th>CEP</th><th>Cidade</th><th>Localização no Maps</th><th>Rota no Maps</th><th>Arquivo de origem</th></tr></thead><tbody>{base.records.map(record => <tr key={record.id}><td>{record.region || 'Não informada'}</td><td>{record.street}</td><td>{record.neighborhood}</td><td>{record.postalCode}</td><td>{record.city}</td><td>{record.mapsUrl ? <a href={record.mapsUrl} target="_blank" rel="noreferrer">Abrir no Maps</a> : 'Não informado'}</td><td>{record.routeUrl ? <a href={record.routeUrl} target="_blank" rel="noreferrer">Traçar rota</a> : 'Não informado'}</td><td>{record.sourceFile}</td></tr>)}</tbody></table></div><h4>Resumos dos arquivos originais</h4>{base.summary.map((row, index) => <p key={index}>{Object.entries(row).map(([key, value]) => `${key}: ${value}`).join(' · ')}</p>)}</details>
     <LabelBatchReader base={base} driverId={driverId} onSaved={() => setDispatchRevision(value => value + 1)} />
+    <LabelDispatchPanel driverId={driverId} onDriverChange={chooseDriver} revision={dispatchRevision}/>
   </div>
 }
 

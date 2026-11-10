@@ -2,6 +2,14 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Telefone no mapa e prioridade da leitura (10/11/2026)
+
+No leitor `/bipar`, foto, destino e resultados aparecem antes dos demais controles; **Expedicao por motorista** agora fica no final, depois da leitura em massa. Mantidos selecao de motorista, permissoes, captura, OCR e atribuicao dos pacotes. Mudar a posicao nao corrige nem oculta eventual aviso de indisponibilidade da API/migracao da expedicao.
+
+O mapa publico `/mapa-drops` mostra **somente o telefone principal** do Drop na lista e no marcador, com link para ligar. Nao publica telefone alternativo e nao o usa como substituto quando o principal esta vazio. Requer aplicar pessoalmente [20261110163000_public_drop_contact_phone.sql](supabase/migrations/20261110163000_public_drop_contact_phone.sql) **depois da migracao original do mapa e antes do deploy do frontend**. O SQL substitui a assinatura da RPC em transacao para acrescentar `phone`, preservando filtros de Drops ativos/coordenadas validas e sem liberar leitura direta da tabela ou outros campos privados. Reaplicacao testada; nao reaplicar o SQL original do mapa depois deste. Frontend tolera respostas antigas sem telefone ate o banco ser atualizado.
+
+Alteracoes locais, sem publicacao ou SQL remoto automaticos. Validacao: `npm run test:public-map`, `LABEL_BASE_URL=http://127.0.0.1:5175 npm run test:label-reader` (definir a variavel com a sintaxe do seu terminal) e `npm run build`. Testes de upgrade SQL com PGlite e navegador desktop/celular com dados sinteticos conferem um telefone por Drop, marcador, ausencia de telefone vazio/alternativo, filtros, bloqueio da tabela privada, ordem visual do leitor e captura/atribuicao/exportacao existentes. Capturas em `tmp/public-map` e `tmp/label-reader/screenshots`.
+
 ## Conferencia da lista e organizacao dos menus (10/11/2026)
 
 A lista recebida repete entregas anteriores: mapa publico dos Drops ativos, leitor isolado, rotas dos pacotes no Maps, resumo diario por motorista e financeiro Mais Envios conforme a planilha fornecida. Essas implementacoes foram preservadas, sem refazer calculos, importacoes, permissao ou atribuicao de pacotes.
@@ -20,7 +28,7 @@ Publicar a correcao e fazer deploy do novo commit; repetir o deploy do commit an
 
 Publicacao por PR, sem merge ou SQL remoto automaticos. O usuario informou em 10/11/2026 que aplicou os dois SQLs corrigidos abaixo; o assistente nao executou nem verificou o banco remoto. Em outros ambientes, aplicar pessoalmente nesta ordem antes de publicar frontend e APIs:
 
-1. [20261110100000_public_active_drop_map.sql](supabase/migrations/20261110100000_public_active_drop_map.sql): RPC publica somente nome, endereco e coordenadas de Drops `drop_off`, status exatamente `ATIVO`, ativos, nao excluidos e com coordenadas brasileiras validas. Nao publica telefone, CPF/CNPJ, PIX, fotos, documentos, contatos ou permissao de leitura direta da tabela. Status de espera de login/insumos ficam fora.
+1. [20261110100000_public_active_drop_map.sql](supabase/migrations/20261110100000_public_active_drop_map.sql): RPC original publica somente nome, endereco e coordenadas de Drops `drop_off`, status exatamente `ATIVO`, ativos, nao excluidos e com coordenadas brasileiras validas. O telefone principal e acrescentado somente pela migracao incremental descrita acima. CPF/CNPJ, PIX, fotos, documentos e demais contatos continuam privados, sem permissao de leitura direta da tabela. Status de espera de login/insumos ficam fora.
 2. [20261110110000_label_driver_dispatch.sql](supabase/migrations/20261110110000_label_driver_dispatch.sql): acrescenta identidade do motorista e endereco do pacote; preserva historico antigo sem adivinhar motorista pelo nome. Leitura direta limitada a propria conta ativa com acesso ao leitor, alem das politicas administrativas existentes; nenhuma nova escrita direta pelo cliente.
 
 Link externo `/mapa-drops`, anonimo e sem menus internos, filtra endereco/nome, cidade e bairro. Configuracoes permite copiar esse link. A RPC limita os campos no servidor; nao depende de ocultar dados privados no navegador. Mapa utiliza os tiles publicos do OpenStreetMap; limites/atribuicao do provedor devem ser respeitados e nao ha garantia de SLA para grande volume. Apenas abrir "Como chegar" envia o destino escolhido ao Google.
