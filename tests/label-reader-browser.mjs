@@ -1,16 +1,19 @@
 import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { chromium } from 'playwright'
+import * as XLSX from 'xlsx'
+import { readFile } from 'node:fs/promises'
 
 const origin=process.env.LABEL_BASE_URL||'http://127.0.0.1:5174'
 const user={id:'11111111-1111-4111-8111-111111111111',email:'motorista@example.invalid',aud:'authenticated'}
 const token=['local',Buffer.from(JSON.stringify({sub:user.id,exp:Math.floor(Date.now()/1000)+3600})).toString('base64url'),'test'].join('.')
-const browser=await chromium.launch({channel:'msedge',headless:true})
+const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']})
 const diagnostics=[]
 await mkdir('tmp/label-reader/screenshots',{recursive:true})
-async function fixture({logged=true,active=true,allowed=true,mobile=true,role='operador'}={}) {
-  const context=await browser.newContext({viewport:{width:mobile?390:1440,height:mobile?844:1000},isMobile:mobile,hasTouch:mobile,serviceWorkers:'block'})
-  const state={active,allowed,calls:[],errors:[],permissionWrites:[]}
+async function fixture({logged=true,active=true,allowed=true,mobile=true,role='operador',path='/bipar',dispatchScenario=false}={}) {
+  const context=await browser.newContext({viewport:{width:mobile?390:1440,height:mobile?844:1000},isMobile:mobile,hasTouch:mobile,serviceWorkers:'block',permissions:['camera']})
+  const drivers=[{id:user.id,name:'Bruno'},{id:'22222222-2222-4222-8222-222222222222',name:'Jose'},{id:'33333333-3333-4333-8333-333333333333',name:'Rafael'}]
+  const state={active,allowed,calls:[],errors:[],permissionWrites:[],dispatchRows:[],holdReading:false,pendingReads:[],readNumber:0,day:'',drivers}
   await context.addInitScript(({origin,user,token,logged})=>{
     if(location.origin!==origin||!logged)return
     localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token',JSON.stringify({access_token:token,refresh_token:'local-only',token_type:'bearer',expires_at:Math.floor(Date.now()/1000)+3600,expires_in:3600,user}))
@@ -42,9 +45,30 @@ async function fixture({logged=true,active=true,allowed=true,mobile=true,role='o
         if(url.pathname==='/api/bootstrap-admin'){
           assert.equal(role,'admin');assert.equal(request.method(),'POST');return json({ok:true})
         }
+        if(url.pathname==='/api/label-dispatch'){
+          if(request.method()==='POST'){
+            const body=request.postDataJSON()
+            if(body.mode==='confirm-address'){const row=state.dispatchRows.find(row=>row.id===body.id);row.recipient_address=body.address;row.address_confirmed=true;return json({saved:true})}
+            throw new Error('Unexpected dispatch action')
+          }
+          state.day=url.searchParams.get('day')
+          return json({rows:dispatchScenario?state.dispatchRows.filter(row=>row.delivery_date===state.day):[],drivers:dispatchScenario?drivers:[{id:user.id,name:'Motorista sintetico'}],dispatcher:role==='admin',currentUserId:user.id,optimizationConfigured:false})
+        }
+        if(url.pathname==='/api/label-volume'){
+          assert.equal(request.method(),'POST')
+          const body=request.postDataJSON(),driver=drivers.find(driver=>driver.id===body.driverId)
+          assert.ok(driver);assert.ok(body.packageAddress.includes('Rua Sintetica'))
+          if(!state.dispatchRows.some(row=>row.scan_key===body.scanKey))state.dispatchRows.push({id:crypto.randomUUID(),driver_id:body.driverId,driver_name:driver.name,recipient_address:body.packageAddress,address_confirmed:body.addressConfirmed,delivery_sequence:1,created_at:new Date().toISOString(),scan_key:body.scanKey,delivery_date:state.day})
+          return json({saved:true,zone:'Norte',route:'R1',batch:1,sequence:1})
+        }
+        if(url.pathname==='/api/label-routes')return json({records:dispatchScenario?[{id:'base-1',street:'Rua Sintetica',neighborhood:'Centro',city:'Suzano',postalCode:'08600-000',zone:'Norte',route:'R1',deliverySequence:1}]:[],summary:[],source:'Base sintetica',baseId:'local-only'})
+        if(url.pathname==='/api/label-read'){
+          if(request.method()==='GET')return json({configured:true})
+          const number=++state.readNumber
+          if(state.holdReading)await new Promise(resolve=>state.pendingReads.push(resolve))
+          return json({extraction:{recipient:{street:'Rua Sintetica',number:String(number),complement:null,neighborhood:'Centro',city:'Suzano',postalCode:'08600-000'},warnings:[],uncertainFields:[]}})
+        }
         assert.equal(request.method(),'GET')
-        if(url.pathname==='/api/label-routes')return json({records:[],summary:[],source:'Base sintetica',baseId:'local-only'})
-        if(url.pathname==='/api/label-read')return json({configured:true})
         throw new Error(`Unexpected API request: ${url.pathname}`)
       }
       return route.continue()
@@ -54,7 +78,7 @@ async function fixture({logged=true,active=true,allowed=true,mobile=true,role='o
   diagnostics.push({page,state})
   page.on('pageerror',error=>state.errors.push(error.message))
   await page.clock.install()
-  await page.goto(`${origin}/bipar`)
+  await page.goto(`${origin}${path}`)
   return{context,page,state}
 }
 try{
@@ -98,6 +122,19 @@ try{
     assert.deepEqual(state.errors,[])
     await context.close()
   }
+  for(const path of['/','/documentos','/mensagens','/leitor-etiquetas','/financeiro']){
+    const isolated=await fixture({path})
+    await isolated.page.getByRole('heading',{name:'Leitor de etiquetas',exact:true}).waitFor()
+    assert.equal(new URL(isolated.page.url()).pathname,'/bipar')
+    assert.equal(await isolated.page.locator('aside,nav').count(),0)
+    assert.deepEqual(isolated.state.errors,[])
+    await isolated.context.close()
+  }
+  const unapproved=await fixture({allowed:false,path:'/documentos'})
+  await unapproved.page.getByRole('heading',{name:'Acesso restrito',exact:true}).waitFor()
+  assert.equal(await unapproved.page.locator('aside,nav').count(),0)
+  assert.ok(!unapproved.state.calls.some(path=>path.startsWith('/api/')))
+  await unapproved.context.close()
   const admin=await fixture({role:'admin',mobile:false})
   await admin.page.goto(`${origin}/configuracoes`)
   await admin.page.getByRole('button',{name:'Copiar link do leitor',exact:true}).waitFor()
@@ -116,7 +153,67 @@ try{
   assert.equal(await admin.page.getByRole('checkbox',{checked:true}).count(),0)
   assert.deepEqual(admin.state.errors,[])
   await admin.context.close()
-  console.log('PASS: real App /bipar, anonymous login, mobile/desktop isolation, revocation/regrant, inactive users, logout; synthetic identity and no production writes.')
+  const expedition=await fixture({role:'admin',mobile:true,dispatchScenario:true})
+  const {page,state}=expedition
+  await page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()
+  const png=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=640;canvas.height=400;canvas.getContext('2d').fillRect(0,0,640,400);return canvas.toDataURL('image/png').split(',')[1]})
+  const photo={name:'etiqueta-sintetica.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')}
+  const count=async total=>{await page.waitForFunction(total=>document.querySelector('.ld-totals strong')?.textContent===String(total),total)}
+  state.holdReading=true
+  const firstRead=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/label-read'&&request.method()==='POST')
+  await page.getByLabel('Enviar foto',{exact:true}).setInputFiles(photo);await firstRead
+  await page.getByLabel('Motorista das proximas leituras',{exact:true}).selectOption(driversId(expedition,1))
+  state.holdReading=false;state.pendingReads.splice(0).forEach(resolve=>resolve())
+  await count(1);assert.equal(state.dispatchRows[0].driver_id,user.id)
+  for(const driver of[state.drivers[1],state.drivers[2],state.drivers[1],state.drivers[2]]){
+    await page.getByLabel('Motorista das proximas leituras',{exact:true}).selectOption(driver.id)
+    const total=state.dispatchRows.length+1
+    await page.getByLabel('Enviar foto',{exact:true}).setInputFiles(photo);await count(total)
+  }
+  assert.deepEqual(state.dispatchRows.map(row=>row.driver_name),['Bruno','Jose','Rafael','Jose','Rafael'])
+  await page.getByLabel('Lista do motorista',{exact:true}).selectOption(state.drivers[1].id)
+  assert.equal(await page.locator('.ld-table tbody tr').count(),2)
+  await page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true}).waitFor()
+  const row=state.dispatchRows.find(row=>row.driver_name==='Jose')
+  await page.getByLabel(`Endereco do pacote ${row.id}`,{exact:true}).fill('Rua Sintetica, 123, Centro, Suzano SP')
+  assert.equal(await page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true}).count(),0)
+  await page.getByRole('button',{name:`Confirmar endereco ${row.id}`,exact:true}).click()
+  await page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true}).waitFor()
+  const download=page.waitForEvent('download');await page.getByRole('button',{name:'Excel',exact:true}).click()
+  const excel=await download,workbook=XLSX.read(await readFile(await excel.path()),{type:'buffer'})
+  assert.equal(XLSX.utils.sheet_to_json(workbook.Sheets.Pacotes).length,2)
+  await page.getByLabel('Motorista das proximas leituras',{exact:true}).selectOption(state.drivers[2].id)
+  await page.getByLabel('Selecionar fotos em massa',{exact:true}).setInputFiles([photo,{...photo,name:'segunda.png'}])
+  await count(7)
+  assert.equal(state.dispatchRows.filter(row=>row.driver_name==='Rafael').length,4)
+  await page.getByLabel('Dia das leituras',{exact:true}).fill('2026-01-01');await count(0)
+  const capturedDay=state.dispatchRows[0].delivery_date
+  await page.getByLabel('Dia das leituras',{exact:true}).fill(capturedDay);await count(7)
+  await page.getByLabel(`Endereco do pacote ${row.id}`,{exact:true}).fill('Rua Sintetica, 999, Suzano SP')
+  await page.getByLabel('Motorista das proximas leituras',{exact:true}).selectOption(state.drivers[0].id)
+  await page.getByRole('button',{name:'Abrir leitura contínua sem pausa',exact:true}).click()
+  await page.waitForFunction(()=>{const video=document.querySelector('video');return video?.readyState>=2&&video.videoWidth>0})
+  state.holdReading=true
+  const cameraFirst=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/label-read'&&request.method()==='POST')
+  await page.getByRole('button',{name:'Capturar pacote #1',exact:true}).click();await cameraFirst
+  await page.getByLabel('Motorista das proximas leituras',{exact:true}).selectOption(state.drivers[2].id)
+  const cameraSecond=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/label-read'&&request.method()==='POST')
+  await page.getByRole('button',{name:'Capturar pacote #2',exact:true}).click();await cameraSecond
+  state.holdReading=false;state.pendingReads.splice(0).forEach(resolve=>resolve())
+  await count(9)
+  assert.deepEqual(state.dispatchRows.slice(-2).map(row=>row.driver_id).sort(),[state.drivers[0].id,state.drivers[2].id].sort())
+  assert.equal(await page.getByLabel(`Endereco do pacote ${row.id}`,{exact:true}).inputValue(),'Rua Sintetica, 999, Suzano SP')
+  await page.getByRole('button',{name:'Excel',exact:true}).click()
+  await page.getByRole('alert').filter({hasText:'Confirme os enderecos alterados antes de exportar.'}).waitFor()
+  await page.getByRole('button',{name:`Confirmar endereco ${row.id}`,exact:true}).click()
+  await page.getByRole('button',{name:'Excel',exact:true}).waitFor({state:'visible'})
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1))
+  await page.screenshot({path:'tmp/label-reader/screenshots/dispatch-mobile.png',fullPage:true})
+  await page.setViewportSize({width:1440,height:1000})
+  await page.screenshot({path:'tmp/label-reader/screenshots/dispatch-desktop.png',fullPage:true})
+  assert.deepEqual(state.errors,[])
+  await expedition.context.close()
+  console.log('PASS: real App isolation/revocation, alternating drivers, 9 saved photo/batch/continuous-camera packages, in-flight snapshots, per-day totals, retained address drafts, Maps and Excel; no real writes.')
 }catch(error){
   for(const{page,state}of diagnostics.filter(({page})=>!page.isClosed())){
     console.error(JSON.stringify(state),await page.locator('body').innerText())
@@ -124,3 +221,5 @@ try{
   }
   throw error
 }finally{await browser.close()}
+
+function driversId(fixture,index){return fixture.state.drivers[index].id}

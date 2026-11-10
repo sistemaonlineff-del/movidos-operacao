@@ -30,6 +30,7 @@ const Configuracoes = lazy(() => import("./Configuracoes"));
 const RouteManagement = lazy(() => import("./RouteManagement"));
 const ReadyMessages = lazy(() => import("./ReadyMessages"));
 const Documents = lazy(() => import("./Documents"));
+const PublicDropMap = lazy(() => import("./PublicDropMap"));
 import { AccessProvider, Guard, useAccess } from "./access";
 import LabelReaderGate, { useReaderViewport } from "./LabelReaderGate";
 import { DROP_STATUSES, PARTNERS, PIX_KEY_TYPES, VEHICLE_TYPES, ZONES, normalizePartner, normalizeZone } from "./dropOptions";
@@ -268,7 +269,7 @@ function Login({ onSuccess }: { onSuccess: () => void }) {
     e.preventDefault();
     if (!supabase) return;
     const result = register
-      ? await supabase.auth.signUp({ email, password })
+      ? await supabase.auth.signUp({ email, password, options: window.location.pathname.replace(/\/+$/, '') === '/bipar' ? { emailRedirectTo: new URL('/bipar', window.location.origin).href } : undefined })
       : await supabase.auth.signInWithPassword({ email, password });
     if (result.error) {
       setMessage(
@@ -1067,6 +1068,7 @@ function App() {
   }, []);
   if (location.pathname === '/enviar-nf') return <Suspense fallback={<main>Carregando...</main>}><InvoiceUpload /></Suspense>;
   if (location.pathname.replace(/\/+$/, '') === '/cadastrar-drop') return <Suspense fallback={<main>Carregando...</main>}><PublicDropRegistration /></Suspense>;
+  if (location.pathname.replace(/\/+$/, '') === '/mapa-drops') return <Suspense fallback={<main>Carregando mapa...</main>}><PublicDropMap /></Suspense>;
   if (checking) return <main className="auth-page" />;
   if (!logged) return <Login onSuccess={() => setLogged(true)} />;
   const exit = async () => {
@@ -1183,7 +1185,7 @@ function SecureLayout({
   onExit: () => void;
 }) {
   return (
-    <AccessProvider>
+    <AccessProvider revalidateMs={15000}>
       <SecureLayoutInner onExit={onExit}>{children}</SecureLayoutInner>
     </AccessProvider>
   );
@@ -1197,7 +1199,7 @@ function SecureLayoutInner({
 }) {
   const nav = useNavigate();
   const loc = useLocation();
-  const { can, isAdmin, canReadLabels, canManageDeliveryRoutes, canAccessFinancas } = useAccess();
+  const { can, isAdmin, loading, permissions, canReadLabels, canManageDeliveryRoutes, canAccessFinancas } = useAccess();
   const [open, setOpen] = useState(loc.pathname.startsWith("/cadastros"));
   const [newOpen, setNewOpen] = useState(loc.pathname.endsWith("/novo"));
   const [financeOpen, setFinanceOpen] = useState(
@@ -1227,6 +1229,9 @@ function SecureLayoutInner({
     "/rotas-entrega": "Rotas de entrega",
     "/mensagens": "Mensagens prontas",
   };
+  if (loading) return <main className="auth-page">Carregando permissoes...</main>;
+  const internalAccess = isAdmin || canManageDeliveryRoutes || canAccessFinancas || Object.keys(permissions ?? {}).some(key => /^(cadastros_|financeiro_|funcionarios_|configuracoes_)/.test(key) && can(key));
+  if (!internalAccess) return <Navigate to="/bipar" replace />;
   return (
     <div className="app">
       <aside>

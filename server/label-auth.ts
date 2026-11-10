@@ -1,5 +1,6 @@
 import type { VercelRequest } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
+import { canManageDeliveryRoutes } from '../src/routeAccess.js'
 
 export class LabelApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -8,7 +9,7 @@ export class LabelApiError extends Error {
   }
 }
 
-export async function authorizeLabelReader(req: VercelRequest) {
+export async function authorizeLabelReaderContext(req: VercelRequest) {
   const authorization = req.headers.authorization
   const token = typeof authorization === 'string' ? /^Bearer\s+(\S+)$/i.exec(authorization)?.[1] : undefined
   if (!token) throw new LabelApiError(401, 'Sessão não autorizada. Entre novamente no sistema.')
@@ -21,14 +22,19 @@ export async function authorizeLabelReader(req: VercelRequest) {
   if (authError || !auth.user) throw new LabelApiError(401, 'Sessão inválida. Entre novamente no sistema.')
 
   const { data: profile, error: profileError } = await admin.from('user_profiles')
-    .select('role,is_active').eq('id', auth.user.id).maybeSingle()
+    .select('role,is_active,full_name').eq('id', auth.user.id).maybeSingle()
   if (profileError) throw new LabelApiError(503, 'Não foi possível conferir o acesso ao leitor.')
   if (profile?.is_active !== true) throw new LabelApiError(403, 'Usuário sem acesso ao leitor.')
-  if (profile.role === 'admin') return admin
+  const context = { admin, user: auth.user, profile, dispatcher: profile.role === 'admin' || canManageDeliveryRoutes(auth.user.email) }
+  if (profile.role === 'admin') return context
 
   const { data: permissions, error: permissionsError } = await admin.from('user_module_permissions')
     .select('label_reader_access').eq('user_id', auth.user.id).maybeSingle()
   if (permissionsError) throw new LabelApiError(503, 'Não foi possível conferir a permissão do leitor.')
   if (permissions?.label_reader_access !== true) throw new LabelApiError(403, 'O leitor de etiquetas não está liberado para esta conta.')
-  return admin
+  return context
+}
+
+export async function authorizeLabelReader(req: VercelRequest) {
+  return (await authorizeLabelReaderContext(req)).admin
 }

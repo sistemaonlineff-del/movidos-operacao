@@ -4,15 +4,17 @@ import { findLabelMatches, postalCodes } from './labelMatching'
 import type { LabelBase } from './labelMatching'
 import type { LabelMatch } from './labelMatching'
 import './label-reader.css'
-import { addressFields, addressLabels, extractionQuery, parseLabelExtraction } from './labelExtraction'
+import { addressFields, addressLabels, extractionQuery, labelDeliveryAddress, parseLabelExtraction } from './labelExtraction'
 import type { LabelExtraction } from './labelExtraction'
 import LabelBatchReader from './LabelBatchReader'
+import LabelDispatchPanel from './LabelDispatchPanel'
 
 const READ_MAX_EDGE = 1600
 const READ_JPEG_QUALITY = 0.75
 
 type CameraBatchItem = {
   id: string
+  driverId: string
   num: number
   image: string
   status: 'na_fila' | 'lendo' | 'concluido' | 'erro'
@@ -44,6 +46,9 @@ export default function LabelReader() {
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
   const [cameraItems, setCameraItems] = useState<CameraBatchItem[]>([])
   const [captureToast, setCaptureToast] = useState('')
+  const [driverId, setDriverId] = useState(''), [dispatchRevision, setDispatchRevision] = useState(0)
+  const driverRef = useRef(''), scanDriver = useRef('')
+  const chooseDriver = (id: string) => { driverRef.current = id; setDriverId(id) }
 
   const requestRef = useRef<AbortController | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -145,12 +150,13 @@ export default function LabelReader() {
                 const volRes = await fetch('/api/label-volume', {
                   method: 'POST',
                   headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ baseId: String(m.record.id), scanKey: item.id }),
+                  body: JSON.stringify({ baseId: String(m.record.id), scanKey: item.id, driverId: item.driverId, ...labelDeliveryAddress(reading) }),
                   cache: 'no-store'
                 })
                 const volData = await volRes.json()
                 if (volRes.ok) {
                   saveMsg = `${volData.duplicate ? 'Já na pré-rota' : 'Adicionado na pré-rota'} (Lote ${volData.batch})`
+                  if (alive.current) setDispatchRevision(value => value + 1)
                 } else throw new Error(volData.error || 'Falha ao salvar a pré-rota.')
               } catch (saveError) {
                 saveMsg = `Não salvo na pré-rota: ${saveError instanceof Error ? saveError.message : 'falha de conexão'}`
@@ -200,17 +206,19 @@ export default function LabelReader() {
     } finally { if (alive.current) setCameraStarting(false) }
   }
   const clearReading = () => { setQuery(''); setDetected(false); setReadDone(false); setError(''); setRouteSave(''); setExtraction(null) }
-  const newScanKey = () => { scanKey.current = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}` }
+  const newScanKey = () => { scanKey.current = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`; scanDriver.current = driverRef.current }
   const canStoreAutomatically = (found: LabelMatch[]) => found.length === 1 && found[0].streetMatch && !found[0].warnings.some(warning => /nome aproximado|bairro divergente|rua não confirmada|cep lido é diferente/i.test(warning))
   
-  const saveInRoute = async (match: LabelMatch, id: number) => {
+  const saveInRoute = async (match: LabelMatch, id: number, reading?: LabelExtraction) => {
     if (!scanKey.current) return
+    const capturedKey = scanKey.current, capturedDriver = scanDriver.current
     setRouteSave('Adicionando à pré-rota...')
     try {
       const { data } = await supabase!.auth.getSession()
-      const response = await fetch('/api/label-volume', { method: 'POST', headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ baseId: String(match.record.id), scanKey: scanKey.current }), cache: 'no-store' })
+      const response = await fetch('/api/label-volume', { method: 'POST', headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ baseId: String(match.record.id), scanKey: capturedKey, driverId: capturedDriver, ...(reading ? labelDeliveryAddress(reading) : { packageAddress: query.trim().replace(/\n/g, ', '), addressConfirmed: false }) }), cache: 'no-store' })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Não foi possível adicionar o volume à pré-rota.')
+      if (alive.current) setDispatchRevision(value => value + 1)
       if (alive.current && id === runId.current) setRouteSave(`${result.duplicate ? 'Já estava' : 'Adicionado'} na pré-rota: ${result.zone} · Rota ${result.route}${result.sequence ? ` · Sequência ${result.sequence}` : ''} · Lote ${result.batch}.`)
     } catch (err) {
       if (alive.current && id === runId.current) setRouteSave(err instanceof Error ? err.message : 'Não foi possível adicionar o volume à pré-rota.')
@@ -248,7 +256,7 @@ export default function LabelReader() {
       if (address && !camera) setPhoto('')
       if (!address) setError('Não foi possível identificar o endereço. Fotografe a etiqueta de perto e com boa iluminação.')
       const found = findLabelMatches(address, base?.records ?? [])
-      if (canStoreAutomatically(found)) void saveInRoute(found[0], id)
+      if (canStoreAutomatically(found)) void saveInRoute(found[0], id, reading)
       else if (found.length) setRouteSave('Confira o resultado antes de adicionar: a leitura não confirmou um único endereço com segurança.')
     } catch (err) {
       if (alive.current && id === runId.current) setError(controller.signal.aborted ? 'A leitura demorou demais. Tente novamente.' : err instanceof Error ? err.message : 'Não foi possível ler a etiqueta.')
@@ -299,6 +307,7 @@ export default function LabelReader() {
     const num = ++captureNumber.current
     const newItem: CameraBatchItem = {
       id: crypto.randomUUID(),
+      driverId: driverRef.current,
       num,
       image: data,
       status: 'na_fila'
@@ -326,6 +335,9 @@ export default function LabelReader() {
 
   const selectCameraItemDetails = (item: CameraBatchItem) => {
     if (!item.address) return
+    scanKey.current = item.id
+    scanDriver.current = item.driverId
+    setExtraction(null)
     setQuery(item.address)
     setPhoto(item.image)
     setReadDone(true)
@@ -337,12 +349,13 @@ export default function LabelReader() {
   const pendingCount = cameraItems.filter(i => i.status === 'na_fila' || i.status === 'lendo').length
 
   return <div className="label-reader">
+    <LabelDispatchPanel driverId={driverId} onDriverChange={chooseDriver} revision={dispatchRevision}/>
     <section className="card label-intro"><span className="label-badge">OPERAÇÃO RÁPIDA</span><h2>Leia a etiqueta e consulte a base</h2><p>Fotografe de perto, com o endereço inteiro e boa iluminação. Na câmera contínua, você pode disparar foto por foto sem parar; a leitura roda em segundo plano.</p><p className="label-muted">Base: {base.records.length} registros · {[...new Set(base.records.map(record => record.city))].join(' · ')}.</p></section>
     {aiConfigured !== true && <section className="card" role="status"><h3>{aiConfigured === null ? 'Preparando leitura...' : 'Leitura automática indisponível'}</h3><p>{baseError || 'A consulta digitada à base continua disponível.'}</p><button onClick={() => { setAiConfigured(null); setRetry(value => value + 1) }}>Tentar novamente</button></section>}
     <div className="label-grid">
       <section className="card"><h3>1. Foto da etiqueta</h3>{!camera && <div className="label-actions">
-        <button className="primary" onClick={() => void startCamera()} disabled={busy || cameraStarting || aiConfigured !== true}>{cameraStarting ? 'Abrindo...' : 'Abrir leitura contínua sem pausa'}</button>
-        <label className={`label-file ${busy ? 'disabled' : ''}`}>Enviar foto<input aria-label="Enviar foto" type="file" accept="image/jpeg,image/png,image/webp,image/bmp" disabled={busy || aiConfigured !== true} onChange={event => { void loadPhoto(event.target.files?.[0]); event.target.value = '' }} /></label>
+        <button className="primary" onClick={() => void startCamera()} disabled={busy || cameraStarting || aiConfigured !== true || !driverId}>{cameraStarting ? 'Abrindo...' : 'Abrir leitura contínua sem pausa'}</button>
+        <label className={`label-file ${busy ? 'disabled' : ''}`}>Enviar foto<input aria-label="Enviar foto" type="file" accept="image/jpeg,image/png,image/webp,image/bmp" disabled={busy || aiConfigured !== true || !driverId} onChange={event => { void loadPhoto(event.target.files?.[0]); event.target.value = '' }} /></label>
       </div>}
       {camera && <div>
         <div className="label-camera-frame">
@@ -414,7 +427,7 @@ export default function LabelReader() {
       {!query.trim() ? <p>Leia uma etiqueta ou informe o endereço para consultar.</p> : matches.length === 0 ? <p className="label-warning" role="status">Nenhum registro encontrado nesta base. Confira a leitura e se o endereço pertence às cidades e aos bairros cadastrados. A etiqueta pode ter sido lida corretamente e estar fora da base.</p> : <><p role="status">{matches.length} registro(s) encontrado(s). Confira o destino antes de separar o pacote.</p>{matches.length > 1 && <p className="label-warning">Há mais de uma possibilidade. Compare rua, bairro, CEP e cidade; o primeiro resultado não é uma confirmação automática.</p>}<div className="label-results">{matches.map(({ record, reasons, warnings }) => <article className="label-result" key={record.id}><h4>{record.zone || record.region || 'Zona não informada'} · Rota {record.route || 'A definir'}</h4><p className="label-muted">Zona, rota e sequência conforme a planilha recebida.</p><dl><dt>Zona</dt><dd>{record.zone || record.region || 'Não informada na base'}</dd><dt>Rota</dt><dd>{record.route || 'A definir'}</dd><dt>Sequência</dt><dd>{record.deliverySequence || 'Não informada'}</dd><dt>Rua / Logradouro</dt><dd>{record.street}</dd><dt>Bairro</dt><dd>{record.neighborhood}</dd><dt>CEP</dt><dd>{record.postalCode}</dd><dt>Cidade</dt><dd>{record.city}</dd></dl><p className="label-reasons">{reasons.join(' · ')}</p>{warnings.map(warning => <p className="label-warning" key={warning}>{warning}</p>)}</article>)}</div></>}
     </section>
     <details className="card"><summary>Ver base completa ({base.records.length} registros)</summary><p className="label-muted">Arquivos: {base.source}. Dados importados como recebidos, sem validação cadastral externa.</p><div className="label-table-wrap"><table><thead><tr><th>Região / ROTA</th><th>Rua / Logradouro</th><th>Bairro</th><th>CEP</th><th>Cidade</th><th>Localização no Maps</th><th>Rota no Maps</th><th>Arquivo de origem</th></tr></thead><tbody>{base.records.map(record => <tr key={record.id}><td>{record.region || 'Não informada'}</td><td>{record.street}</td><td>{record.neighborhood}</td><td>{record.postalCode}</td><td>{record.city}</td><td>{record.mapsUrl ? <a href={record.mapsUrl} target="_blank" rel="noreferrer">Abrir no Maps</a> : 'Não informado'}</td><td>{record.routeUrl ? <a href={record.routeUrl} target="_blank" rel="noreferrer">Traçar rota</a> : 'Não informado'}</td><td>{record.sourceFile}</td></tr>)}</tbody></table></div><h4>Resumos dos arquivos originais</h4>{base.summary.map((row, index) => <p key={index}>{Object.entries(row).map(([key, value]) => `${key}: ${value}`).join(' · ')}</p>)}</details>
-    <LabelBatchReader base={base} />
+    <LabelBatchReader base={base} driverId={driverId} onSaved={() => setDispatchRevision(value => value + 1)} />
   </div>
 }
 
