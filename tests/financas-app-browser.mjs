@@ -7,7 +7,7 @@ import { inflateSync } from 'node:zlib';
 import { chromium } from 'playwright';
 import { emptyState, validateState } from '../src/financas/domain.ts';
 
-const origin = 'http://localhost:5173';
+const origin = process.env.FINANCAS_APP_BASE_URL || 'http://localhost:5173';
 const supabaseOrigin = 'https://hcpvmahmiqipghceylle.supabase.co';
 const output = fileURLToPath(new URL('../tmp/financas-app/', import.meta.url));
 const routes = [
@@ -286,7 +286,12 @@ async function authorized(browser, mobile) {
   try {
     await page.goto(`${origin}/financas`, { waitUntil: 'domcontentloaded' });
     await page.locator('.financas-module .page-footer').waitFor();
-    assert.equal(await page.locator('.app > aside').getByRole('button', { name: 'Finan\u00e7as', exact: true }).isVisible(), true);
+    assert.equal(await page.locator('.app > aside').getByRole('button', { name: 'Financeiro', exact: true }).isVisible(), true);
+    assert.equal(await page.locator('.app > aside').getByRole('button', { name: 'Finan\u00e7as', exact: true }).count(), 0);
+    assert.equal(await page.locator('.app > .content > header h1').innerText(), 'Financeiro');
+    await page.locator('.app > aside').getByRole('button', { name: 'Fechamento', exact: true }).click();
+    await page.getByRole('group', { name: 'Fechamento iMile', exact: true }).getByRole('button', { name: 'Importar base', exact: true }).waitFor();
+    await capture(page, `closing-menu-${name}`);
     const module = page.locator('section.financas-module');
     assert.equal(await module.locator('.financas-subnav a').count(), routes.length);
     const chartProof = await dashboard(page, name);
@@ -334,7 +339,7 @@ async function authorized(browser, mobile) {
     assert.equal(state.rows.length, 1);
     assert.equal(state.rows[0].name, `DROP SINTETICO FINANCAS ${name.toUpperCase()}`);
     assert.equal(state.rows[0].id, new URL(page.url()).searchParams.get('edit'));
-    await page.locator('.app > aside').getByRole('button', { name: 'Finan\u00e7as', exact: true }).click();
+    await page.locator('.app > aside').getByRole('button', { name: 'Financeiro', exact: true }).click();
     await page.locator('.financas-module .page-footer').waitFor();
     await sharedLayout(page, mobile);
     assert.equal(await page.getByRole('combobox', { name: 'Competencia' }).inputValue(), '2026-10');
@@ -350,7 +355,7 @@ async function accessScenarios(browser) {
   try {
     await talita.page.goto(`${origin}/financas`, { waitUntil: 'domcontentloaded' });
     await talita.page.locator('.financas-module .page-footer').waitFor();
-    assert.equal(await talita.page.locator('.app > aside').getByRole('button', { name: 'Finan\u00e7as', exact: true }).isVisible(), true);
+    assert.equal(await talita.page.locator('.app > aside').getByRole('button', { name: 'Financeiro', exact: true }).isVisible(), true);
     assert.equal(await talita.page.locator('.financas-subnav a').count(), routes.length);
     assert.ok(talita.state.bootstrap.length > 0);
     assert.ok(talita.state.bootstrap.every(method => method === 'POST'));
@@ -370,7 +375,7 @@ async function accessScenarios(browser) {
     try {
       await current.page.goto(`${origin}/financas`, { waitUntil: 'domcontentloaded' });
       await current.page.getByRole('heading', { name: 'Acesso restrito', exact: true }).waitFor();
-      assert.equal(await current.page.locator('.app > aside').getByRole('button', { name: 'Finan\u00e7as', exact: true }).count(), 0);
+      assert.equal(await current.page.locator('.app > aside').getByRole('button', { name: 'Financeiro', exact: true }).count(), 0);
       assert.equal(await current.page.locator('.financas-module').count(), 0);
       assert.ok(!current.state.reads.some(table => table.startsWith('financas_')), 'Gate must prevent every private finance fetch');
       assert.equal(current.state.rpcs.length, 0);
@@ -382,7 +387,7 @@ async function accessScenarios(browser) {
       if (scenario.active !== false) {
         const legacyReads = ['financial_views', 'financial_periods', 'financial_drop_items', 'financial_payment_history', 'loss_events'].map(table =>
           current.page.waitForResponse(response => new URL(response.url()).pathname === `/rest/v1/${table}`));
-        await current.page.locator('.app > aside .nav-parent').filter({ hasText: /^Financeiro/ }).click();
+        await current.page.locator('.app > aside').getByRole('button', { name: 'Fechamento', exact: true }).click();
         await current.page.locator('.app > aside').getByRole('button', { name: 'Importar base', exact: true }).click();
         await current.page.waitForURL(url => url.pathname === '/financeiro');
         await current.page.locator('.finance-page').waitFor();
