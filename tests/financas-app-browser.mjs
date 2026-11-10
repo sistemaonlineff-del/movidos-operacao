@@ -55,7 +55,7 @@ async function fixture(browser, { email, authEmail = email, role = 'admin', acti
   });
   const user = { id: randomUUID(), email: authEmail, aud: 'authenticated' };
   const jwt = ['synthetic', Buffer.from(JSON.stringify({ sub: user.id, exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url'), 'local-only'].join('.');
-  const state = { rows: [], reads: [], writes: [], rpcs: [], bootstrap: [], blocked: [], errors: [], continued: [], consoleErrors: [] };
+  const state = { rows: [], financialViews: [], reads: [], writes: [], rpcs: [], bootstrap: [], blocked: [], errors: [], continued: [], consoleErrors: [] };
   await context.addInitScript(({ origin, user, jwt, logged }) => {
     if (location.origin !== origin || !logged) return;
     localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token', JSON.stringify({
@@ -98,7 +98,7 @@ async function fixture(browser, { email, authEmail = email, role = 'admin', acti
           }
           assert.ok(['drops', 'drop_photos', 'drop_documents', 'app_notes', 'mais_envios_registrations', 'mais_envios_stage_history',
             'financial_views', 'financial_periods', 'financial_payment_history', 'financial_drop_items', 'loss_events'].includes(table), `Unexpected table ${table}`);
-          const filtered = table === 'drops' ? state.rows.filter(row => matches(row, url.searchParams)) : [];
+          const filtered = (table === 'drops' ? state.rows : table === 'financial_views' ? state.financialViews : []).filter(row => matches(row, url.searchParams));
           const offset = Number(url.searchParams.get('offset') || 0);
           const limit = Number(url.searchParams.get('limit') || filtered.length);
           const rows = filtered.slice(offset, offset + limit);
@@ -295,6 +295,37 @@ async function authorized(browser, mobile) {
     const module = page.locator('section.financas-module');
     assert.equal(await module.locator('.financas-subnav a').count(), routes.length);
     const chartProof = await dashboard(page, name);
+    await module.getByRole('button', { name: 'Importar extrato', exact: true }).click();
+    const importDialog = page.getByRole('dialog', { name: 'Importar extrato CSV', exact: true });
+    await importDialog.getByLabel('Arquivo CSV', { exact: true }).setInputFiles({
+      name: 'extrato-bancario-sintetico.csv', mimeType: 'text/csv',
+      buffer: Buffer.from(['Extrato Conta Corrente', 'Conta ;000000000', 'Per\u00edodo ;17/10/2026 a 20/10/2026', 'Saldo: ;75,00', '', 'Data Lan\u00e7amento;Descri\u00e7\u00e3o;Valor;Saldo', '17/10/2026;Compra no debito: "LOJA SINTETICA";-50,00;50,00', '20/10/2026;Pix recebido: "CLIENTE SINTETICO";25,00;75,00'].join('\r\n')),
+    });
+    await importDialog.locator('.import-summary').waitFor();
+    assert.deepEqual(await importDialog.locator('.import-summary strong').allTextContents(), ['2', '0', '0']);
+    assert.equal(await importDialog.locator('tbody tr').count(), 2);
+    assert.match(await importDialog.locator('tbody tr').first().locator('td').last().innerText(), /-R\$\s*50,00/);
+    assert.equal(await importDialog.getByRole('button', { name: 'Confirmar importacao', exact: true }).isEnabled(), true);
+    await capture(page, `statement-preview-${name}`);
+    await importDialog.getByRole('button', { name: 'Cancelar', exact: true }).click();
+    await importDialog.waitFor({ state: 'hidden' });
+    assert.equal(state.writes.length, 0, 'CSV preview and cancellation never persist transactions');
+    assert.equal(state.rpcs.length, 0);
+    const savedNotes = JSON.stringify({ annotation: 'Anotacao sintetica preservada', summary: { reimbursement: 37.45, invoice: 123.45 }, preserved: 'metadata' });
+    state.financialViews.push({ id: 'synthetic-reimbursement-view', title: 'Periodo sintetico iMile', is_active: true, import_status: 'importado', source_file_name: 'sintetico.xlsx', source_rows: 0, created_at: '2026-10-20T12:00:00Z', notes: savedNotes });
+    await page.locator('.app > aside').getByRole('button', { name: 'Reembolso iMile', exact: true }).click();
+    await page.waitForURL(url => url.pathname === '/financeiro' && url.hash === '#reembolso');
+    const closingView = page.getByRole('combobox', { name: 'View do fechamento', exact: true });
+    await closingView.locator('option[value="synthetic-reimbursement-view"]').waitFor({ state: 'attached' });
+    await page.getByRole('heading', { name: 'Reembolso iMile', exact: true }).waitFor();
+    await closingView.selectOption('synthetic-reimbursement-view');
+    assert.equal(await page.getByRole('spinbutton', { name: 'Reembolso iMile deste per\u00edodo (apenas registro)', exact: true }).inputValue(), '37.45');
+    assert.equal(await page.getByRole('button', { name: 'Salvar reembolso', exact: true }).isVisible(), true);
+    await capture(page, `imile-reimbursement-${name}`);
+    assert.equal(state.financialViews[0].notes, savedNotes);
+    assert.equal(state.writes.length, 0, 'Opening saved reimbursement never changes financial records');
+    await page.locator('.app > aside').getByRole('button', { name: 'Financeiro', exact: true }).click();
+    await module.locator('.page-footer').waitFor();
     for (const [path, title] of routes) {
       await module.getByRole('link', { name: title, exact: true }).click();
       await page.waitForURL(url => url.pathname === (path ? `/financas/${path}` : '/financas'));

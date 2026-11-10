@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { ChangeEvent, useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useAccess } from './access'
 import DashboardNotes from './DashboardNotes'
 import * as XLSX from 'xlsx'
@@ -44,6 +45,7 @@ const reimbursementFromNotes=(notes:string|null|undefined)=>{try{const parsed=JS
 
 export default function Financeiro(){
   const {can,isAdmin}=useAccess()
+  const location=useLocation()
   const canManage=can('financeiro_manage')
   const actionRunning=useRef(false)
   const [viewAction,setViewAction]=useState<'rename'|'deactivate'|null>(null)
@@ -119,6 +121,12 @@ export default function Financeiro(){
     return ()=>{current=false}
   },[selected,views])
   useEffect(()=>{setReimbursement(String(reimbursementFromNotes(views.find(view=>view.id===selected)?.notes)));setViewNote(notes(views.find(view=>view.id===selected)?.notes).annotation??'');setViewAction(null)},[selected,views])
+  useEffect(()=>{
+    if(location.hash!=='#reembolso')return
+    const target=document.querySelector<HTMLElement>(selected?'.finance-page .finance-preview':'.finance-page .view-select')
+    target?.scrollIntoView({block:'start'})
+    if(!selected)target?.focus({preventScroll:true})
+  },[location.hash,selected])
   const changeView=async(event)=>{
     event.preventDefault()
     if(!supabase||!canManage||actionRunning.current)return
@@ -325,7 +333,7 @@ export default function Financeiro(){
     {isAdmin&&<details className="finance-history"><summary>Administração da base histórica</summary><section><h2>Substituir base financeira</h2><p>Esta operação desativa toda a base atual e invalida seus links de NF. Não use para importar uma nova quinzena ou corrigir um período.</p><label className={`history-upload ${busy?'disabled':''}`}>Importar base completa<input type="file" accept=".xlsx" onChange={chooseHistory} disabled={busy}/></label></section></details>}
     {message&&<p className="form-message">{message}</p>}
     <section className="finance-summary"><article className="metric"><span>Views salvas</span><strong>{views.length}</strong></article><article className="metric"><span>Itens na base geral</span><strong>{general.items}</strong></article><article className="metric"><span>Pacotes na base geral</span><strong>{general.packages.toLocaleString('pt-BR')}</strong></article><article className="metric red"><span>Extravios na base geral</span><strong>{general.losses} · R$ {general.lossAmount.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></article></section>
-    <section className="card"><div className="finance-head"><div><p className="eyebrow">VIEWS SALVAS</p><h2>Consultar fechamento</h2></div><button className="secondary" onClick={()=>void refresh()}>Atualizar</button></div><select className="view-select" value={selected} onChange={event=>setSelected(event.target.value)}><option value="">Selecione uma View</option>{views.map(view=><option key={view.id} value={view.id}>{view.title} · {new Date(view.created_at).toLocaleString('pt-BR')}</option>)}</select></section>
+    <section className="card"><div className="finance-head"><div><p className="eyebrow">VIEWS SALVAS</p><h2>{location.hash==='#reembolso'?'Reembolso iMile':'Consultar fechamento'}</h2></div><button className="secondary" onClick={()=>void refresh()}>Atualizar</button></div><select aria-label="View do fechamento" className="view-select" value={selected} onChange={event=>setSelected(event.target.value)}><option value="">Selecione uma View</option>{views.map(view=><option key={view.id} value={view.id}>{view.title} · {new Date(view.created_at).toLocaleString('pt-BR')}</option>)}</select></section>
     {selected&&<>{(()=>{const totalImile=viewTotals.reduce((sum,item)=>sum+number(item.net),0),totalDrops=details.reduce((sum,item)=>sum+number(item.receivable_amount),0),reimbursementValue=number(reimbursement),talitaJorge=totalImile-totalDrops;return <><section className="card finance-preview"><label>Reembolso iMile deste período (apenas registro)<input type="number" step="0.01" value={reimbursement} onChange={event=>setReimbursement(event.target.value)}/></label><button className="secondary" onClick={()=>void saveReimbursement()}>Salvar reembolso</button><strong>Pagamento Talita e Jorge: {money(talitaJorge)}</strong></section><section className="finance-summary"><article className="metric"><span>Linhas em Fechamento</span><strong>{details.length}</strong></article><article className="metric red"><span>Linhas em Extravios</span><strong>{viewLosses.length}</strong></article><article className="metric"><span>Total líquido iMile</span><strong>{money(totalImile)}</strong></article><article className="metric"><span>Pagamento aos Drops</span><strong>{money(totalDrops)}</strong></article></section></>})()}<section className="card"><h2>Fechamento</h2><div className="table-wrap"><table><thead><tr><th>Período</th><th>Parceiro</th><th>Drop</th><th>Quantidade de pacotes</th><th>Total padrão</th><th>Valor acordado</th><th>Valor pago AGU bruto</th><th>Extravio</th><th>Total a receber do AGU</th><th>Relatório</th></tr></thead><tbody>{details.map(item=><tr key={item.id}><td>{item.period?.label}</td><td>{item.period?.partner}</td><td>{item.drop_name_snapshot}</td><td>{item.quantity_packages}</td><td>{money(item.standard_total)}</td><td>{money(item.agreed_value)}</td><td>{money(item.gross_amount)}</td><td>{money(item.loss_amount)}</td><td>{money(item.receivable_amount)}</td><td><button className="table-action" onClick={()=>reportFor(item)}>Gerar PDF</button></td></tr>)}</tbody></table></div></section><section className="card"><h2>Extravios</h2><div className="table-wrap"><table><thead><tr><th>Período</th><th>Parceiro</th><th>Drop</th><th>Waybill</th><th>Status</th><th>Valor</th><th>Observação</th><th>Ação</th></tr></thead><tbody>{viewLosses.map(item=><tr key={item.id}><td>{item.period_label}</td><td>{item.partner}</td><td>{item.drop_name_snapshot}</td><td>{item.waybill}</td><td>{item.status}</td><td>{money(item.amount)}</td><td>{item.observation}</td><td><button className="table-action" onClick={()=>void editLoss(item)}>Editar</button></td></tr>)}</tbody></table></div></section></>}
   </section>
 }

@@ -2,6 +2,16 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Extrato bancario e reembolso iMile (10/11/2026)
+
+**Financeiro > Importar extrato** agora esta disponivel tambem na visao geral; o acesso em Fluxo de caixa continua igual. O modal existente seleciona o CSV, mostra previa/erros/duplicados e so salva com **Confirmar importacao**. Mantidas as mesmas contas autorizadas e revisao de concorrencia. O extrato bancario e separado dos CSVs Marketplace/Postagem do fechamento Mais Envios.
+
+Validado o formato recebido: metadados de conta/periodo/saldo, cabecalho `Data Lancamento;Descricao;Valor;Saldo`, separador `;`, datas brasileiras, aspas internas, valores negativos e milhares/centavos brasileiros. O arquivo fornecido foi analisado somente em memoria: 177 lancamentos de 17 a 20/10/2026, sem erros ou duplicados; repetir gerou zero linhas novas. Nao foi copiado para o repositorio nem importado na producao. Saldos, sinais e descricoes sao preservados, inclusive Pix devolvido; classificacoes sugeridas precisam ser revisadas. Nao foram presumidas novas regras de categorias, lucro, imposto ou conciliacao.
+
+**Fechamento > iMile > Reembolso iMile** leva a selecao do periodo e depois ao campo ja existente, em `/financeiro#reembolso`. Le valores atuais ou legados das notas sem apagar metadados; a gravacao e as permissoes continuam as mesmas. Reembolso permanece apenas registro do periodo, sem criar automaticamente recebimento bancario ou alterar as formulas dos pagamentos. Escolher o periodo continua obrigatorio.
+
+Sem SQL novo, dependencia ou funcao serverless nesta rodada; migracoes anteriores continuam necessarias. Alteracoes locais, sem publicacao automatica. Testes: `npm run test:financas` (inclui fixture bancaria ficticia, sem dados do extrato), `npm run test:financas-app` com `FINANCAS_APP_BASE_URL=http://127.0.0.1:5175` definido no terminal, `npm run test:mais-envios-closing-browser` e `npm run build`. Navegador desktop/celular confere previa e cancelamento sem gravacoes, acesso ao reembolso legado sem alterar notas/valores, contas autorizadas/negadas e viewport de 980px preservado. Capturas em `tmp/financas-app/statement-preview-*.png` e `imile-reimbursement-*.png`.
+
 ## Telefone no mapa e prioridade da leitura (10/11/2026)
 
 No leitor `/bipar`, foto, destino e resultados aparecem antes dos demais controles; **Expedicao por motorista** agora fica no final, depois da leitura em massa. Mantidos selecao de motorista, permissoes, captura, OCR e atribuicao dos pacotes. Mudar a posicao nao corrige nem oculta eventual aviso de indisponibilidade da API/migracao da expedicao.
