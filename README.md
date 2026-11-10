@@ -2,6 +2,29 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Mapa publico e expedicao por motorista (10/11/2026)
+
+Publicacao por PR, sem merge ou SQL remoto automaticos. O usuario informou em 10/11/2026 que aplicou os dois SQLs corrigidos abaixo; o assistente nao executou nem verificou o banco remoto. Em outros ambientes, aplicar pessoalmente nesta ordem antes de publicar frontend e APIs:
+
+1. [20261110100000_public_active_drop_map.sql](supabase/migrations/20261110100000_public_active_drop_map.sql): RPC publica somente nome, endereco e coordenadas de Drops `drop_off`, status exatamente `ATIVO`, ativos, nao excluidos e com coordenadas brasileiras validas. Nao publica telefone, CPF/CNPJ, PIX, fotos, documentos, contatos ou permissao de leitura direta da tabela. Status de espera de login/insumos ficam fora.
+2. [20261110110000_label_driver_dispatch.sql](supabase/migrations/20261110110000_label_driver_dispatch.sql): acrescenta identidade do motorista e endereco do pacote; preserva historico antigo sem adivinhar motorista pelo nome. Leitura direta limitada a propria conta ativa com acesso ao leitor, alem das politicas administrativas existentes; nenhuma nova escrita direta pelo cliente.
+
+Link externo `/mapa-drops`, anonimo e sem menus internos, filtra endereco/nome, cidade e bairro. Configuracoes permite copiar esse link. A RPC limita os campos no servidor; nao depende de ocultar dados privados no navegador. Mapa utiliza os tiles publicos do OpenStreetMap; limites/atribuicao do provedor devem ser respeitados e nao ha garantia de SLA para grande volume. Apenas abrir "Como chegar" envia o destino escolhido ao Google.
+
+Contas somente leitor ou ainda sem aprovacao sao direcionadas para `/bipar`, inclusive quando abrem `/`, `/documentos`, `/mensagens` ou outra URL interna. Nao recebem o menu geral. Cadastro iniciado no leitor pede confirmacao de email de volta para `/bipar`: configurar tambem o endereco HTTPS de producao com esse caminho em **Supabase Authentication > URL Configuration > Redirect URLs**. Nenhuma configuracao remota foi alterada. A migracao de opt-in do leitor de 09/11 continua sendo requisito; nao reaplicar os scripts antigos 05/06 por cima dela.
+
+Na expedicao, admin ou a conta gestora de rotas ja autorizada escolhe o motorista das proximas leituras entre contas ativas aprovadas para o leitor. O motorista comum so pode bipar para si e consultar a propria lista. Cada foto/captura guarda o motorista escolhido naquele instante, mesmo trocando a selecao durante o OCR; o lote guarda a selecao feita ao iniciar. Resultado seguro e unico da base grava o volume; enderecos ambiguos ou fora da base nao contam como salvos e precisam ser conferidos em nova leitura individual. Falhas de gravacao no lote permitem repetir a mesma chave sem duplicar. Chave identifica captura/tentativa, nao codigo de rastreio fisico: fotografar novamente o mesmo pacote como nova captura nao e deduplicado automaticamente.
+
+Filtro diario usa dia de Sao Paulo. Administracao ve total de volumes bipados, motoristas com volumes e quantidade por motorista; conta comum ve apenas seus proprios volumes. Historico sem motorista aparece separado para a administracao. **Volumes bipados/atribuidos nao significam entregas concluidas**; nao existe evento de baixa de entrega nesta etapa. Limites existentes de 100 volumes por lote e por nome de motorista/dia continuam valendo.
+
+OCR agora preserva numero e complemento, mas a consulta de correspondencia continua usando rua/bairro/cidade/CEP. Sem numero, cidade, CEP ou quando houver aviso/incerteza, o endereco fica pendente de conferencia. Revisar e confirmar endereco completo antes dos links de navegacao; alteracoes nao confirmadas bloqueiam Maps e Excel, e nao sao perdidas quando outra leitura termina. Excel pode exportar registros ainda pendentes, identificados como tal.
+
+Google Maps comum abre navegação de carro na sequencia cadastrada na base e, no desempate, por horario/ID. **Nao otimiza automaticamente as paradas.** Para compatibilidade movel, links sao divididos em trechos de ate quatro paradas (tres intermediarias e destino), continuando do destino do trecho anterior. Nenhum pacote e descartado. A partida pode ser informada; sem ela, o primeiro trecho usa a localizacao escolhida pelo Maps. Links muito extensos sao bloqueados, nunca truncados.
+
+Otimizacao real e opcional e vem desativada sem `GOOGLE_ROUTES_API_KEY` **somente no servidor**. Se desejada, o responsavel configura a propria conta Google Routes, restricoes e faturamento; nao fornecer chave no chat ou no frontend. Botao solicita confirmacao antes de enviar enderecos ao Google/gerar eventual cobranca. Aceita 2 a 25 paradas do mesmo motorista e origem explicita; otimiza intermediarias mantendo a ultima parada como destino fixo. A ordem retornada e validada e nao sobrescreve a base. Nao e otimizacao conjunta de frota, nem promessa de melhor percurso global. Nao foi ativado servico pago ou enviado endereco real nesta implementacao.
+
+Verificacoes: `npm test`, `npm run test:label-dispatch`, `npm run test:public-map`, `npm run test:label-reader` e `npm run build`. Navegador com Vite em 127.0.0.1:5175 (`LABEL_BASE_URL` para leitor, `MAP_BASE_URL` para mapa), contas/endereco/base sinteticos, chamadas externas bloqueadas ou simuladas; SQL testado com PGlite. Nao substitui homologacao no celular/Safari, OCR real ou banco/provedores de producao.
+
 ## Textos e fotos do pre-cadastro (09/11/2026)
 
 O formulario publico `/cadastrar-drop` inclui a orientacao do Google Maps junto a latitude/longitude, o campo "Fale um pouco sobre voce e suas experiencias" e o pedido de fotos da fachada e espaco interno. Novos envios exigem **3 a 5 fotos** no formulario, API e reserva do banco. Mantidos formatos JPEG/PNG/WebP, 2 MB no total, privacidade, quotas, protocolo de recuperacao e aprovacao sem ativacao automatica.

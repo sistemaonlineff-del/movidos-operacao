@@ -10,6 +10,8 @@
     "test": "node --test tests/financial.test.mjs tests/database.test.mjs tests/label-api.test.mjs tests/closing-mail.test.mjs tests/contract-templates.test.mjs tests/invoices.test.mjs",
     "test:browser": "node tests/document-browser.mjs",
     "test:label-reader": "node tests/label-reader-browser.mjs",
+    "test:label-dispatch": "node --test tests/label-dispatch.test.mjs",
+    "test:public-map": "node --test tests/public-drop-map.test.mjs",
     "test:mais-envios-closing": "node --test --test-concurrency=1 tests/mais-envios-closing.test.mjs tests/mais-envios-closing-api.test.mjs",
     "test:mais-envios-closing-browser": "node tests/mais-envios-closing-browser.mjs",
     "test:financas": "node --import ./tests/financas-loader.mjs --test --test-concurrency=1 \"tests/financas-*.test.mjs\"",

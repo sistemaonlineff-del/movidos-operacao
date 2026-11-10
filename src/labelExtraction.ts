@@ -1,8 +1,9 @@
-export const addressFields = ['street', 'neighborhood', 'city', 'postalCode'] as const
+export const addressFields = ['street', 'number', 'complement', 'neighborhood', 'city', 'postalCode'] as const
 export type LabelAddress = Record<typeof addressFields[number], string | null>
 export interface LabelExtraction { recipient: LabelAddress; warnings: string[]; uncertainFields: string[] }
 export const addressLabels: Record<keyof LabelAddress, string> = {
   street: 'Rua / Logradouro', neighborhood: 'Bairro', city: 'Cidade', postalCode: 'CEP',
+  number: 'Numero', complement: 'Complemento',
 }
 
 export function parseLabelExtraction(value: unknown): LabelExtraction {
@@ -11,7 +12,8 @@ export function parseLabelExtraction(value: unknown): LabelExtraction {
   const source = data.recipient
   if (!source || typeof source !== 'object') throw new Error('Endereço inválido da leitura.')
   const recipient = Object.fromEntries(addressFields.map(field => {
-    const entry = (source as Record<string, unknown>)[field]
+    const raw = (source as Record<string, unknown>)[field]
+    const entry = raw === undefined && (field === 'number' || field === 'complement') ? null : raw
     if (entry !== null && (typeof entry !== 'string' || entry.length > 500)) throw new Error('Campo inválido da leitura.')
     return [field, typeof entry === 'string' ? entry.trim() || null : null]
   })) as LabelAddress
@@ -32,4 +34,9 @@ export function parseLabelExtraction(value: unknown): LabelExtraction {
 export function extractionQuery(data: LabelExtraction): string {
   const field = (name: keyof LabelAddress) => data.uncertainFields.includes(`recipient.${name}`) ? '' : data.recipient[name] || ''
   return [field('street'), field('neighborhood'), field('city'), field('postalCode')].filter(Boolean).join('\n')
+}
+
+export function labelDeliveryAddress(data: LabelExtraction) {
+  const packageAddress = addressFields.filter(field => !data.uncertainFields.includes(`recipient.${field}`)).map(field => data.recipient[field]).filter(Boolean).join(', ')
+  return { packageAddress, addressConfirmed: !data.uncertainFields.length && !data.warnings.length && ['street','number','city','postalCode'].every(field => Boolean(data.recipient[field as keyof LabelAddress])) }
 }

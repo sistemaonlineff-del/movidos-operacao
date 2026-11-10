@@ -38,7 +38,7 @@ export function AccessProvider({ children, revalidateMs = 0 }: any) {
     return () => { window.clearInterval(timer); window.removeEventListener('focus', check); document.removeEventListener('visibilitychange', visible) }
   }, [revalidateMs])
   const isAdmin = state.profile?.role === 'admin' && state.profile?.is_active
-  const can = (name: string) => Boolean(isAdmin || state.permissions?.[name])
+  const can = (name: string) => Boolean(state.profile?.is_active && (isAdmin || state.permissions?.[name]))
   return <AccessContext.Provider value={{ ...state, isAdmin, can, refresh, canAccessFinancas: canAccessPrivateFinances(state.profile?.email, state.profile?.is_active) }}>{children}</AccessContext.Provider>
 }
 export const useAccess = () => useContext(AccessContext)
