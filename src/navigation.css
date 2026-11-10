@@ -1,4 +1,11 @@
 .nav-section-title { display: block; width: 100%; padding: .5rem .7rem .15rem; color: #fff; font-size: .85rem; font-weight: 700; }
+.app > aside nav .nav-submenu.nav-closing-companies { display: grid; min-width: 0; gap: .3rem; }
+.app > aside nav .nav-closing-companies > .nav-company { display: flex; align-items: center; justify-content: space-between; gap: .5rem; font-weight: 700; color: #fff; }
+.app > aside nav .nav-company-links { display: grid; gap: .2rem; min-width: 0; margin: 0 0 .4rem .9rem; padding-left: .55rem; border-left: 2px solid #6c9295; }
+.app > aside nav .nav-company-links button { width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.app > aside nav .nav-company-links button:disabled { opacity: .5; cursor: not-allowed; }
+.app > aside nav .nav-company-links button:disabled:hover { background: transparent; }
+.app > aside nav .nav-chevron-open { transform: rotate(90deg); }
 @media (max-width: 850px) {
 	.app > aside nav { flex-wrap: wrap; min-width: 0; }
 	.app > aside nav .nav-submenu { display: flex; flex-wrap: wrap; width: 100%; min-width: 0; }

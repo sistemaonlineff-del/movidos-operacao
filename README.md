@@ -2,6 +2,14 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Conferencia da lista e organizacao dos menus (10/11/2026)
+
+A lista recebida repete entregas anteriores: mapa publico dos Drops ativos, leitor isolado, rotas dos pacotes no Maps, resumo diario por motorista e financeiro Mais Envios conforme a planilha fornecida. Essas implementacoes foram preservadas, sem refazer calculos, importacoes, permissao ou atribuicao de pacotes.
+
+Pendencias desta rodada: o acesso antes chamado **Financeiro** agora se chama **Fechamento** (tambem no atalho da visao geral); o acesso privado antes chamado **Financas** agora se chama **Financeiro**, com as mesmas contas autorizadas. URLs `/financeiro/*` e `/financas/*` e permissoes permanecem iguais. O menu Fechamento separa iMile, J&T Express e Mais Envios em grupos recolhiveis; links de cada empresa ficam recuados sob seu titulo, e o grupo da pagina atual abre ao entrar, voltar ou recarregar. Notas Fiscais Drops permanece como acesso comum. J&T continua aguardando seu modelo, sem criar regras ou habilitar telas inexistentes.
+
+Alteracoes locais, sem commit/push/PR ou producao automaticos. Nao exige novo SQL, variavel de ambiente ou funcao serverless. Testes do App real: `npm run test:mais-envios-closing-browser` e `npm run test:financas-app` (aceita `FINANCAS_APP_BASE_URL`, padrao localhost:5173), com dados sinteticos e chamadas externas bloqueadas. Conferem nomes, grupos/recuo, retorno e recarga, desktop/celular, fluxo Mais Envios e bloqueio das contas nao autorizadas ao Financeiro privado. Preservado o viewport legado de 980px fora do leitor/mapa publicos.
+
 ## Limite de funcoes Vercel Hobby (10/11/2026)
 
 A expedicao acrescentou uma 13a funcao e excedeu o limite de 12 do plano Hobby. A correcao mantem `/api/label-dispatch`, mas encaminha essa URL em `vercel.json` para a funcao existente `/api/label-volume`; sua implementacao fica como modulo interno em `server/label-dispatch.ts`, fora da descoberta de funcoes. Total: 12 pontos de entrada em `api/`, sem remover recursos ou mudar autenticacao/permissoes. O rewrite especifico deve permanecer antes do fallback da SPA. Nao exige plano pago, novo SQL, variavel de ambiente ou mudanca de URL no frontend.

@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { FormEvent, Suspense, lazy, useEffect, useRef, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import {
   Navigate,
   Route,
@@ -403,7 +404,7 @@ function Layout({
               </button>
             </div>
           )}
-          <button onClick={() => nav("/financeiro")}>Financeiro</button>
+          <button onClick={() => nav("/financeiro")}>Fechamento</button>
           <button onClick={() => nav("/funcionarios")}>Funcionários</button>
           <button onClick={() => nav("/documentos")}>Documentos</button>
         </nav>
@@ -1205,6 +1206,12 @@ function SecureLayoutInner({
   const [financeOpen, setFinanceOpen] = useState(
     loc.pathname.startsWith("/financeiro"),
   );
+  const [financeCompany, setFinanceCompany] = useState<string | null>(loc.pathname.startsWith("/financeiro/mais-envios") ? "mais-envios" : "imile");
+  useEffect(() => {
+    if (!loc.pathname.startsWith("/financeiro")) return;
+    setFinanceOpen(true);
+    if (loc.pathname !== "/financeiro/notas-fiscais") setFinanceCompany(loc.pathname.startsWith("/financeiro/mais-envios") ? "mais-envios" : "imile");
+  }, [loc.pathname]);
   const labels: Record<string, string> = {
     "/": "Visão Geral - Detalhada",
     "/cadastros": "Cadastros",
@@ -1214,7 +1221,7 @@ function SecureLayoutInner({
     "/cadastros/last-mile/novo": "Novo cadastro Last Mile",
     "/cadastros/mais-envios": "Cadastros Mais Envios",
     "/cadastros/mais-envios/novo": "Cadastro Mais Envios",
-    "/financeiro": "Financeiro",
+    "/financeiro": "Fechamento",
     "/financeiro/notas-fiscais": "Notas fiscais",
     "/financeiro/mais-envios/pagamento-total": "Mais Envios - Pagamento total",
     "/financeiro/mais-envios/pagamento-detalhes": "Mais Envios - Pagamento detalhes",
@@ -1302,12 +1309,16 @@ function SecureLayoutInner({
                     : "nav-parent"
                 }
                 onClick={() => setFinanceOpen(!financeOpen)}
+                aria-label="Fechamento"
+                aria-expanded={financeOpen}
+                aria-controls="closing-navigation"
               >
-                Financeiro <span>{financeOpen ? "−" : "+"}</span>
+                Fechamento <ChevronRight size={17} aria-hidden="true" className={financeOpen ? "nav-chevron-open" : ""} />
               </button>
               {financeOpen && (
-                <div className="nav-submenu">
-                  <span className="nav-section-title">iMile</span>
+                <div className="nav-submenu nav-closing-companies" id="closing-navigation">
+                  <button type="button" className="nav-company" aria-label="iMile" aria-expanded={financeCompany === "imile"} aria-controls="closing-imile" onClick={() => setFinanceCompany(value => value === "imile" ? null : "imile")}>iMile<ChevronRight size={16} aria-hidden="true" className={financeCompany === "imile" ? "nav-chevron-open" : ""} /></button>
+                  {financeCompany === "imile" && <div className="nav-company-links" id="closing-imile" role="group" aria-label="Fechamento iMile">
                   <button
                     className={
                       loc.pathname === "/financeiro" ? "sub-active" : ""
@@ -1348,18 +1359,23 @@ function SecureLayoutInner({
                   >
                     Gerar CNAB
                   </button>
+                  </div>}
+                  <button type="button" className="nav-company" aria-label="J&T Express" aria-expanded={financeCompany === "jt"} aria-controls="closing-jt" onClick={() => setFinanceCompany(value => value === "jt" ? null : "jt")}>J&amp;T Express<ChevronRight size={16} aria-hidden="true" className={financeCompany === "jt" ? "nav-chevron-open" : ""} /></button>
+                  {financeCompany === "jt" && <div className="nav-company-links" id="closing-jt" role="group" aria-label="Fechamento J&T Express">
+                    <button type="button" disabled title="Aguardando modelo e regras do financeiro J&T Express">Pagamento total</button>
+                    <button type="button" disabled title="Aguardando modelo e regras do financeiro J&T Express">Pagamento detalhes</button>
+                  </div>}
+                  <button type="button" className="nav-company" aria-label="Mais Envios" aria-expanded={financeCompany === "mais-envios"} aria-controls="closing-mais-envios" onClick={() => setFinanceCompany(value => value === "mais-envios" ? null : "mais-envios")}>Mais Envios<ChevronRight size={16} aria-hidden="true" className={financeCompany === "mais-envios" ? "nav-chevron-open" : ""} /></button>
+                  {financeCompany === "mais-envios" && <div className="nav-company-links" id="closing-mais-envios" role="group" aria-label="Fechamento Mais Envios">
+                    <button type="button" className={loc.pathname === "/financeiro/mais-envios/pagamento-total" ? "sub-active" : ""} onClick={() => nav("/financeiro/mais-envios/pagamento-total")}>Pagamento total</button>
+                    <button type="button" className={loc.pathname === "/financeiro/mais-envios/pagamento-detalhes" ? "sub-active" : ""} onClick={() => nav("/financeiro/mais-envios/pagamento-detalhes")}>Pagamento detalhes</button>
+                  </div>}
                   <button className={loc.pathname === '/financeiro/notas-fiscais' ? 'sub-active' : ''} onClick={() => nav('/financeiro/notas-fiscais')}>Notas Fiscais Drops</button>
-                  <span className="nav-section-title">J&amp;T Express</span>
-                  <button type="button" disabled title="Aguardando modelo e regras do financeiro J&T Express">Pagamento total</button>
-                  <button type="button" disabled title="Aguardando modelo e regras do financeiro J&T Express">Pagamento detalhes</button>
-                  <span className="nav-section-title">Mais Envios</span>
-                  <button type="button" className={loc.pathname === "/financeiro/mais-envios/pagamento-total" ? "sub-active" : ""} onClick={() => nav("/financeiro/mais-envios/pagamento-total")}>Pagamento total</button>
-                  <button type="button" className={loc.pathname === "/financeiro/mais-envios/pagamento-detalhes" ? "sub-active" : ""} onClick={() => nav("/financeiro/mais-envios/pagamento-detalhes")}>Pagamento detalhes</button>
                 </div>
               )}
             </>
           )}
-          {canAccessFinancas && <button className={loc.pathname.startsWith("/financas") ? "active" : ""} onClick={() => nav("/financas")}>Finanças</button>}
+          {canAccessFinancas && <button className={loc.pathname.startsWith("/financas") ? "active" : ""} onClick={() => nav("/financas")}>Financeiro</button>}
           {can("funcionarios_view") && (
             <button
               className={loc.pathname === "/funcionarios" ? "active" : ""}
@@ -1410,7 +1426,7 @@ function SecureLayoutInner({
         <header>
           <div>
             <p className="eyebrow">SISTEMA MOVIDOS</p>
-            <h1>{loc.pathname.startsWith("/financas") ? "Finanças" : labels[loc.pathname] ?? loc.pathname.slice(1)}</h1>
+            <h1>{loc.pathname.startsWith("/financas") ? "Financeiro" : labels[loc.pathname] ?? loc.pathname.slice(1)}</h1>
           </div>
         </header>
         <Suspense
