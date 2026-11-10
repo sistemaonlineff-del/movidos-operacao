@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { authorizeLabelReaderContext, LabelApiError } from '../server/label-auth.js'
+import { authorizeLabelReaderContext, LabelApiError } from './label-auth.js'
 import { orderedDispatch, type DispatchVolume } from '../src/labelDispatch.js'
 
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)

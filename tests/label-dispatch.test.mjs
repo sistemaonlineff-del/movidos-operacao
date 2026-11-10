@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { buildSync } from 'esbuild'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { PGlite } from '@electric-sql/pglite'
 
@@ -79,8 +79,19 @@ test('dispatch permission migration creates a missing column without authorizing
   }finally{await db.close()}
 })
 
+test('Vercel Hobby stays within 12 functions and preserves the dispatch URL before the SPA fallback',async()=>{
+  const entries=(await readdir('api',{recursive:true})).filter(name=>/\.(?:[cm]?js|ts|py|go|rb|php)$/.test(name)&&!name.endsWith('.d.ts'))
+  assert.ok(entries.length<=12,`${entries.length} serverless function entrypoints`)
+  assert.ok(!entries.includes('label-dispatch.ts'))
+  const config=JSON.parse(await readFile('vercel.json','utf8')),rule=config.rewrites[0]
+  assert.equal(rule.source,'/api/label-dispatch')
+  const target=new URL(rule.destination,'https://example.invalid')
+  assert.equal(target.pathname,'/api/label-volume');assert.equal(target.searchParams.get('__labelDispatch'),'1')
+  assert.deepEqual(config.rewrites.at(-1),{source:'/(.*)',destination:'/index.html'})
+})
+
 test('dispatch API scopes own lists, denies cross-driver writes, preserves assignments on retry and validates Google results',async()=>{
-  buildSync({entryPoints:['api/label-dispatch.ts','api/label-volume.ts'],outdir:'tmp/label-dispatch',outbase:'api',outExtension:{'.js':'.cjs'},bundle:true,platform:'node',format:'cjs',packages:'external'})
+  buildSync({entryPoints:{'label-dispatch':'server/label-dispatch.ts','label-volume':'api/label-volume.ts'},outdir:'tmp/label-dispatch',outExtension:{'.js':'.cjs'},bundle:true,platform:'node',format:'cjs',packages:'external'})
   const load=async name=>{const module=await import(pathToFileURL(`${process.cwd()}/tmp/label-dispatch/${name}.cjs`));return module.default.default??module.default}
   const dispatch=await load('label-dispatch'),volume=await load('label-volume')
   const originalFetch=globalThis.fetch,env={...process.env},first='11111111-1111-4111-8111-111111111111',second='22222222-2222-4222-8222-222222222222'
@@ -109,6 +120,11 @@ test('dispatch API scopes own lists, denies cross-driver writes, preserves assig
     }
     assert.equal((await invoke(dispatch,null,'GET',{day:'2026-02-31'})).status,400)
     let response=await invoke(dispatch);assert.equal(response.status,200);assert.equal(response.body.rows.length,2);assert.equal(response.body.drivers.length,1)
+    const throughRewrite=await invoke(volume,null,'GET',{day:'2026-11-10',__labelDispatch:'1'})
+    assert.equal(throughRewrite.status,200);assert.deepEqual(throughRewrite.body,response.body)
+    assert.equal((await invoke(volume,{mode:'confirm-address',day:'2026-11-10',id:rows[0].id,address:'Rua A, 11, Suzano SP'},'POST',{__labelDispatch:'1'})).status,200)
+    assert.equal(rows[0].recipient_address,'Rua A, 11, Suzano SP')
+    assert.equal((await invoke(volume,null,'GET',{day:'2026-11-10',__labelDispatch:'1',driverId:second})).status,403)
     assert.equal((await invoke(dispatch,null,'GET',{day:'2026-11-10',driverId:second})).status,403)
     assert.equal((await invoke(dispatch,{mode:'confirm-address',day:'2026-11-10',id:rows[2].id,address:'forged'},'POST')).status,400)
     const payload={baseId:'base-1',scanKey:'new-scan-key-123456',driverId:second,packageAddress:'Rua C, 30, Suzano SP',addressConfirmed:true}
@@ -122,5 +138,6 @@ test('dispatch API scopes own lists, denies cross-driver writes, preserves assig
     assert.equal(response.status,200);assert.deepEqual(response.body.ids,rows.slice(0,2).map(row=>row.id));assert.equal(googleCalls,1)
     indices=[99];assert.equal((await invoke(dispatch,{mode:'optimize',day:'2026-11-10',driverId:first,origin:'Deposito'},'POST')).status,502)
     active=false;assert.equal((await invoke(dispatch)).status,403)
+    assert.equal((await invoke(volume,null,'GET',{day:'2026-11-10',__labelDispatch:'1'})).status,403)
   }finally{globalThis.fetch=originalFetch;for(const key of Object.keys(process.env))if(!(key in env))delete process.env[key];Object.assign(process.env,env)}
 })
