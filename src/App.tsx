@@ -1321,12 +1321,13 @@ function SecureLayoutInner({
                   {financeCompany === "imile" && <div className="nav-company-links" id="closing-imile" role="group" aria-label="Fechamento iMile">
                   <button
                     className={
-                      loc.pathname === "/financeiro" ? "sub-active" : ""
+                      loc.pathname === "/financeiro" && loc.hash !== "#reembolso" ? "sub-active" : ""
                     }
                     onClick={() => nav("/financeiro")}
                   >
                     Importar base
                   </button>
+                  <button className={loc.pathname === "/financeiro" && loc.hash === "#reembolso" ? "sub-active" : ""} onClick={() => nav("/financeiro#reembolso")}>Reembolso iMile</button>
                   <button
                     className={
                       loc.pathname === "/financeiro/pagamento-total"
