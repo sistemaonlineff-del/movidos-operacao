@@ -10,7 +10,7 @@ const token=['local',Buffer.from(JSON.stringify({sub:user.id,exp:Math.floor(Date
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']})
 const diagnostics=[]
 await mkdir('tmp/label-reader/screenshots',{recursive:true})
-async function fixture({logged=true,active=true,allowed=true,mobile=true,role='operador',path='/bipar',dispatchScenario=false,dispatchUnavailable=false}={}) {
+async function fixture({logged=true,active=true,allowed=true,mobile=true,role='operador',path='/bipar',dispatchScenario=false,dispatchUnavailable=false,routeVariant='single'}={}) {
   const context=await browser.newContext({viewport:{width:mobile?390:1440,height:mobile?844:1000},isMobile:mobile,hasTouch:mobile,serviceWorkers:'block',permissions:['camera']})
   const drivers=[{id:user.id,name:'Bruno'},{id:'22222222-2222-4222-8222-222222222222',name:'Jose'},{id:'33333333-3333-4333-8333-333333333333',name:'Rafael'}]
   const state={active,allowed,calls:[],errors:[],permissionWrites:[],dispatchRows:[],holdReading:false,pendingReads:[],readNumber:0,day:'',drivers}
@@ -62,7 +62,12 @@ async function fixture({logged=true,active=true,allowed=true,mobile=true,role='o
           if(!state.dispatchRows.some(row=>row.scan_key===body.scanKey))state.dispatchRows.push({id:crypto.randomUUID(),driver_id:body.driverId,driver_name:driver.name,recipient_address:body.packageAddress,address_confirmed:body.addressConfirmed,delivery_sequence:1,created_at:new Date().toISOString(),scan_key:body.scanKey,delivery_date:state.day})
           return json({saved:true,zone:'Norte',route:'R1',batch:1,sequence:1})
         }
-        if(url.pathname==='/api/label-routes')return json({records:dispatchScenario?[{id:'base-1',street:'Rua Sintetica',neighborhood:'Centro',city:'Suzano',postalCode:'08600-000',zone:'Norte',route:'R1',deliverySequence:1}]:[],summary:[],source:'Base sintetica',baseId:'local-only'})
+        if(url.pathname==='/api/label-routes'){
+          const record={id:'base-1',street:'Rua Sintetica',neighborhood:'Centro',city:'Suzano',postalCode:'08600-000',zone:'Norte',route:'R1',deliverySequence:1}
+          const records=dispatchScenario?[record]:[]
+          if(dispatchScenario&&routeVariant!=='single')records.push({...record,id:'base-2',route:routeVariant==='conflict'?'R2':'R1'})
+          return json({records,summary:[],source:'Base sintetica',baseId:'local-only'})
+        }
         if(url.pathname==='/api/label-read'){
           if(request.method()==='GET')return json({configured:true})
           const number=++state.readNumber
@@ -180,7 +185,18 @@ try{
   assert.equal(await admin.page.getByRole('checkbox',{checked:true}).count(),0)
   assert.deepEqual(admin.state.errors,[])
   await admin.context.close()
-  const expedition=await fixture({role:'admin',mobile:true,dispatchScenario:true})
+  const ambiguous=await fixture({dispatchScenario:true,routeVariant:'conflict'})
+  await ambiguous.page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()
+  await ambiguous.page.getByRole('button',{name:'Abrir leitura cont\u00ednua sem pausa',exact:true}).click()
+  await ambiguous.page.waitForFunction(()=>{const video=document.querySelector('video');return video?.readyState>=2&&video.videoWidth>0})
+  await ambiguous.page.getByRole('button',{name:'Capturar pacote #1',exact:true}).click()
+  await ambiguous.page.getByText('2 endere\u00e7os poss\u00edveis \u2014 conferir',{exact:true}).waitFor()
+  assert.equal(ambiguous.state.dispatchRows.length,0)
+  assert.equal(ambiguous.state.calls.includes('/api/label-volume'),false)
+  await ambiguous.page.screenshot({path:'tmp/label-reader/screenshots/conflicting-addresses-mobile.png',fullPage:true})
+  assert.deepEqual(ambiguous.state.errors,[])
+  await ambiguous.context.close()
+  const expedition=await fixture({role:'admin',mobile:true,dispatchScenario:true,routeVariant:'duplicate'})
   const {page,state}=expedition
   await page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()
   const png=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=640;canvas.height=400;canvas.getContext('2d').fillRect(0,0,640,400);return canvas.toDataURL('image/png').split(',')[1]})
@@ -228,6 +244,8 @@ try{
   await page.getByRole('button',{name:'Capturar pacote #2',exact:true}).click();await cameraSecond
   state.holdReading=false;state.pendingReads.splice(0).forEach(resolve=>resolve())
   await count(9)
+  assert.equal(await page.locator('.camera-batch-item').count(),2)
+  assert.equal(await page.getByText('2 endere\u00e7os poss\u00edveis \u2014 conferir',{exact:true}).count(),0)
   assert.deepEqual(state.dispatchRows.slice(-2).map(row=>row.driver_id).sort(),[state.drivers[0].id,state.drivers[2].id].sort())
   assert.equal(await page.getByLabel(`Endereco do pacote ${row.id}`,{exact:true}).inputValue(),'Rua Sintetica, 999, Suzano SP')
   await page.getByRole('button',{name:'Excel',exact:true}).click()

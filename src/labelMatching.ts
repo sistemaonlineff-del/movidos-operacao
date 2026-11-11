@@ -52,17 +52,24 @@ export function findLabelMatches(text: string, records: LabelRoute[]): LabelMatc
   const repaired = text.replace(/\b([a-zA-ZÀ-ÿ])\s*\r?\n\s*(?=[a-zà-ÿ])/g, '$1')
   const normalized = normalizeLabelText(repaired)
   if (!normalized) return []
+  const seen = new Set<string>()
+  const uniqueRecords = records.filter(record => {
+    const key = JSON.stringify([record.street, record.neighborhood, record.postalCode, record.city, record.zone ?? '', record.region ?? '', record.route ?? '', record.deliverySequence ?? null, record.mapsUrl ?? '', record.routeUrl ?? ''].map(value => typeof value === 'string' ? value.trim() : value))
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
   const ceps = postalCodes(repaired)
   const cepCounts = new Map<string, number>()
-  const cityNames = [...new Set(records.map(record => normalizeLabelText(record.city.split(' - ')[0])))]
+  const cityNames = [...new Set(uniqueRecords.map(record => normalizeLabelText(record.city.split(' - ')[0])))]
   const tokens = normalized.split(' ')
   const detectedCities = cityNames.filter(city => contains(normalized, city) || tokens.some((_, index) => tokens.slice(index, index + 2).join('') === city.replace(/ /g, '')))
-  const detectedNeighborhoods = [...new Set(records.map(record => normalizeLabelText(record.neighborhood)))].filter(name => contains(normalized, name))
+  const detectedNeighborhoods = [...new Set(uniqueRecords.map(record => normalizeLabelText(record.neighborhood)))].filter(name => contains(normalized, name))
   const streetMarker = /\b(?:rua|r\.|avenida|av\.?|travessa|tr\.|praça|praca|estrada|est\.|rodovia)\s+/i.exec(repaired)
   // End at the house number, keeping recipient names out of street matching.
   const streetScope = normalizeLabelText(streetMarker ? repaired.slice(streetMarker.index + streetMarker[0].length).split(/[,;]|\s\d+(?:\s|,|$)/)[0] : repaired)
-  for (const record of records) cepCounts.set(record.postalCode, (cepCounts.get(record.postalCode) ?? 0) + 1)
-  const candidates = records.flatMap(record => {
+  for (const record of uniqueRecords) cepCounts.set(record.postalCode, (cepCounts.get(record.postalCode) ?? 0) + 1)
+  const candidates = uniqueRecords.flatMap(record => {
     const cityName = normalizeLabelText(record.city.split(' - ')[0])
     if (detectedCities.length && !detectedCities.includes(cityName)) return []
     const street = streetName(record.street)
