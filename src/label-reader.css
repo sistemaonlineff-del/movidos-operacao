@@ -30,12 +30,4 @@
 .item-route-result small{display:block;font-size:11px;color:#60766c}
 .item-route-warning span{color:#a75a00;font-weight:600}
 .camera-batch-item{flex-wrap:wrap;cursor:default;border-radius:8px}
-.camera-batch-item .camera-review-trigger{display:flex;align-items:center;gap:6px;min-height:44px;padding:8px;font-size:13px}
-.camera-route-review{flex:1 1 100%;min-width:0;border-top:1px solid #cdded8;padding-top:12px;overflow-wrap:anywhere}
-.camera-review-heading{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.camera-review-heading button{display:grid;place-items:center;min-width:44px;min-height:44px;padding:8px}
-.camera-review-photo{display:block;width:100%;height:220px;object-fit:contain;margin-top:10px;background:#edf3f0}
-.camera-route-option{border-top:1px solid #cdded8;padding:14px 0}
-.camera-route-option p{margin:8px 0;font-size:13px}
-.camera-route-option button{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:44px;white-space:normal}
 
