@@ -411,7 +411,7 @@ export default function LabelReader() {
                     </div>
                   ) : (
                     <div className="item-route-warning">
-                      <span>{item.error || (item.matchCount && item.matchCount > 1 ? `${item.matchCount} possibilidades — conferir` : 'Destino não encontrado')}</span>
+                      <span>{item.error || (item.matchCount && item.matchCount > 1 ? `${item.matchCount} endereços possíveis — conferir` : 'Destino não encontrado')}</span>
                     </div>
                   )
                 )}

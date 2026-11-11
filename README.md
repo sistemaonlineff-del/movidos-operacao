@@ -2,6 +2,14 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Possibilidades repetidas no leitor (11/11/2026)
+
+O aviso da fila agora especifica **enderecos possiveis**, distinguindo ambiguidade da base de volumes gravados. Linhas identicas em rua, bairro, CEP, cidade, zona, regiao, rota, sequencia e links contam como uma possibilidade na busca, mesmo quando vieram de arquivos/linhas de origem diferentes. Preserva o primeiro registro para a gravacao existente e nao modifica nem exclui linhas da base. Qualquer divergencia nessas informacoes continua separada e exige conferencia; nao escolhe automaticamente uma rota conflitante.
+
+Capturas distintas continuam sendo volumes distintos, mesmo com o mesmo endereco. Reenvio da mesma chave de leitura continua protegido pela API existente. Nao foi implementada deduplicacao de pacotes fisicos por endereco/foto: varios pacotes podem ter o mesmo destinatario. O print recebido nao comprova duas gravacoes do mesmo pacote e tambem apresenta falha de gravacao; esta correcao nao resolve nem oculta aquela falha de API/banco.
+
+Sem SQL novo, alteracao de permissao ou publicacao automatica. Testes focados em `tests/label-api.test.mjs` reproduziram a falsa ambiguidade antes da correcao; conferem base original preservada e conflitos de rota/CEP/sequencia/links separados. `npm run test:label-reader` confere no App real nove volumes por foto/lote/camera com uma base contendo linhas repetidas e uma leitura com duas rotas conflitantes sem gravacao automatica. `node --test tests/label-api.test.mjs tests/label-dispatch.test.mjs` confere idempotencia e seguranca. Captura sintetica em `tmp/label-reader/screenshots/conflicting-addresses-mobile.png`; nenhuma leitura ou exclusao de dados de producao.
+
 ## Camera independente da lista de expedicao (11/11/2026)
 
 Corrigido o bloqueio de camera, foto e leitura em massa quando a API de expedicao nao consegue carregar a lista de motoristas. O leitor inicializa o motorista com a propria conta autenticada, sem aguardar essa lista nem substituir uma selecao ja feita. Base e OCR disponiveis continuam sendo requisitos; autenticacao, aprovacao do leitor e validacoes de cada gravacao no servidor permanecem iguais. O aviso de falha da expedicao continua visivel; abrir a camera nao comprova que uma lista ou pacote foi salvo.

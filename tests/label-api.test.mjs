@@ -5,8 +5,29 @@ import { mkdir } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 
 await mkdir('tmp/label-api-tests', { recursive: true })
-await build({ entryPoints: ['server/label-auth.ts', 'api/label-routes.ts', 'api/label-read.ts', 'api/label-volume.ts'], outdir: 'tmp/label-api-tests', outbase: '.', outExtension: { '.js': '.cjs' }, bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
+await build({ entryPoints: ['server/label-auth.ts', 'api/label-routes.ts', 'api/label-read.ts', 'api/label-volume.ts', 'src/labelMatching.ts'], outdir: 'tmp/label-api-tests', outbase: '.', outExtension: { '.js': '.cjs' }, bundle: true, platform: 'node', format: 'cjs', packages: 'external' })
 const { authorizeLabelReader, LabelApiError } = await import(pathToFileURL(`${process.cwd()}/tmp/label-api-tests/server/label-auth.cjs`).href)
+const { findLabelMatches } = await import(pathToFileURL(`${process.cwd()}/tmp/label-api-tests/src/labelMatching.cjs`).href)
+
+const matchingRecord = { id: 'one', street: 'Rua Sintetica', neighborhood: 'Centro', postalCode: '08600-000', city: 'Suzano', zone: 'Norte', region: 'Regiao 1', route: 'R1', deliverySequence: 10, mapsUrl: '', routeUrl: '', sourceSheet: 'Base', sourceRow: 1 }
+const matchingQuery = 'Rua Sintetica, Centro, Suzano, 08600-000'
+
+test('label matching collapses identical route rows from repeated sources without altering the base', () => {
+  const original = { ...matchingRecord }, repeated = { ...matchingRecord, id: 'two', sourceFile: 'outra-importacao.xlsx', sourceRow: 99 }
+  const records = [original, repeated], before = structuredClone(records), matches = findLabelMatches(matchingQuery, records)
+  assert.equal(matches.length, 1)
+  assert.equal(matches[0].record.id, 'one')
+  assert.equal(matches[0].warnings.some(warning => warning.includes('CEP compartilhado')), false)
+  assert.deepEqual(records, before)
+  assert.equal(records.length, 2)
+})
+
+test('label matching preserves conflicting route details as separate possibilities', () => {
+  for (const change of [{ zone: 'Sul' }, { region: 'Regiao 2' }, { route: 'R2' }, { deliverySequence: 11 }, { postalCode: '08600-001' }, { mapsUrl: 'https://maps.example.invalid/another-point' }, { routeUrl: 'https://maps.example.invalid/another-route' }]) {
+    assert.equal(findLabelMatches(matchingQuery, [matchingRecord, { ...matchingRecord, ...change, id: 'two' }]).length, 2, JSON.stringify(change))
+  }
+  assert.equal(findLabelMatches('Rua Sintetica, Centro, 08600-000', [matchingRecord, { ...matchingRecord, id: 'two', city: 'Outra cidade' }]).length, 2)
+})
 
 test('label authorization validates identity, active profile and reader permission without external requests', async () => {
   const originalFetch = globalThis.fetch
