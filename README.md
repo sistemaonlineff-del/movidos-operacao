@@ -2,13 +2,21 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Conferencia de destino na fila da camera (11/11/2026)
+
+Pacotes pendentes agora oferecem **Conferir** na propria fila, inclusive no celular: abre a foto, o endereco lido e cada destino candidato com zona, rota, rua, bairro, cidade, CEP, sequencia e avisos. **Confirmar este destino** envia a escolha explicitamente para a API existente; nenhuma rota conflitante e escolhida automaticamente. O pacote passa a mostrar a rota confirmada somente depois da resposta de sucesso. As opcoes continuam acessiveis caso a gravacao falhe.
+
+A confirmacao e a nova tentativa preservam a chave e o motorista da captura original, mesmo ao trocar o motorista das proximas leituras. Botoes de confirmacao/limpeza ficam bloqueados durante o envio. A API e suas permissoes/idempotencia permanecem inalteradas; esta melhoria nao diagnostica nem resolve a causa da falha de gravacao em producao exibida no print.
+
+Validacao: `npm run test:label-reader` cobre celular e desktop, zero gravacoes antes da escolha, selecao da segunda rota, falha simulada e retry com payload identico/motorista original, alem dos fluxos existentes. Imagens sinteticas em `tmp/label-reader/screenshots/address-review-mobile.png` e `address-review-desktop.png`. Build aprovado; sem SQL, dependencia nova ou publicacao automatica.
+
 ## Possibilidades repetidas no leitor (11/11/2026)
 
 O aviso da fila agora especifica **enderecos possiveis**, distinguindo ambiguidade da base de volumes gravados. Linhas identicas em rua, bairro, CEP, cidade, zona, regiao, rota, sequencia e links contam como uma possibilidade na busca, mesmo quando vieram de arquivos/linhas de origem diferentes. Preserva o primeiro registro para a gravacao existente e nao modifica nem exclui linhas da base. Qualquer divergencia nessas informacoes continua separada e exige conferencia; nao escolhe automaticamente uma rota conflitante.
 
 Capturas distintas continuam sendo volumes distintos, mesmo com o mesmo endereco. Reenvio da mesma chave de leitura continua protegido pela API existente. Nao foi implementada deduplicacao de pacotes fisicos por endereco/foto: varios pacotes podem ter o mesmo destinatario. O print recebido nao comprova duas gravacoes do mesmo pacote e tambem apresenta falha de gravacao; esta correcao nao resolve nem oculta aquela falha de API/banco.
 
-Sem SQL novo, alteracao de permissao ou publicacao automatica. Testes focados em `tests/label-api.test.mjs` reproduziram a falsa ambiguidade antes da correcao; conferem base original preservada e conflitos de rota/CEP/sequencia/links separados. `npm run test:label-reader` confere no App real nove volumes por foto/lote/camera com uma base contendo linhas repetidas e uma leitura com duas rotas conflitantes sem gravacao automatica. `node --test tests/label-api.test.mjs tests/label-dispatch.test.mjs` confere idempotencia e seguranca. Captura sintetica em `tmp/label-reader/screenshots/conflicting-addresses-mobile.png`; nenhuma leitura ou exclusao de dados de producao.
+Sem SQL novo, alteracao de permissao ou publicacao automatica. Testes focados em `tests/label-api.test.mjs` reproduziram a falsa ambiguidade antes da correcao; conferem base original preservada e conflitos de rota/CEP/sequencia/links separados. `npm run test:label-reader` confere no App real nove volumes por foto/lote/camera com uma base contendo linhas repetidas e uma leitura com duas rotas conflitantes sem gravacao automatica. `node --test tests/label-api.test.mjs tests/label-dispatch.test.mjs` confere idempotencia e seguranca. Captura sintetica em `tmp/label-reader/screenshots/address-review-mobile.png`; nenhuma leitura ou exclusao de dados de producao.
 
 ## Camera independente da lista de expedicao (11/11/2026)
 
