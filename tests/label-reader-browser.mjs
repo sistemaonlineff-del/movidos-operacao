@@ -13,6 +13,7 @@ await mkdir('tmp/label-reader/screenshots',{recursive:true})
 async function fixture({logged=true,active=true,allowed=true,mobile=true,role='operador',path='/bipar',dispatchScenario=false,dispatchUnavailable=false,routeVariant='single'}={}) {
   const context=await browser.newContext({viewport:{width:mobile?390:1440,height:mobile?844:1000},isMobile:mobile,hasTouch:mobile,serviceWorkers:'block',permissions:['camera']})
   const drivers=[{id:user.id,name:'Bruno'},{id:'22222222-2222-4222-8222-222222222222',name:'Jose'},{id:'33333333-3333-4333-8333-333333333333',name:'Rafael'}]
+  const fixtureStreet=routeVariant==='letter'?'Rua Vinte e Dois de Abril':routeVariant==='neighborhood'?'Rua Aurora':'Rua Sintetica'
   const state={active,allowed,calls:[],errors:[],permissionWrites:[],dispatchRows:[],volumeRequests:[],failVolume:false,holdReading:false,pendingReads:[],readNumber:0,day:'',drivers}
   await context.addInitScript(({origin,user,token,logged})=>{
     if(location.origin!==origin||!logged)return
@@ -58,23 +59,23 @@ async function fixture({logged=true,active=true,allowed=true,mobile=true,role='o
         if(url.pathname==='/api/label-volume'){
           assert.equal(request.method(),'POST')
           const body=request.postDataJSON(),driver=drivers.find(driver=>driver.id===body.driverId)
-          assert.ok(driver);assert.ok(body.packageAddress.includes('Rua Sintetica'))
+          assert.ok(driver);assert.ok(body.packageAddress.includes(fixtureStreet))
           state.volumeRequests.push(body)
           if(state.failVolume)return json({error:'Falha sintetica ao salvar. Tente novamente.'},503)
           if(!state.dispatchRows.some(row=>row.scan_key===body.scanKey))state.dispatchRows.push({id:crypto.randomUUID(),driver_id:body.driverId,driver_name:driver.name,recipient_address:body.packageAddress,address_confirmed:body.addressConfirmed,delivery_sequence:1,created_at:new Date().toISOString(),scan_key:body.scanKey,delivery_date:state.day})
           return json({saved:true,zone:'Norte',route:body.baseId==='base-2'&&routeVariant==='conflict'?'R2':'R1',batch:1,sequence:1})
         }
         if(url.pathname==='/api/label-routes'){
-          const record={id:'base-1',street:'Rua Sintetica',neighborhood:'Centro',city:'Suzano',postalCode:'08600-000',zone:'Norte',route:'R1',deliverySequence:1}
+          const record={id:'base-1',street:fixtureStreet,neighborhood:routeVariant==='neighborhood'?'Jardim Horizonte II':'Centro',city:'Suzano',postalCode:'08600-000',zone:'Norte',route:'R1',deliverySequence:1}
           const records=dispatchScenario?[record]:[]
-          if(dispatchScenario&&routeVariant!=='single')records.push({...record,id:'base-2',route:routeVariant==='conflict'?'R2':'R1'})
+          if(dispatchScenario&&routeVariant!=='single')records.push({...record,id:'base-2',...(routeVariant==='neighborhood'?{street:'Avenida Horizonte',neighborhood:'Jardim Central',postalCode:'08600-001'}:routeVariant==='letter'?{street:'Rua E',neighborhood:'Outro Bairro',postalCode:'08600-001'}:{}),route:routeVariant==='duplicate'?'R1':'R2'})
           return json({records,summary:[],source:'Base sintetica',baseId:'local-only'})
         }
         if(url.pathname==='/api/label-read'){
           if(request.method()==='GET')return json({configured:true})
           const number=++state.readNumber
           if(state.holdReading)await new Promise(resolve=>state.pendingReads.push(resolve))
-          return json({extraction:{recipient:{street:'Rua Sintetica',number:String(number),complement:null,neighborhood:'Centro',city:'Suzano',postalCode:'08600-000'},warnings:[],uncertainFields:[]}})
+          return json({extraction:{recipient:{street:fixtureStreet,number:String(number),complement:null,neighborhood:routeVariant==='neighborhood'?'Jardim Horizonte II':'Centro',city:'Suzano',postalCode:'08600-000'},warnings:[],uncertainFields:[]}})
         }
         assert.equal(request.method(),'GET')
         throw new Error(`Unexpected API request: ${url.pathname}`)
@@ -193,33 +194,44 @@ try{
   await ambiguous.page.getByRole('button',{name:'Abrir leitura cont\u00ednua sem pausa',exact:true}).click()
   await ambiguous.page.waitForFunction(()=>{const video=document.querySelector('video');return video?.readyState>=2&&video.videoWidth>0})
   await ambiguous.page.getByRole('button',{name:'Capturar pacote #1',exact:true}).click()
-  await ambiguous.page.getByText('2 endere\u00e7os poss\u00edveis \u2014 conferir',{exact:true}).waitFor()
+  await ambiguous.page.getByText('Rota n\u00e3o definida \u2014 n\u00e3o salvo',{exact:true}).waitFor()
   assert.equal(ambiguous.state.dispatchRows.length,0)
   assert.equal(ambiguous.state.calls.includes('/api/label-volume'),false)
-  await ambiguous.page.getByLabel('Motorista das proximas leituras',{exact:true}).selectOption(ambiguous.state.drivers[2].id)
-  await ambiguous.page.getByRole('button',{name:'Conferir pacote #1',exact:true}).click()
-  await ambiguous.page.getByRole('button',{name:'Confirmar rota R1 para pacote #1',exact:true}).waitFor({state:'visible'})
-  await ambiguous.page.getByRole('button',{name:'Confirmar rota R2 para pacote #1',exact:true}).waitFor({state:'visible'})
-  const review=ambiguous.page.getByRole('region',{name:'Confer\u00eancia do pacote #1',exact:true})
-  assert.equal(await review.evaluate(element=>element.scrollWidth<=element.clientWidth),true)
-  await ambiguous.page.screenshot({path:`tmp/label-reader/screenshots/address-review-${mobile?'mobile':'desktop'}.png`,fullPage:true})
-  ambiguous.state.failVolume=true
-  await ambiguous.page.getByRole('button',{name:'Confirmar rota R2 para pacote #1',exact:true}).click()
-  await review.getByRole('alert').filter({hasText:'Falha sintetica'}).waitFor()
-  assert.equal(ambiguous.state.dispatchRows.length,0)
-  ambiguous.state.failVolume=false
-  await ambiguous.page.getByRole('button',{name:'Confirmar rota R2 para pacote #1',exact:true}).click()
-  await ambiguous.page.waitForFunction(()=>document.querySelector('.camera-batch-item .item-route-result strong')?.textContent.includes('R2'))
-  assert.equal(ambiguous.state.dispatchRows.length,1)
-  assert.equal(ambiguous.state.volumeRequests.length,2)
-  assert.deepEqual(ambiguous.state.volumeRequests[0],ambiguous.state.volumeRequests[1])
-  assert.equal(ambiguous.state.volumeRequests[0].baseId,'base-2')
-  assert.equal(ambiguous.state.volumeRequests[0].driverId,user.id)
-  assert.equal(ambiguous.state.volumeRequests[0].addressConfirmed,true)
-  assert.equal(await review.count(),0)
-  await ambiguous.page.screenshot({path:`tmp/label-reader/screenshots/confirmed-address-${mobile?'mobile':'desktop'}.png`,fullPage:true})
+  assert.equal(await ambiguous.page.locator('.camera-batch-item button').count(),0)
+  await ambiguous.page.screenshot({path:`tmp/label-reader/screenshots/unresolved-route-${mobile?'mobile':'desktop'}.png`,fullPage:true})
   assert.deepEqual(ambiguous.state.errors,[])
   await ambiguous.context.close()
+  for(const routeVariant of ['neighborhood','letter']){
+  const automatic=await fixture({role:'admin',mobile,dispatchScenario:true,routeVariant})
+  await automatic.page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()
+  await automatic.page.getByRole('button',{name:'Abrir leitura cont\u00ednua sem pausa',exact:true}).click()
+  await automatic.page.waitForFunction(()=>{const video=document.querySelector('video');return video?.readyState>=2&&video.videoWidth>0})
+  automatic.state.holdReading=true
+  const reading=automatic.page.waitForRequest(request=>new URL(request.url()).pathname==='/api/label-read'&&request.method()==='POST')
+  await automatic.page.getByRole('button',{name:'Capturar pacote #1',exact:true}).click();await reading
+  await automatic.page.getByLabel('Motorista das proximas leituras',{exact:true}).selectOption(automatic.state.drivers[2].id)
+  automatic.state.holdReading=false;automatic.state.pendingReads.splice(0).forEach(resolve=>resolve())
+  await automatic.page.waitForFunction(()=>document.querySelector('.camera-batch-item .item-route-result small')?.textContent.includes('Adicionado'))
+  assert.equal(automatic.state.dispatchRows.length,1)
+  assert.equal(automatic.state.volumeRequests[0].baseId,'base-1')
+  assert.equal(automatic.state.volumeRequests[0].driverId,user.id)
+  assert.equal(automatic.state.volumeRequests[0].addressConfirmed,true)
+  assert.equal(await automatic.page.locator('.camera-batch-item button').count(),0)
+  automatic.state.failVolume=true
+  await automatic.page.getByRole('button',{name:'Capturar pacote #2',exact:true}).click()
+  await automatic.page.getByText(/N\u00e3o salvo na pr\u00e9-rota: Falha sintetica/).waitFor()
+  assert.equal(automatic.state.dispatchRows.length,1)
+  automatic.state.failVolume=false
+  await automatic.page.getByRole('button',{name:'Capturar pacote #3',exact:true}).click()
+  await automatic.page.waitForFunction(()=>document.querySelector('.ld-totals strong')?.textContent==='2')
+  assert.equal(automatic.state.volumeRequests.length,3)
+  assert.equal(new Set(automatic.state.volumeRequests.map(request=>request.scanKey)).size,3)
+  assert.equal(await automatic.page.locator('.camera-batch-item button').count(),0)
+  assert.equal(await automatic.page.locator('.camera-batch-item').evaluateAll(items=>items.every(item=>item.scrollWidth<=item.clientWidth)),true)
+  await automatic.page.screenshot({path:`tmp/label-reader/screenshots/${routeVariant==='letter'?'letter':'automatic'}-route-${mobile?'mobile':'desktop'}.png`,fullPage:true})
+  assert.deepEqual(automatic.state.errors,[])
+  await automatic.context.close()
+  }
   }
   const expedition=await fixture({role:'admin',mobile:true,dispatchScenario:true,routeVariant:'duplicate'})
   const {page,state}=expedition

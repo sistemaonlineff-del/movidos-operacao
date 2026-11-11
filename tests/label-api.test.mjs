@@ -12,6 +12,30 @@ const { findLabelMatches } = await import(pathToFileURL(`${process.cwd()}/tmp/la
 const matchingRecord = { id: 'one', street: 'Rua Sintetica', neighborhood: 'Centro', postalCode: '08600-000', city: 'Suzano', zone: 'Norte', region: 'Regiao 1', route: 'R1', deliverySequence: 10, mapsUrl: '', routeUrl: '', sourceSheet: 'Base', sourceRow: 1 }
 const matchingQuery = 'Rua Sintetica, Centro, Suzano, 08600-000'
 
+test('label matching does not interpret connecting words inside a longer street as letter streets', () => {
+  for (const [street, shortName] of [['Rua Vinte e Dois de Abril', 'E'], ['Rua Caminho a Serra', 'A'], ['Rua Caminho do Lago', 'Do']]) {
+    const correct = { ...matchingRecord, street, neighborhood: 'Jardim Sintetico' }
+    const unrelated = { ...matchingRecord, id: 'two', street: `Rua ${shortName}`, neighborhood: 'Outro Bairro', postalCode: '08600-001', route: 'R2' }
+    for (const postalCode of ['08600-001', '08600-000']) {
+      assert.deepEqual(findLabelMatches(`${street}\nJardim Sintetico\nSuzano\n08600-000`, [correct, { ...unrelated, postalCode }]).map(match => match.record.id), ['one'])
+    }
+    for (const query of [`Rua ${shortName}, 15, Outro Bairro, Suzano, 08600-001`, `${shortName}\nOutro Bairro\nSuzano\n08600-001`]) {
+      assert.deepEqual(findLabelMatches(query, [correct, unrelated]).map(match => match.record.id), ['two'])
+    }
+  }
+})
+
+test('label matching does not treat the neighborhood on the next line as another street', () => {
+  const correct = { ...matchingRecord, street: 'Rua Aurora', neighborhood: 'Jardim Horizonte II' }
+  const unrelated = { ...matchingRecord, id: 'two', street: 'Avenida Horizonte', neighborhood: 'Jardim Central', postalCode: '08600-001', route: 'R2' }
+  for (const street of ['Rua Aurora', 'Aurora']) {
+    const matches = findLabelMatches(`${street}\nJardim Horizonte II\nSuzano\n08600-000`, [correct, unrelated])
+    assert.deepEqual(matches.map(match => match.record.id), ['one'])
+    assert.equal(matches[0].streetMatch, true)
+    assert.equal(matches[0].warnings.some(warning => /aproximado|divergente|diferente|não confirmada/i.test(warning)), false)
+  }
+})
+
 test('label matching collapses identical route rows from repeated sources without altering the base', () => {
   const original = { ...matchingRecord }, repeated = { ...matchingRecord, id: 'two', sourceFile: 'outra-importacao.xlsx', sourceRow: 99 }
   const records = [original, repeated], before = structuredClone(records), matches = findLabelMatches(matchingQuery, records)

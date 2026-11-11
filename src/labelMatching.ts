@@ -67,13 +67,13 @@ export function findLabelMatches(text: string, records: LabelRoute[]): LabelMatc
   const detectedNeighborhoods = [...new Set(uniqueRecords.map(record => normalizeLabelText(record.neighborhood)))].filter(name => contains(normalized, name))
   const streetMarker = /\b(?:rua|r\.|avenida|av\.?|travessa|tr\.|praça|praca|estrada|est\.|rodovia)\s+/i.exec(repaired)
   // End at the house number, keeping recipient names out of street matching.
-  const streetScope = normalizeLabelText(streetMarker ? repaired.slice(streetMarker.index + streetMarker[0].length).split(/[,;]|\s\d+(?:\s|,|$)/)[0] : repaired)
+  const streetScope = normalizeLabelText((streetMarker ? repaired.slice(streetMarker.index + streetMarker[0].length) : repaired).split(/[,;\r\n]|\s\d+(?:\s|,|$)/)[0])
   for (const record of uniqueRecords) cepCounts.set(record.postalCode, (cepCounts.get(record.postalCode) ?? 0) + 1)
   const candidates = uniqueRecords.flatMap(record => {
     const cityName = normalizeLabelText(record.city.split(' - ')[0])
     if (detectedCities.length && !detectedCities.includes(cityName)) return []
     const street = streetName(record.street)
-    const exactStreet = contains(streetScope, street)
+    const exactStreet = street.length <= 2 ? Boolean(street) && streetScope === street : contains(streetScope, street)
     const similarity = exactStreet ? 1 : phraseSimilarity(street, streetScope)
     const similarStreet = !exactStreet && similarity >= 0.76
     const streetMatch = exactStreet || similarStreet
