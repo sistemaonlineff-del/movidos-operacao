@@ -8,6 +8,7 @@ import { addressFields, addressLabels, extractionQuery, labelDeliveryAddress, pa
 import type { LabelExtraction } from './labelExtraction'
 import LabelBatchReader from './LabelBatchReader'
 import LabelDispatchPanel from './LabelDispatchPanel'
+import { Check, Search, X } from 'lucide-react'
 
 const READ_MAX_EDGE = 1600
 const READ_JPEG_QUALITY = 0.75
@@ -24,6 +25,7 @@ type CameraBatchItem = {
   primarySeq?: number | null
   matchCount?: number
   routeSaveMsg?: string
+  reading?: LabelExtraction
   error?: string
 }
 
@@ -46,6 +48,9 @@ export default function LabelReader() {
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
   const [cameraItems, setCameraItems] = useState<CameraBatchItem[]>([])
   const [captureToast, setCaptureToast] = useState('')
+  const [reviewId, setReviewId] = useState('')
+  const [savingReview, setSavingReview] = useState('')
+  const reviewSavingRef = useRef(false)
   const [driverId, setDriverId] = useState(''), [dispatchRevision, setDispatchRevision] = useState(0)
   const driverRef = useRef(''), scanDriver = useRef('')
   const chooseDriver = (id: string) => { driverRef.current = id; setDriverId(id) }
@@ -170,6 +175,7 @@ export default function LabelReader() {
             ...i,
             status: 'concluido',
             address,
+            reading,
             matchCount: foundMatches.length,
             primaryZone,
             primaryRoute,
@@ -335,13 +341,49 @@ export default function LabelReader() {
   }
 
   const selectCameraItemDetails = (item: CameraBatchItem) => {
-    if (!item.address) return
+    if (!item.address || busy || savingReview) return
+    setReviewId(item.id)
     scanKey.current = item.id
     scanDriver.current = item.driverId
-    setExtraction(null)
+    setExtraction(item.reading ?? null)
+    setDetected(Boolean(item.address))
+    setRouteSave('')
     setQuery(item.address)
     setPhoto(item.image)
     setReadDone(true)
+  }
+
+  const confirmCameraRoute = async (item: CameraBatchItem, match: LabelMatch) => {
+    if (reviewSavingRef.current) return
+    reviewSavingRef.current = true
+    setSavingReview(item.id)
+    try {
+      const { data } = await supabase!.auth.getSession()
+      const response = await fetch('/api/label-volume', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseId: String(match.record.id), scanKey: item.id, driverId: item.driverId, ...(item.reading ? labelDeliveryAddress(item.reading) : { packageAddress: item.address, addressConfirmed: false }) }),
+        cache: 'no-store'
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Não foi possível adicionar o volume à pré-rota.')
+      if (!alive.current) return
+      setCameraItems(items => items.map(current => current.id === item.id ? {
+        ...current,
+        primaryZone: String(result.zone || match.record.zone || match.record.region || 'Não informada'),
+        primaryRoute: String(result.route || match.record.route || 'A definir'),
+        primarySeq: result.sequence ?? match.record.deliverySequence ?? null,
+        matchCount: 1,
+        routeSaveMsg: `${result.duplicate ? 'Já na pré-rota' : 'Adicionado na pré-rota'} (Lote ${result.batch})`
+      } : current))
+      setDispatchRevision(value => value + 1)
+      setReviewId('')
+    } catch (err) {
+      if (alive.current) setCameraItems(items => items.map(current => current.id === item.id ? { ...current, routeSaveMsg: `Não salvo na pré-rota: ${err instanceof Error ? err.message : 'falha de conexão'}` } : current))
+    } finally {
+      reviewSavingRef.current = false
+      if (alive.current) setSavingReview('')
+    }
   }
 
   if (!base) return <section className="card label-reader">{baseError ? <><p role="alert">{baseError}</p><button onClick={() => setRetry(value => value + 1)}>Tentar novamente</button></> : <p role="status">Carregando base e conferindo acesso...</p>}</section>
@@ -392,11 +434,11 @@ export default function LabelReader() {
             <h3>Fila de Leitura da Câmera (Sem Pausa)</h3>
             <p className="label-muted">Total: {cameraItems.length} pacotes · {completedCount} concluídos · {pendingCount} em andamento</p>
           </div>
-          <button disabled={pendingCount > 0} onClick={() => setCameraItems([])}>Limpar fila da câmera</button>
+          <button disabled={pendingCount > 0 || Boolean(savingReview)} onClick={() => { setCameraItems([]); setReviewId('') }}>Limpar fila da câmera</button>
         </div>
         <div className="camera-batch-grid">
           {cameraItems.map(item => (
-            <div key={item.id} className={`camera-batch-item batch-item-${item.status}`} onClick={() => selectCameraItemDetails(item)}>
+            <div key={item.id} className={`camera-batch-item batch-item-${item.status}`}>
               <div className="item-num">#{item.num}</div>
               <img src={item.image} alt={`Pacote #${item.num}`} className="item-thumb" />
               <div className="item-details">
@@ -417,6 +459,19 @@ export default function LabelReader() {
                 )}
                 {item.status === 'erro' && <span className="batch-status-tag tag-error">{item.error || 'Erro ao ler'}</span>}
               </div>
+              {item.status === 'concluido' && item.address && !item.routeSaveMsg?.startsWith('Adicionado na pré-rota') && !item.routeSaveMsg?.startsWith('Já na pré-rota') && <button className="camera-review-trigger" aria-label={`Conferir pacote #${item.num}`} title={`Conferir pacote #${item.num}`} disabled={busy || Boolean(savingReview)} onClick={() => selectCameraItemDetails(item)}><Search size={16} aria-hidden="true" /> Conferir</button>}
+              {reviewId === item.id && <div className="camera-route-review" role="region" aria-label={`Conferência do pacote #${item.num}`}>
+                <div className="camera-review-heading"><strong>Pacote #{item.num} · Confirmar destino</strong><button title="Fechar conferência" aria-label="Fechar conferência" disabled={Boolean(savingReview)} onClick={() => setReviewId('')}><X size={18} aria-hidden="true" /></button></div>
+                <img className="camera-review-photo" src={item.image} alt={`Etiqueta do pacote #${item.num}`} />
+                <p>{item.address}</p>
+                {item.routeSaveMsg && <p role="alert" className="label-warning">{item.routeSaveMsg}</p>}
+                {findLabelMatches(item.address || '', base.records).map(match => <div className="camera-route-option" key={match.record.id}>
+                  <strong>{match.record.zone || match.record.region || 'Zona não informada'} · Rota {match.record.route || 'A definir'}</strong>
+                  <p>{match.record.street} · {match.record.neighborhood}<br />{match.record.city} · CEP {match.record.postalCode}{match.record.deliverySequence ? ` · Sequência ${match.record.deliverySequence}` : ''}</p>
+                  {match.warnings.map(warning => <p className="label-warning" key={warning}>{warning}</p>)}
+                  <button className="primary" disabled={Boolean(savingReview)} aria-label={`Confirmar rota ${match.record.route || 'A definir'} para pacote #${item.num}`} onClick={() => void confirmCameraRoute(item, match)}><Check size={16} aria-hidden="true" /> {savingReview === item.id ? 'Salvando...' : 'Confirmar este destino'}</button>
+                </div>)}
+              </div>}
             </div>
           ))}
         </div>
