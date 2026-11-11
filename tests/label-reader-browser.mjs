@@ -10,7 +10,7 @@ const token=['local',Buffer.from(JSON.stringify({sub:user.id,exp:Math.floor(Date
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']})
 const diagnostics=[]
 await mkdir('tmp/label-reader/screenshots',{recursive:true})
-async function fixture({logged=true,active=true,allowed=true,mobile=true,role='operador',path='/bipar',dispatchScenario=false}={}) {
+async function fixture({logged=true,active=true,allowed=true,mobile=true,role='operador',path='/bipar',dispatchScenario=false,dispatchUnavailable=false}={}) {
   const context=await browser.newContext({viewport:{width:mobile?390:1440,height:mobile?844:1000},isMobile:mobile,hasTouch:mobile,serviceWorkers:'block',permissions:['camera']})
   const drivers=[{id:user.id,name:'Bruno'},{id:'22222222-2222-4222-8222-222222222222',name:'Jose'},{id:'33333333-3333-4333-8333-333333333333',name:'Rafael'}]
   const state={active,allowed,calls:[],errors:[],permissionWrites:[],dispatchRows:[],holdReading:false,pendingReads:[],readNumber:0,day:'',drivers}
@@ -46,6 +46,7 @@ async function fixture({logged=true,active=true,allowed=true,mobile=true,role='o
           assert.equal(role,'admin');assert.equal(request.method(),'POST');return json({ok:true})
         }
         if(url.pathname==='/api/label-dispatch'){
+          if(dispatchUnavailable)return json({error:'Lista indisponivel. Confira a migracao dos motoristas.'},503)
           if(request.method()==='POST'){
             const body=request.postDataJSON()
             if(body.mode==='confirm-address'){const row=state.dispatchRows.find(row=>row.id===body.id);row.recipient_address=body.address;row.address_confirmed=true;return json({saved:true})}
@@ -117,6 +118,29 @@ try{
     await page.getByRole('button',{name:'Entrar no sistema',exact:true}).waitFor()
     assert.deepEqual(state.errors,[])
     await context.close()
+  }
+  for(const options of[{mobile:true,role:'operador'},{mobile:false,role:'admin'}]){
+    const unavailable=await fixture({...options,dispatchScenario:true,dispatchUnavailable:true})
+    const {page,state}=unavailable
+    await page.getByRole('alert').filter({hasText:'Lista indisponivel. Confira a migracao dos motoristas.'}).waitFor()
+    await page.getByRole('heading',{name:'Preparando leitura...',exact:true}).waitFor({state:'hidden'})
+    const cameraButton=page.getByRole('button',{name:'Abrir leitura cont\u00ednua sem pausa',exact:true})
+    assert.equal(await cameraButton.isEnabled(),true,'Dispatch failure must not block an authorized user camera')
+    assert.equal(await page.getByLabel('Enviar foto',{exact:true}).isEnabled(),true)
+    assert.equal(await page.getByLabel('Selecionar fotos em massa',{exact:true}).isEnabled(),true)
+    await cameraButton.click()
+    await page.waitForFunction(()=>{const video=document.querySelector('video');return video?.readyState>=2&&video.videoWidth>0})
+    await page.screenshot({path:`tmp/label-reader/screenshots/camera-without-dispatch-${options.mobile?'mobile':'desktop'}.png`,fullPage:true})
+    const saved=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/label-volume'&&request.method()==='POST')
+    await page.getByRole('button',{name:'Capturar pacote #1',exact:true}).click()
+    assert.equal((await saved).postDataJSON().driverId,user.id)
+    await page.getByRole('button',{name:'Fechar c\u00e2mera',exact:true}).click()
+    const png=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=640;canvas.height=400;canvas.getContext('2d').fillRect(0,0,640,400);return canvas.toDataURL('image/png').split(',')[1]})
+    const photoSaved=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/label-volume'&&request.method()==='POST')
+    await page.getByLabel('Enviar foto',{exact:true}).setInputFiles({name:'etiqueta-sintetica.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')})
+    assert.equal((await photoSaved).postDataJSON().driverId,user.id)
+    assert.deepEqual(state.errors,[])
+    await unavailable.context.close()
   }
   for(const options of[{allowed:false},{active:false,allowed:true},{active:false,role:'admin'}]){
     const {context,page,state}=await fixture(options)

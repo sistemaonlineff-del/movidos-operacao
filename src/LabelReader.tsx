@@ -80,6 +80,7 @@ export default function LabelReader() {
     void (async () => {
       try {
         const { data } = await supabase!.auth.getSession()
+        if (!controller.signal.aborted && !driverRef.current && data.session?.user.id) chooseDriver(data.session.user.id)
         const response = await fetch('/api/label-routes', { headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}` }, signal: controller.signal, cache: 'no-store' })
         if (!(response.headers.get('content-type') || '').includes('application/json')) throw new Error('O serviço do leitor não está disponível neste ambiente.')
         const result = await response.json()

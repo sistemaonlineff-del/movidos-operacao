@@ -2,6 +2,20 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Camera independente da lista de expedicao (11/11/2026)
+
+Corrigido o bloqueio de camera, foto e leitura em massa quando a API de expedicao nao consegue carregar a lista de motoristas. O leitor inicializa o motorista com a propria conta autenticada, sem aguardar essa lista nem substituir uma selecao ja feita. Base e OCR disponiveis continuam sendo requisitos; autenticacao, aprovacao do leitor e validacoes de cada gravacao no servidor permanecem iguais. O aviso de falha da expedicao continua visivel; abrir a camera nao comprova que uma lista ou pacote foi salvo.
+
+Sem SQL, dependencia ou permissao nova. Validacao: `npm run test:label-reader` com `LABEL_BASE_URL` apontando para o Vite local e `npm run build`. O teste reproduziu o bloqueio antes da correcao e passou depois: expedir retorna 503, mas camera com video, captura e foto funcionam para operador no celular e administrador no desktop, atribuidas a propria conta. Tambem confere os fluxos existentes de lote, troca de motorista durante OCR, isolamento e revogacao. Somente dados/camera sinteticos e chamadas simuladas; nenhum teste no aparelho fisico ou ajuste de producao. Alteracoes locais, sem publicacao automatica.
+
+## Varios documentos do funcionario (10/11/2026)
+
+**Funcionarios > Documentos > Anexar documentos** permite selecionar varios arquivos de uma vez. O lote inteiro e validado antes de iniciar as gravacoes e depois enviado sequencialmente, com progresso por arquivo, sempre para o funcionario selecionado. Mantidos PDF/Word/JPEG/PNG/WebP, limite de 15 MB **por arquivo**, bucket privado, permissoes e caminhos unicos sem sobrescrita.
+
+Se um arquivo falhar durante o envio, o lote para e informa quantos foram confirmados antes da tentativa e quantos nao foram iniciados. Arquivos ja enviados nao sao apagados nem reenviados automaticamente. Conferir a lista e usar os controles existentes para confirmar/remover eventual pendencia antes de reenviar, pois uma resposta perdida pode ter ocorrido depois da gravacao. Arquivo invalido no lote bloqueia todos antes da primeira gravacao.
+
+Sem SQL, dependencia ou permissao nova; a migracao existente dos documentos continua sendo requisito. Testes: `node --test tests/employee-documents.test.mjs` e `npm run build`. Incluem selecao multipla real no navegador, PDF+PNG, validacao previa, falha parcial recuperavel, bloqueio durante envio, privacidade, reabertura, download/exclusao e desktop/celular. Dados e documentos sinteticos, sem uploads reais ou publicacao automatica. A importacao bancaria descrita abaixo continua recebendo o **CSV inteiro** em uma unica selecao, nao um arquivo por lancamento.
+
 ## Extrato bancario e reembolso iMile (10/11/2026)
 
 **Financeiro > Importar extrato** agora esta disponivel tambem na visao geral; o acesso em Fluxo de caixa continua igual. O modal existente seleciona o CSV, mostra previa/erros/duplicados e so salva com **Confirmar importacao**. Mantidas as mesmas contas autorizadas e revisao de concorrencia. O extrato bancario e separado dos CSVs Marketplace/Postagem do fechamento Mais Envios.

@@ -70,6 +70,20 @@ export async function uploadEmployeeDocument(client: Client, employeeId: string,
   await confirmEmployeeDocument(client, item)
 }
 
+export async function uploadEmployeeDocuments(client: Client, employeeId: string, files: File[], onProgress?: (current: number, total: number) => void) {
+  for (const file of files) {
+    try { await validateEmployeeDocument(file) }
+    catch (error) { throw new Error(`${file.name}: ${errorText(error)} Nenhum arquivo deste lote foi enviado.`) }
+  }
+  for (let index = 0; index < files.length; index++) {
+    onProgress?.(index + 1, files.length)
+    try { await uploadEmployeeDocument(client, employeeId, files[index]) }
+    catch (error) {
+      throw new Error(`${files[index].name}: ${errorText(error)} ${index} documento(s) confirmado(s) antes desta tentativa; ${files.length - index - 1} arquivo(s) nao iniciado(s).`)
+    }
+  }
+}
+
 export async function deleteEmployeeDocument(client: Client, item: EmployeeDocument) {
   const { error: storageError } = await client.storage.from(employeeDocumentsBucket).remove([item.storage_path])
   if (storageError) fail(storageError)
@@ -91,6 +105,7 @@ export default function EmployeeDocuments({ employeeId, employeeName, onClose }:
   const [loadFailed, setLoadFailed] = useState(false)
   const [message, setMessage] = useState('')
   const [notice, setNotice] = useState('')
+  const [progress, setProgress] = useState('')
   const input = useRef<HTMLInputElement>(null)
   const title = useRef<HTMLHeadingElement>(null)
   const lock = useRef(false)
@@ -126,7 +141,7 @@ export default function EmployeeDocuments({ employeeId, employeeName, onClose }:
   const run = async (action: () => Promise<void>, success: string, manage = true) => {
     if (lock.current || !supabase || !canRead || (manage && !canManage)) return
     lock.current = true
-    setBusy(true); setMessage(''); setNotice('')
+    setBusy(true); setMessage(''); setNotice(''); setProgress('')
     try {
       await action()
       if (mounted.current) setNotice(success)
@@ -134,13 +149,15 @@ export default function EmployeeDocuments({ employeeId, employeeName, onClose }:
       if (mounted.current) setMessage(`${errorText(error)}${manage ? ' A operacao pode estar incompleta; confira a lista antes de repetir.' : ''}`)
     } finally {
       if (input.current) input.current.value = ''
-      if (mounted.current) { await load(); setBusy(false) }
+      if (mounted.current) { await load(); setBusy(false); setProgress('') }
       lock.current = false
     }
   }
   const upload = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (file) void run(() => uploadEmployeeDocument(supabase!, employeeId, file), 'Documento salvo.')
+    const files = Array.from(event.target.files ?? [])
+    if (files.length) void run(() => uploadEmployeeDocuments(supabase!, employeeId, files, (current, total) => {
+      if (mounted.current) setProgress(`Enviando documento ${current} de ${total}...`)
+    }), files.length === 1 ? 'Documento salvo.' : `${files.length} documentos salvos.`)
   }
   const download = (item: EmployeeDocument) => run(async () => {
     const { data, error } = await supabase!.storage.from(employeeDocumentsBucket).download(item.storage_path)
@@ -157,9 +174,9 @@ export default function EmployeeDocuments({ employeeId, employeeName, onClose }:
   return <section className="employee-documents" aria-label={`Documentos de ${employeeName}`} aria-busy={busy || loading}>
     <div className="employee-documents-head"><h3 ref={title} tabIndex={-1}>Documentos de {employeeName}</h3>
       <div className="employee-documents-actions">
-        {canManage && <><input ref={input} type="file" aria-label="Selecionar documento do funcionario" hidden
+        {canManage && <><input ref={input} type="file" multiple aria-label="Selecionar documentos do funcionario" hidden
           accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp" disabled={busy || loading || loadFailed} onChange={upload} />
-          <button type="button" className="secondary" disabled={busy || loading || loadFailed} onClick={() => input.current?.click()}>Anexar documento</button></>}
+          <button type="button" className="secondary" disabled={busy || loading || loadFailed} onClick={() => input.current?.click()}>Anexar documentos</button></>}
         <button type="button" className="secondary" disabled={busy || loading} onClick={() => { setMessage(''); void load() }}>Atualizar</button>
         <button type="button" className="secondary" disabled={busy} onClick={onClose}>Fechar</button>
       </div>
@@ -178,7 +195,7 @@ export default function EmployeeDocuments({ employeeId, employeeName, onClose }:
         </div>
       </li>)}</ul>
     </>}
-    {busy && <p role="status">Processando documento...</p>}
+    {busy && <p role="status">{progress || 'Processando documento...'}</p>}
     {message && <p className="error" role="alert">{message}</p>}
     {notice && <p role="status">{notice}</p>}
   </section>
