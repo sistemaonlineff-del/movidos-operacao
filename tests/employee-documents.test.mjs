@@ -147,6 +147,35 @@ test('employee document partial uploads remain recoverable without deleting unce
   }
 })
 
+test('employee document batch validates all files before writes and preserves each private document', async () => {
+  const invalid = createMockEmployeeClient()
+  await assert.rejects(documents.uploadEmployeeDocuments(invalid, employeeId, [pdf(), new File(['invalid'], 'fake.pdf', { type: 'application/pdf' })]), /fake\.pdf.*Nenhum arquivo/)
+  assert.equal(invalid.state.calls.length, 0)
+  const client = createMockEmployeeClient(), progress = []
+  await documents.uploadEmployeeDocuments(client, employeeId, [pdf(), pdf()], (current, total) => progress.push([current, total]))
+  assert.deepEqual(progress, [[1, 2], [2, 2]])
+  assert.deepEqual(client.state.documents.map(item => item.status), ['ready', 'ready'])
+  assert.ok(client.state.documents.every(item => item.employee_id === employeeId))
+  assert.equal(new Set(client.state.documents.map(item => item.storage_path)).size, 2)
+  assert.equal(client.state.files.size, 2)
+  assert.ok(client.state.calls.filter(call => call.operation === 'upload').every(call => call.options.upsert === false))
+})
+
+test('employee document batch stops on partial failure without deleting successes or resending uncertain files', async () => {
+  const client = createMockEmployeeClient(), progress = []
+  await assert.rejects(documents.uploadEmployeeDocuments(client, employeeId, [pdf(), pdf(), pdf()], (current, total) => {
+    progress.push([current, total])
+    if (current === 2) client.state.fail = 'uploadAfter'
+  }), /1 documento\(s\) confirmado\(s\).*1 arquivo\(s\) nao iniciado\(s\)/)
+  assert.deepEqual(progress, [[1, 3], [2, 3]])
+  assert.deepEqual(client.state.documents.map(item => item.status), ['ready', 'pending'])
+  assert.equal(client.state.files.size, 2)
+  assert.equal(client.state.calls.some(call => call.operation === 'remove'), false)
+  await documents.confirmEmployeeDocument(client, client.state.documents[1])
+  assert.deepEqual(client.state.documents.map(item => item.status), ['ready', 'ready'])
+  assert.equal(client.state.files.size, 2)
+})
+
 test('employee document deletion preserves metadata on failure and supports retry after file removal', async () => {
   const client = createMockEmployeeClient()
   await documents.uploadEmployeeDocument(client, employeeId, pdf())
@@ -273,10 +302,12 @@ test('employee documents browser: saved employee button, upload, reload, downloa
     await employeeRow.getByRole('button', { name: 'Documentos', exact: true }).click()
     const panel = page.getByRole('region', { name: 'Documentos de Funcionario Um', exact: true })
     await panel.getByText('Nenhum documento anexado.').waitFor()
+    assert.equal(await panel.locator('input[type=file]').evaluate(element => element.multiple), true)
     await page.evaluate(() => { __employeeTest.client.state.holdUpload = true })
     await panel.locator('input[type=file]').setInputFiles({ name: 'comprovante.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\nlocal test\n%%EOF') })
-    await panel.getByText('Processando documento...').waitFor()
-    assert.equal(await panel.getByRole('button', { name: 'Anexar documento', exact: true }).isDisabled(), true)
+    await panel.getByText('Enviando documento 1 de 1...').waitFor()
+    assert.equal(await panel.getByRole('button', { name: 'Anexar documentos', exact: true }).isDisabled(), true)
+    assert.equal(await panel.locator('input[type=file]').isDisabled(), true)
     await page.waitForFunction(() => typeof __employeeTest.client.state.releaseUpload === 'function')
     await page.evaluate(() => { __employeeTest.client.state.releaseUpload(); __employeeTest.client.state.holdUpload = false })
     await panel.getByText('Documento salvo.', { exact: true }).waitFor()
@@ -296,11 +327,11 @@ test('employee documents browser: saved employee button, upload, reload, downloa
     await panel.getByRole('button', { name: 'Baixar comprovante.pdf', exact: true }).click()
     await panel.getByRole('alert').filter({ hasText: 'download failed' }).waitFor()
     await page.evaluate(() => { __employeeTest.access.can = name => name === 'funcionarios_view'; __employeeTest.render() })
-    await panel.getByRole('button', { name: 'Anexar documento', exact: true }).waitFor({ state: 'detached' })
+    await panel.getByRole('button', { name: 'Anexar documentos', exact: true }).waitFor({ state: 'detached' })
     assert.equal(await panel.getByRole('button', { name: 'Excluir comprovante.pdf', exact: true }).count(), 0)
     await panel.getByRole('button', { name: 'Baixar comprovante.pdf', exact: true }).waitFor()
     await page.evaluate(() => { __employeeTest.access.can = () => true; __employeeTest.render() })
-    await panel.getByRole('button', { name: 'Anexar documento', exact: true }).waitFor()
+    await panel.getByRole('button', { name: 'Anexar documentos', exact: true }).waitFor()
     await mkdir('tmp/employee-documents', { recursive: true })
     await panel.screenshot({ path: 'tmp/employee-documents/desktop.png' })
     await page.setViewportSize({ width: 390, height: 844 })
@@ -323,6 +354,28 @@ test('employee documents browser: saved employee button, upload, reload, downloa
     await panel.getByRole('button', { name: 'Excluir comprovante.pdf', exact: true }).click()
     await panel.getByText('Documento excluido.', { exact: true }).waitFor()
     await panel.getByText('Nenhum documento anexado.').waitFor()
+    const batch = [
+      { name: 'contrato-sintetico.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7\nsynthetic contract\n%%EOF') },
+      { name: 'comprovante-sintetico.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64') },
+    ]
+    await panel.locator('input[type=file]').setInputFiles([batch[0], { name: 'invalido.pdf', mimeType: 'application/pdf', buffer: Buffer.from('not a PDF') }])
+    await panel.getByRole('alert').filter({ hasText: 'invalido.pdf' }).waitFor()
+    assert.equal(await page.evaluate(() => __employeeTest.client.state.files.size), 0)
+    assert.equal(await page.evaluate(() => __employeeTest.client.state.documents.filter(item => item.status !== 'deleted').length), 0)
+    await panel.locator('input[type=file]').setInputFiles(batch)
+    await panel.getByText('2 documentos salvos.', { exact: true }).waitFor()
+    assert.equal(await panel.locator('.employee-document-list li').count(), 2)
+    assert.equal(await page.evaluate(() => __employeeTest.client.state.files.size), 2)
+    assert.equal(await page.evaluate(() => __employeeTest.client.state.documents.filter(item => item.status === 'ready').every(item => item.employee_id === '11111111-1111-4111-8111-111111111111')), true)
+    await panel.getByRole('button', { name: 'Fechar', exact: true }).click()
+    await employeeRow.getByRole('button', { name: 'Documentos', exact: true }).click()
+    await panel.getByText('contrato-sintetico.pdf', { exact: true }).waitFor()
+    await panel.getByText('comprovante-sintetico.png', { exact: true }).waitFor()
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await panel.screenshot({ path: 'tmp/employee-documents/batch-desktop.png' })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await panel.screenshot({ path: 'tmp/employee-documents/batch-mobile.png' })
+    assert.equal(await panel.evaluate(element => element.scrollWidth <= element.clientWidth + 1), true)
     await panel.getByRole('button', { name: 'Fechar', exact: true }).click()
     await page.getByRole('row').filter({ hasText: 'Funcionario Dois' }).getByRole('button', { name: 'Documentos', exact: true }).click()
     await page.getByRole('region', { name: 'Documentos de Funcionario Dois', exact: true }).getByText('Nenhum documento anexado.').waitFor()
