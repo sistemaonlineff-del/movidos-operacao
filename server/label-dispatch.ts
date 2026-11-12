@@ -20,7 +20,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let query = admin.from('delivery_volumes').select('id,driver_id,driver_name,recipient_address,address_confirmed,delivery_sequence,created_at,street,neighborhood,city,postal_code').eq('delivery_date', day).not('scan_key','is',null).order('created_at').order('id').range(offset, offset + 199)
       if (driverId) query = query.eq('driver_id', driverId)
       const result = await query
-      if (result.error) throw new LabelApiError(503, 'Lista indisponivel. Confira a migracao dos motoristas.')
+      if (result.error) {
+        const code = /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(result.error.code ?? '') ? result.error.code : 'unknown'
+        const missingSchema = ['42P01', '42703', 'PGRST204', 'PGRST205'].includes(code)
+        console.error('label-dispatch storage error', { code, reason: missingSchema ? 'schema_missing' : code === '42501' ? 'permission_denied' : 'query_failed' })
+        if (missingSchema) throw new LabelApiError(503, 'A lista de expedicao precisa de atualizacao no banco. Avise o administrador para conferir as migracoes do leitor.')
+        if (code === '42501') throw new LabelApiError(503, 'O servidor esta sem permissao para consultar a expedicao. Avise o administrador.')
+        throw new LabelApiError(503, 'Nao foi possivel consultar a expedicao no momento. Tente atualizar a lista; se persistir, avise o administrador.')
+      }
       rows.push(...result.data as DispatchVolume[])
       if (result.data.length < 200) break
     }

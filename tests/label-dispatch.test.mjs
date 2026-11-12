@@ -32,6 +32,33 @@ test('Maps export preserves all packages, curated order, mobile waypoint cap and
   assert.throws(()=>domain.dispatchMapsLinks([{...rows[0],address_confirmed:false}]),/Confira/)
 })
 
+test('scan key repair preserves legacy rows and RLS while enforcing repeatable capture identity',async()=>{
+  const db=new PGlite()
+  try{
+    await db.exec(`create role authenticated;
+      create table delivery_volumes(id integer primary key,driver_name text,recipient_address text);
+      alter table delivery_volumes enable row level security;
+      create policy protected_volumes on delivery_volumes for select to authenticated using(false);
+      insert into delivery_volumes values(1,'Motorista legado','Endereco sintetico 1'),(2,'Outro motorista','Endereco sintetico 2');`)
+    const before=(await db.query('select * from delivery_volumes order by id')).rows
+    const policies=(await db.query("select * from pg_policies where tablename='delivery_volumes'")).rows
+    const sql=await readFile('supabase/migrations/20261112140000_delivery_volumes_scan_key.sql','utf8')
+    await db.exec(sql);await db.exec(sql)
+    assert.deepEqual((await db.query('select id,driver_name,recipient_address from delivery_volumes order by id')).rows,before)
+    assert.deepEqual((await db.query('select scan_key from delivery_volumes')).rows,[{scan_key:null},{scan_key:null}])
+    assert.equal((await db.query('select id from delivery_volumes where scan_key is not null')).rows.length,0)
+    assert.deepEqual((await db.query("select * from pg_policies where tablename='delivery_volumes'")).rows,policies)
+    assert.equal((await db.query("select relrowsecurity from pg_class where oid='delivery_volumes'::regclass")).rows[0].relrowsecurity,true)
+    await db.exec("insert into delivery_volumes(id,scan_key) values(3,'same-capture-12345')")
+    await assert.rejects(db.exec("insert into delivery_volumes(id,scan_key) values(4,'same-capture-12345')"),error=>error.code==='23505')
+    await db.exec('drop index delivery_volumes_scan_key_key')
+    await db.exec(sql)
+    await assert.rejects(db.exec("insert into delivery_volumes(id,scan_key) values(4,'same-capture-12345')"),error=>error.code==='23505')
+    assert.equal((await db.query("select count(*)::integer count from pg_indexes where tablename='delivery_volumes' and indexname='delivery_volumes_scan_key_key'")).rows[0].count,1)
+    assert.equal((await db.query('select count(*)::integer count from delivery_volumes')).rows[0].count,3)
+  }finally{await db.close()}
+})
+
 test('dispatch migration preserves legacy data and permits only own reads to active reader accounts',async()=>{
   const db=new PGlite(),first='11111111-1111-4111-8111-111111111111',second='22222222-2222-4222-8222-222222222222'
   try{
@@ -144,11 +171,13 @@ test('dispatch API scopes own lists, denies cross-driver writes, preserves assig
   buildSync({entryPoints:{'label-dispatch':'server/label-dispatch.ts','label-volume':'api/label-volume.ts'},outdir:'tmp/label-dispatch',outExtension:{'.js':'.cjs'},bundle:true,platform:'node',format:'cjs',packages:'external'})
   const load=async name=>{const module=await import(pathToFileURL(`${process.cwd()}/tmp/label-dispatch/${name}.cjs`));return module.default.default??module.default}
   const dispatch=await load('label-dispatch'),volume=await load('label-volume')
-  const originalFetch=globalThis.fetch,env={...process.env},first='11111111-1111-4111-8111-111111111111',second='22222222-2222-4222-8222-222222222222'
-  let active=true,role='operador',googleCalls=0,indices=[0]
+  const originalFetch=globalThis.fetch,originalLog=console.error,env={...process.env},first='11111111-1111-4111-8111-111111111111',second='22222222-2222-4222-8222-222222222222'
+  let active=true,role='operador',googleCalls=0,indices=[0],queryError=''
+  const logs=[]
   const rows=[{id:'33333333-3333-4333-8333-333333333333',driver_id:first,driver_name:'Bruno',recipient_address:'Rua A, 10, Suzano SP',address_confirmed:true,delivery_sequence:1,created_at:'2026-11-10T10:00:00Z',scan_key:'first-scan-key-123456',delivery_date:'2026-11-10'},{id:'44444444-4444-4444-8444-444444444444',driver_id:first,driver_name:'Bruno',recipient_address:'Rua B, 20, Suzano SP',address_confirmed:true,delivery_sequence:2,created_at:'2026-11-10T10:00:01Z',scan_key:'second-scan-key-123456',delivery_date:'2026-11-10'},{id:'55555555-5555-4555-8555-555555555555',driver_id:second,driver_name:'Jose',recipient_address:'Rua C, 30, Suzano SP',address_confirmed:true,delivery_sequence:3,created_at:'2026-11-10T10:00:02Z',scan_key:'third-scan-key-123456',delivery_date:'2026-11-10'}]
   const invoke=async(handler,body,method='GET',query={day:'2026-11-10'})=>{let result;await handler({method,query,body,headers:{authorization:'Bearer synthetic'}},{setHeader(){},status(code){this.code=code;return this},json(body){result={status:this.code,body};return this}});return result}
   try{
+    console.error=(...args)=>logs.push(args)
     Object.assign(process.env,{SUPABASE_URL:'https://dispatch-test.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service',GOOGLE_ROUTES_API_KEY:'synthetic-google-key'})
     globalThis.fetch=async(input,init)=>{
       const url=new URL(typeof input==='string'?input:input.url??String(input)),body=typeof init?.body==='string'?JSON.parse(init.body):null
@@ -159,6 +188,7 @@ test('dispatch API scopes own lists, denies cross-driver writes, preserves assig
       if(url.pathname.endsWith('/user_module_permissions'))return Response.json(url.searchParams.has('user_id')?[{label_reader_access:true}]:[{user_id:first},{user_id:second}])
       if(url.pathname.endsWith('/delivery_route_base'))return Response.json([{street:'Rua C',city:'Suzano',postal_code:'00000-000',zone:'Norte',route:'R1',delivery_sequence:3}])
       if(url.pathname.endsWith('/delivery_volumes')){
+        if(queryError)return Response.json({code:queryError,message:'raw-private-database-message'}, {status:400})
         let filtered=rows.filter(row=>['driver_id','delivery_date','scan_key','id'].every(key=>!url.searchParams.get(key)?.startsWith('eq.')||row[key]===url.searchParams.get(key).slice(3)))
         if(init?.method==='POST'){rows.push({...body,id:crypto.randomUUID(),created_at:'2026-11-10T10:00:03Z'});return new Response(null,{status:201})}
         if(init?.method==='PATCH'){filtered.forEach(row=>Object.assign(row,body));return new Response(null,{status:204})}
@@ -169,6 +199,16 @@ test('dispatch API scopes own lists, denies cross-driver writes, preserves assig
       assert.fail(`Unexpected endpoint ${url.pathname}`)
     }
     assert.equal((await invoke(dispatch,null,'GET',{day:'2026-02-31'})).status,400)
+    for(const code of['42P01','42703','PGRST204','PGRST205','42501','PGRST002']){
+      queryError=code
+      const failure=await invoke(dispatch)
+      assert.equal(failure.status,503)
+      assert.match(failure.body.error,code==='42501'?/sem permissao/:code==='PGRST002'?/no momento/:/atualizacao no banco/)
+      assert.equal(failure.body.error.includes('raw-private'),false)
+    }
+    queryError=''
+    assert.deepEqual(logs.map(entry=>entry[1].reason),['schema_missing','schema_missing','schema_missing','schema_missing','permission_denied','query_failed'])
+    assert.equal(JSON.stringify(logs).includes('raw-private'),false)
     let response=await invoke(dispatch);assert.equal(response.status,200);assert.equal(response.body.rows.length,2);assert.equal(response.body.drivers.length,1)
     const throughRewrite=await invoke(volume,null,'GET',{day:'2026-11-10',__labelDispatch:'1'})
     assert.equal(throughRewrite.status,200);assert.deepEqual(throughRewrite.body,response.body)
@@ -189,5 +229,5 @@ test('dispatch API scopes own lists, denies cross-driver writes, preserves assig
     indices=[99];assert.equal((await invoke(dispatch,{mode:'optimize',day:'2026-11-10',driverId:first,origin:'Deposito'},'POST')).status,502)
     active=false;assert.equal((await invoke(dispatch)).status,403)
     assert.equal((await invoke(volume,null,'GET',{day:'2026-11-10',__labelDispatch:'1'})).status,403)
-  }finally{globalThis.fetch=originalFetch;for(const key of Object.keys(process.env))if(!(key in env))delete process.env[key];Object.assign(process.env,env)}
+  }finally{globalThis.fetch=originalFetch;console.error=originalLog;for(const key of Object.keys(process.env))if(!(key in env))delete process.env[key];Object.assign(process.env,env)}
 })
