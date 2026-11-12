@@ -10,11 +10,11 @@ const token=['local',Buffer.from(JSON.stringify({sub:user.id,exp:Math.floor(Date
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']})
 const diagnostics=[]
 await mkdir('tmp/label-reader/screenshots',{recursive:true})
-async function fixture({logged=true,active=true,allowed=true,mobile=true,role='operador',path='/bipar',dispatchScenario=false,dispatchUnavailable=false,routeVariant='single'}={}) {
+async function fixture({logged=true,active=true,allowed=true,routesAllowed=false,mobile=true,role='operador',path='/bipar',dispatchScenario=false,dispatchUnavailable=false,routeVariant='single'}={}) {
   const context=await browser.newContext({viewport:{width:mobile?390:1440,height:mobile?844:1000},isMobile:mobile,hasTouch:mobile,serviceWorkers:'block',permissions:['camera']})
   const drivers=[{id:user.id,name:'Bruno'},{id:'22222222-2222-4222-8222-222222222222',name:'Jose'},{id:'33333333-3333-4333-8333-333333333333',name:'Rafael'}]
   const fixtureStreet=routeVariant==='letter'?'Rua Vinte e Dois de Abril':routeVariant==='neighborhood'?'Rua Aurora':'Rua Sintetica'
-  const state={active,allowed,calls:[],errors:[],permissionWrites:[],dispatchRows:[],volumeRequests:[],failVolume:false,holdReading:false,pendingReads:[],readNumber:0,day:'',drivers}
+  const state={active,allowed,routesAllowed,calls:[],errors:[],permissionWrites:[],dispatchRows:[],volumeRequests:[],failVolume:false,holdReading:false,pendingReads:[],readNumber:0,day:'',drivers}
   await context.addInitScript(({origin,user,token,logged})=>{
     if(location.origin!==origin||!logged)return
     localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token',JSON.stringify({access_token:token,refresh_token:'local-only',token_type:'bearer',expires_at:Math.floor(Date.now()/1000)+3600,expires_in:3600,user}))
@@ -34,7 +34,13 @@ async function fixture({logged=true,active=true,allowed=true,mobile=true,role='o
             state.permissionWrites.push(request.postDataJSON())
             return json(null)
           }
-          return json(url.searchParams.has('user_id')?{user_id:user.id,label_reader_access:state.allowed}:[])
+          return json(url.searchParams.has('user_id')?{user_id:user.id,label_reader_access:state.allowed,delivery_routes_manage:state.routesAllowed}:[])
+        }
+        if(url.pathname==='/rest/v1/delivery_route_base'||url.pathname==='/rest/v1/delivery_volumes'){
+          assert.equal(logged&&state.active&&(role==='admin'||state.routesAllowed),true)
+          assert.equal(request.method(),'GET')
+          if(url.pathname.endsWith('delivery_route_base'))return json([])
+          return json(Array.from({length:6},(_,index)=>({id:`route-${index}`,delivery_date:'2026-11-11',zone:'Norte',route:index===5?'R2':'R1',batch_number:1,driver_name:'Motorista sintetico',street:'Rua Sintetica',neighborhood:'Centro',city:'Suzano',postal_code:'08600-000',delivery_sequence:5-index,recipient_address:`Rua Sintetica, ${index+1}, Centro, Suzano, 08600-000`,address_confirmed:index!==5})))
         }
         throw new Error(`Unexpected Supabase request: ${url.pathname}`)
       }
@@ -186,8 +192,36 @@ try{
   assert.equal(await admin.page.getByRole('checkbox',{name:'Leitor de etiquetas',exact:true}).isChecked(),false)
   await admin.page.getByRole('combobox').selectOption({label:'Sem acesso'})
   assert.equal(await admin.page.getByRole('checkbox',{checked:true}).count(),0)
+  await admin.page.getByRole('combobox').selectOption({label:'Somente rotas'})
+  assert.equal(await admin.page.getByRole('checkbox',{checked:true}).count(),1)
+  assert.equal(await admin.page.getByRole('checkbox',{name:'Gerenciar rotas',exact:true}).isChecked(),true)
+  await admin.page.getByRole('button',{name:'Salvar permiss\u00f5es',exact:true}).click()
+  await admin.page.waitForFunction(()=>document.querySelector('.form-message')?.textContent.includes('Permiss\u00f5es salvas'))
+  assert.equal(admin.state.permissionWrites.at(-1).delivery_routes_manage,true)
+  assert.equal(admin.state.permissionWrites.at(-1).label_reader_access,false)
   assert.deepEqual(admin.state.errors,[])
   await admin.context.close()
+  for(const mobile of [true,false]){
+    const routes=await fixture({mobile,routesAllowed:true,allowed:false,path:'/rotas-entrega'})
+    await routes.page.getByRole('heading',{name:'Base e pr\u00e9-rotas',exact:true}).waitFor()
+    assert.equal(await routes.page.getByRole('button',{name:'Rotas de entrega',exact:true}).count(),1)
+    assert.equal(await routes.page.getByRole('button',{name:'Leitor de etiquetas',exact:true}).count(),0)
+    const links=await routes.page.locator('.route-maps-links a').evaluateAll(anchors=>anchors.map(anchor=>anchor.href))
+    assert.equal(links.length,2)
+    const stops=[]
+    for(const link of links){const url=new URL(link);assert.equal(url.hostname,'www.google.com');assert.ok((url.searchParams.get('waypoints')?.split('|')??[]).length<=3);stops.push(...(url.searchParams.get('waypoints')?.split('|')??[]),url.searchParams.get('destination'))}
+    assert.deepEqual(stops,[5,4,3,2,1].map(number=>`Rua Sintetica, ${number}, Centro, Suzano, 08600-000`))
+    assert.equal(new URL(links[1]).searchParams.get('origin'),stops[3])
+    await routes.page.getByText('Confira o endereco completo de todas as paradas antes de exportar.',{exact:true}).waitFor()
+    assert.equal(await routes.page.locator('.route-maps-links a').evaluateAll(links=>links.every(link=>link.scrollWidth<=link.clientWidth)),true)
+    await routes.page.locator('.route-plans').screenshot({path:`tmp/label-reader/screenshots/route-maps-${mobile?'mobile':'desktop'}.png`})
+    assert.deepEqual(routes.state.errors,[])
+    routes.state.routesAllowed=false
+    await routes.page.reload()
+    await routes.page.getByRole('heading',{name:'Acesso restrito',exact:true}).waitFor()
+    assert.equal(await routes.page.locator('.route-maps-links a').count(),0)
+    await routes.context.close()
+  }
   for(const mobile of [true,false]){
   const ambiguous=await fixture({role:'admin',mobile,dispatchScenario:true,routeVariant:'conflict'})
   await ambiguous.page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()

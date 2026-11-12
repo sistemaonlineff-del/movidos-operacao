@@ -1,3 +1,9 @@
+## Permissao configuravel de rotas (11/11/2026)
+
+Antes de publicar o frontend correspondente, aplicar pessoalmente [migrations/20261111230000_delegated_route_management.sql](migrations/20261111230000_delegated_route_management.sql) no SQL Editor, apos backup. Requer `user_profiles`, `user_module_permissions`, `auth.uid()` e as politicas de rotas que usam `can_manage_delivery_routes()`. Nao reaplicar schema, imports de base, `05_user_permissions.sql` ou `06_delivery_routes.sql` para esta alteracao.
+
+Adiciona `delivery_routes_manage` com default false e atualiza somente o helper de RLS: conta ativa com permissao explicita, administrador ou e-mail legado autorizado. Preserva dados, politicas e demais permissoes. Em Configuracoes, marque **Gerenciar rotas** na conta desejada e salve; **Somente rotas** substitui as demais permissoes, portanto use a caixa individual para preservar acessos existentes. Leitor e dispatcher da API continuam com as regras anteriores. Validar com conta autorizada e nao autorizada apos aplicar. Nenhum SQL foi executado remotamente pelo assistente.
+
 # Migração do Access para Supabase
 
 ## Trechos da mesma rua com CEPs distintos (19/10/2026)

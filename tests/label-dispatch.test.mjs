@@ -79,6 +79,56 @@ test('dispatch permission migration creates a missing column without authorizing
   }finally{await db.close()}
 })
 
+test('route delegation defaults off, preserves legacy access and requires an active authorized profile',async()=>{
+  const db=new PGlite(),user='11111111-1111-4111-8111-111111111111'
+  try{
+    await db.exec(`create role anon;create role authenticated;create schema auth;create function auth.uid() returns uuid language sql as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+      create table user_profiles(id uuid primary key,email text,is_active boolean,role text);
+      create table user_module_permissions(user_id uuid primary key,label_reader_access boolean default false);
+      insert into user_profiles values('${user}','synthetic@example.invalid',true,'operador');
+      insert into user_module_permissions values('${user}',true);
+      select set_config('request.jwt.claim.sub','${user}',false);`)
+    const sql=await readFile('supabase/migrations/20261111230000_delegated_route_management.sql','utf8')
+    await db.exec(sql);await db.exec(sql)
+    const allowed=async()=> (await db.query('select can_manage_delivery_routes() allowed')).rows[0].allowed
+    assert.equal(await allowed(),false)
+    assert.equal((await db.query('select label_reader_access from user_module_permissions')).rows[0].label_reader_access,true)
+    await db.exec('update user_module_permissions set delivery_routes_manage=true')
+    assert.equal(await allowed(),true)
+    await db.exec('update user_profiles set is_active=false')
+    assert.equal(await allowed(),false)
+    await db.exec("update user_profiles set is_active=true;update user_module_permissions set delivery_routes_manage=false;update user_profiles set role='admin'")
+    assert.equal(await allowed(),true)
+    await db.exec("update user_profiles set role='operador',email='talitapreviatti@gmail.com'")
+    assert.equal(await allowed(),true)
+    await db.exec(`update user_profiles set email='synthetic@example.invalid';
+      create table delivery_route_base(id integer primary key,street text);
+      create table delivery_volumes(id integer primary key,street text);
+      insert into delivery_route_base values(1,'Rua preservada');insert into delivery_volumes values(1,'Volume preservado');
+      alter table delivery_route_base enable row level security;alter table delivery_volumes enable row level security;
+      create policy delivery_route_base_manage on delivery_route_base for all to authenticated using(can_manage_delivery_routes()) with check(can_manage_delivery_routes());
+      create policy delivery_volumes_manage on delivery_volumes for all to authenticated using(can_manage_delivery_routes()) with check(can_manage_delivery_routes());
+      grant select,insert,update,delete on delivery_route_base,delivery_volumes to authenticated;
+      alter table user_module_permissions enable row level security;
+      create policy permissions_own_read on user_module_permissions for select to authenticated using(user_id=auth.uid());
+      grant select,update on user_module_permissions to authenticated;
+      set role authenticated;`)
+    assert.equal((await db.query('select * from delivery_route_base')).rows.length,0)
+    await assert.rejects(db.exec("insert into delivery_route_base values(2,'Negado')"),/row-level security/)
+    await db.exec('update user_module_permissions set delivery_routes_manage=true')
+    assert.equal(await allowed(),false)
+    await db.exec('reset role;update user_module_permissions set delivery_routes_manage=true;set role authenticated')
+    assert.equal((await db.query('select street from delivery_route_base')).rows[0].street,'Rua preservada')
+    assert.equal((await db.query('select street from delivery_volumes')).rows[0].street,'Volume preservado')
+    await db.exec("update delivery_route_base set street='Edicao autorizada' where id=1;reset role;update user_module_permissions set delivery_routes_manage=false;set role authenticated")
+    assert.equal((await db.query('select * from delivery_volumes')).rows.length,0)
+    await db.exec('reset role')
+    assert.equal((await db.query('select street from delivery_route_base')).rows[0].street,'Edicao autorizada')
+    await db.exec('set role anon')
+    await assert.rejects(allowed(),/permission denied/)
+  }finally{await db.close()}
+})
+
 test('Vercel Hobby stays within 12 functions and preserves the dispatch URL before the SPA fallback',async()=>{
   const entries=(await readdir('api',{recursive:true})).filter(name=>/\.(?:[cm]?js|ts|py|go|rb|php)$/.test(name)&&!name.endsWith('.d.ts'))
   assert.ok(entries.length<=12,`${entries.length} serverless function entrypoints`)
