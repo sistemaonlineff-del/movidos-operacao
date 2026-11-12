@@ -1,7 +1,10 @@
 export type DispatchDriver = { id: string; name: string }
-export type DispatchVolume = { id: string; driver_id: string | null; driver_name: string | null; recipient_address: string | null; address_confirmed: boolean; delivery_sequence: number | null; created_at: string; street: string | null; neighborhood: string | null; city: string | null; postal_code: string | null }
+export type DispatchVolume = { id: string; driver_id: string | null; driver_name: string | null; capture_number?: number | null; recipient_address: string | null; address_confirmed: boolean; delivery_sequence: number | null; created_at: string; street: string | null; neighborhood: string | null; city: string | null; postal_code: string | null }
 export const brazilDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 export const dispatchAddress = (row: DispatchVolume) => row.recipient_address || [row.street, row.neighborhood, row.city, row.postal_code].filter(Boolean).join(', ')
+export function dispatchSpreadsheetRows(rows: DispatchVolume[], day: string) {
+  return [['Motorista','Dia','Ordem','Numero da foto','Endereco','Conferido','Sequencia da base','Leitura'], ...rows.map((row,index) => [row.driver_name,day,index+1,row.capture_number ?? '',dispatchAddress(row),row.address_confirmed?'Sim':'Pendente',row.delivery_sequence,row.id])]
+}
 export function orderedDispatch(rows: DispatchVolume[]): DispatchVolume[] {
   return [...rows].sort((first, second) => (first.delivery_sequence ?? Number.MAX_SAFE_INTEGER) - (second.delivery_sequence ?? Number.MAX_SAFE_INTEGER) || first.created_at.localeCompare(second.created_at) || first.id.localeCompare(second.id))
 }

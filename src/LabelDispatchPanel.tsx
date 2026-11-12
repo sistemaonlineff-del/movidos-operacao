@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, Download, Navigation, RefreshCw, Route } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { supabase } from './lib/supabase'
-import { brazilDay, dispatchAddress, dispatchMapsLinks, type DispatchDriver, type DispatchVolume } from './labelDispatch'
+import { brazilDay, dispatchAddress, dispatchMapsLinks, dispatchSpreadsheetRows, type DispatchDriver, type DispatchVolume } from './labelDispatch'
 import './label-dispatch.css'
 
 type Data = { rows: DispatchVolume[]; drivers: DispatchDriver[]; dispatcher: boolean; currentUserId: string; optimizationConfigured: boolean }
@@ -59,7 +59,8 @@ export default function LabelDispatchPanel({ driverId, onDriverChange, revision 
   const excel = () => {
     if (!selected.length) return
     if (selected.some(row => drafts[row.id] !== undefined)) { setError('Confirme os enderecos alterados antes de exportar.'); return }
-    const sheet = XLSX.utils.aoa_to_sheet([['Motorista','Dia','Ordem','Endereco','Conferido','Sequencia da base','Leitura'],...selected.map((row,index)=>[row.driver_name,day,index+1,dispatchAddress(row),row.address_confirmed?'Sim':'Pendente',row.delivery_sequence,row.id])])
+    const sheet = XLSX.utils.aoa_to_sheet(dispatchSpreadsheetRows(selected, day))
+    sheet['!cols'] = [{wch:24},{wch:12},{wch:8},{wch:18},{wch:60},{wch:12},{wch:20},{wch:38}]
     const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook,sheet,'Pacotes'); XLSX.writeFile(workbook,`pacotes-${day}.xlsx`)
   }
   return <section className="label-dispatch" id="label-dispatch" tabIndex={-1}>
@@ -75,7 +76,7 @@ export default function LabelDispatchPanel({ driverId, onDriverChange, revision 
       {links.length === 0 && <div className="ld-links"><button type="button" disabled><Navigation size={16} aria-hidden="true"/>Google Maps</button></div>}
       {!exportable && selected.length > 0 && <p className="ld-note">Selecione um motorista e confira os enderecos completos, incluindo numero, antes de abrir as paradas no Maps.</p>}
       {!rows.length && <p>Nenhuma leitura encontrada para este filtro.</p>}
-      <div className="ld-table"><table><thead><tr><th>Motorista</th><th>Endereco do pacote</th><th>Sequencia</th><th>Conferencia</th></tr></thead><tbody>{selected.map(row => <tr key={row.id}><td>{row.driver_name || 'Sem motorista'}</td><td>{row.driver_id ? <input aria-label={`Endereco do pacote ${row.id}`} value={drafts[row.id] ?? dispatchAddress(row)} maxLength={2000} onChange={event => { setDrafts(previous => ({...previous,[row.id]:event.target.value})); setOptimized([]) }}/>:dispatchAddress(row)}</td><td>{row.delivery_sequence ?? '-'}</td><td>{row.address_confirmed && drafts[row.id] === undefined ? 'Conferido' : row.driver_id && <button type="button" title="Confirmar endereco completo" aria-label={`Confirmar endereco ${row.id}`} disabled={busy || !(drafts[row.id] ?? dispatchAddress(row)).trim()} onClick={() => void confirmAddress(row)}><Check size={17}/></button>}</td></tr>)}</tbody></table></div>
+      <div className="ld-table"><table><thead><tr><th>Motorista</th><th>Endereco do pacote</th><th>Foto</th><th>Sequencia</th><th>Conferencia</th></tr></thead><tbody>{selected.map(row => <tr key={row.id}><td>{row.driver_name || 'Sem motorista'}</td><td>{row.driver_id ? <input aria-label={`Endereco do pacote ${row.id}`} value={drafts[row.id] ?? dispatchAddress(row)} maxLength={2000} onChange={event => { setDrafts(previous => ({...previous,[row.id]:event.target.value})); setOptimized([]) }}/>:dispatchAddress(row)}</td><td>{row.capture_number == null ? '-' : `#${row.capture_number}`}</td><td>{row.delivery_sequence ?? '-'}</td><td>{row.address_confirmed && drafts[row.id] === undefined ? 'Conferido' : row.driver_id && <button type="button" title="Confirmar endereco completo" aria-label={`Confirmar endereco ${row.id}`} disabled={busy || !(drafts[row.id] ?? dispatchAddress(row)).trim()} onClick={() => void confirmAddress(row)}><Check size={17}/></button>}</td></tr>)}</tbody></table></div>
     </>}
   </section>
 }

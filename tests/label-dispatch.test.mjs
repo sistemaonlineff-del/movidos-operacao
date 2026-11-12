@@ -32,6 +32,30 @@ test('Maps export preserves all packages, curated order, mobile waypoint cap and
   assert.throws(()=>domain.dispatchMapsLinks([{...rows[0],address_confirmed:false}]),/Confira/)
 })
 
+test('spreadsheet keeps the original photo numbers when route order differs and leaves legacy numbers blank',()=>{
+  const rows=[{id:'photo-ten',capture_number:10,delivery_sequence:2,created_at:'2026-11-12T10:00:00Z'},{id:'photo-four',capture_number:4,delivery_sequence:1,created_at:'2026-11-12T10:00:01Z'},{id:'legacy',capture_number:null,delivery_sequence:3,created_at:'2026-11-12T10:00:02Z'}]
+  const ordered=domain.orderedDispatch(rows),table=domain.dispatchSpreadsheetRows(ordered,'2026-11-12')
+  const numbers=table[0].indexOf('Numero da foto'),order=table[0].indexOf('Ordem'),identity=table[0].indexOf('Leitura')
+  assert.deepEqual(table.slice(1).map(row=>row[numbers]),[4,10,''])
+  assert.deepEqual(table.slice(1).map(row=>row[order]),[1,2,3])
+  assert.deepEqual(table.slice(1).map(row=>row[identity]),['photo-four','photo-ten','legacy'])
+  assert.deepEqual(domain.dispatchSpreadsheetRows([...ordered].reverse(),'2026-11-12').slice(1).map(row=>row[numbers]),['',10,4])
+  assert.deepEqual(rows.map(row=>row.capture_number),[10,4,null])
+})
+
+test('capture number migration preserves history and accepts only positive optional camera numbers',async()=>{
+  const db=new PGlite()
+  try{
+    await db.exec("create table delivery_volumes(id integer primary key,driver_name text);insert into delivery_volumes values(1,'Historico preservado');alter table delivery_volumes enable row level security;")
+    const sql=await readFile('supabase/migrations/20261112160000_delivery_capture_number.sql','utf8')
+    await db.exec(sql);await db.exec(sql)
+    assert.deepEqual((await db.query('select * from delivery_volumes')).rows,[{id:1,driver_name:'Historico preservado',capture_number:null}])
+    await db.exec('insert into delivery_volumes(id,capture_number) values(2,4),(3,10),(4,null)')
+    for(const value of[0,-1])await assert.rejects(db.exec(`insert into delivery_volumes(id,capture_number) values(5,${value})`),error=>error.code==='23514')
+    assert.equal((await db.query("select relrowsecurity from pg_class where oid='delivery_volumes'::regclass")).rows[0].relrowsecurity,true)
+  }finally{await db.close()}
+})
+
 test('scan key repair preserves legacy rows and RLS while enforcing repeatable capture identity',async()=>{
   const db=new PGlite()
   try{
@@ -217,12 +241,17 @@ test('dispatch API scopes own lists, denies cross-driver writes, preserves assig
     assert.equal((await invoke(volume,null,'GET',{day:'2026-11-10',__labelDispatch:'1',driverId:second})).status,403)
     assert.equal((await invoke(dispatch,null,'GET',{day:'2026-11-10',driverId:second})).status,403)
     assert.equal((await invoke(dispatch,{mode:'confirm-address',day:'2026-11-10',id:rows[2].id,address:'forged'},'POST')).status,400)
-    const payload={baseId:'base-1',scanKey:'new-scan-key-123456',driverId:second,packageAddress:'Rua C, 30, Suzano SP',addressConfirmed:true}
+    const payload={baseId:'base-1',scanKey:'new-scan-key-123456',captureNumber:4,driverId:second,packageAddress:'Rua C, 30, Suzano SP',addressConfirmed:true}
+    for(const captureNumber of[0,-1,1.5,'4',2147483648])assert.equal((await invoke(volume,{...payload,captureNumber},'POST')).status,400)
     assert.equal((await invoke(volume,payload,'POST')).status,403)
     role='admin';response=await invoke(dispatch);assert.equal(response.body.rows.length,3);assert.equal(response.body.drivers.length,2)
     assert.equal((await invoke(volume,payload,'POST')).status,201)
     const saved=rows.at(-1);assert.equal(saved.driver_id,second);assert.equal(saved.created_by,first);assert.equal(saved.recipient_address,payload.packageAddress)
+    assert.equal(saved.capture_number,4)
+    assert.equal((await invoke(dispatch,null,'GET',{day:saved.delivery_date})).body.rows.find(row=>row.id===saved.id).capture_number,4)
     assert.equal((await invoke(volume,payload,'POST')).body.duplicate,true)
+    assert.equal((await invoke(volume,{...payload,captureNumber:10},'POST')).body.captureNumber,4)
+    assert.equal(saved.capture_number,4)
     assert.equal((await invoke(volume,{...payload,driverId:first},'POST')).status,409)
     response=await invoke(dispatch,{mode:'optimize',day:'2026-11-10',driverId:first,origin:'Deposito, 100, Suzano SP'},'POST')
     assert.equal(response.status,200);assert.deepEqual(response.body.ids,rows.slice(0,2).map(row=>row.id));assert.equal(googleCalls,1)
