@@ -2,6 +2,14 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Numero original da foto no Excel (12/11/2026)
+
+A camera envia o numero exibido em `#1`, `#2`, etc. junto da chave e do motorista da captura. A API grava `capture_number`, valida inteiro positivo e preserva o numero original em reenvios, inclusive quando a nova requisicao tenta fornecer outro numero. A expedicao exibe **Foto** e o Excel inclui **Numero da foto**, separado de **Ordem**, **Sequencia da base** e do identificador tecnico **Leitura**. Reordenar a lista ou otimizar nao renumera os pacotes; o numero acompanha a captura original.
+
+Requer aplicar pessoalmente, apos backup e antes da publicacao da API/frontend, `supabase/migrations/20261112160000_delivery_capture_number.sql`. A coluna e opcional, sem alteracao de dados existentes, RLS ou permissoes. Capturas antigas, fotos avulsas e arquivos em massa que nao tinham numero da camera permanecem vazios no Excel, sem deduzir numero pela ordem ou UUID. Nao recupera numeros antigos que existiam somente na memoria da fila. Mantem o contador atual da sessao da camera: nao e uma numeracao global unica entre sessoes/dispositivos.
+
+Validacao: migracao repetida/dados e RLS preservados, API/validacao/idempotencia, fotos 4 e 10 em ordem distinta, download real do Excel com trinta capturas em ordem inversa e numeros preservados apos reload no celular e desktop. Nenhuma escrita remota, envio de endereco real ao Google ou publicacao automatica.
+
 ## Recuperacao da bipagem e acesso ao Maps (12/11/2026)
 
 A fila continua com captura sem pausa, ate tres trabalhos simultaneos e vinte fotos pendentes, sem conferencia ou confirmacao por pacote. Requisicoes repetem no maximo duas vezes em falhas temporarias informadas pela API (429/502/504 ou 503 explicitamente transitorio), respeitando Retry-After de ate sessenta segundos por espera. Erros de permissao, configuracao, migracao ou dados nao entram em repeticao automatica. Falha de rede no OCR nao dispara outra leitura automaticamente; o salvamento pode ser repetido com seguranca usando a mesma chave e motorista da captura. Nao ha fallback pago nem mudanca de modelo ou ativacao de faturamento.

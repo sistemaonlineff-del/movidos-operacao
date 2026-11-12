@@ -1,3 +1,9 @@
+## Numero original da foto (12/11/2026)
+
+Aplicar pessoalmente, apos backup e antes da API/frontend correspondentes, [migrations/20261112160000_delivery_capture_number.sql](migrations/20261112160000_delivery_capture_number.sql). Requer `delivery_volumes` existente. Adiciona somente `capture_number integer` nullable com verificacao de valor positivo e notifica o PostgREST para recarregar o esquema. Nao altera RLS, grants, atribuicoes, `scan_key` ou dados antigos. Nao reaplicar schema ou importacoes.
+
+A coluna armazena o numero original exibido pela camera e permite uma coluna independente da ordem da rota no Excel. Historico sem numero permanece nulo; nao preencher pelo UUID ou pela ordem de entrega. O contador da camera continua por sessao, nao e identificador global. Testes locais cobrem migracao repetida, preservacao de dados/RLS, numeros invalidos e reenvio sem alterar o numero original. Nenhum SQL remoto foi executado pelo assistente.
+
 ## Reparo da coluna scan_key ausente (12/11/2026)
 
 A consulta do usuario confirmou `scan_key` ausente em `delivery_volumes`. Aplicar pessoalmente, apos backup, somente [migrations/20261112140000_delivery_volumes_scan_key.sql](migrations/20261112140000_delivery_volumes_scan_key.sql). Requer a tabela existente; adiciona a coluna nullable e indice unico, reutilizando o nome do indice da estrutura original, e notifica o PostgREST para recarregar o esquema. Nao altera linhas, RLS, grants, atribuicoes de motorista ou permissoes. Nao reaplicar schema, `06_delivery_routes.sql` ou importacoes antigas.
@@ -13,7 +19,7 @@ No SQL Editor do projeto correto, execute primeiro somente a consulta de leitura
 ```sql
 select required.column_name as campo_faltando
 from unnest(array[
-	'id', 'delivery_date', 'scan_key', 'driver_id', 'driver_name',
+	'id', 'delivery_date', 'scan_key', 'driver_id', 'driver_name', 'capture_number',
 	'recipient_address', 'address_confirmed', 'delivery_sequence',
 	'created_at', 'street', 'neighborhood', 'city', 'postal_code'
 ]) as required(column_name)

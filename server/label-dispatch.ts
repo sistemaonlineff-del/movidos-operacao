@@ -17,7 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const driverId = dispatcher ? requested : user.id
     const rows: DispatchVolume[] = []
     for (let offset = 0; ; offset += 200) {
-      let query = admin.from('delivery_volumes').select('id,driver_id,driver_name,recipient_address,address_confirmed,delivery_sequence,created_at,street,neighborhood,city,postal_code').eq('delivery_date', day).not('scan_key','is',null).order('created_at').order('id').range(offset, offset + 199)
+      let query = admin.from('delivery_volumes').select('id,driver_id,driver_name,capture_number,recipient_address,address_confirmed,delivery_sequence,created_at,street,neighborhood,city,postal_code').eq('delivery_date', day).not('scan_key','is',null).order('created_at').order('id').range(offset, offset + 199)
       if (driverId) query = query.eq('driver_id', driverId)
       const result = await query
       if (result.error) {

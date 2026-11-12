@@ -163,7 +163,7 @@ export default function LabelReader() {
                 const volData = await labelRequest('/api/label-volume', {
                   method: 'POST',
                   headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ baseId: String(m.record.id), scanKey: item.id, driverId: item.driverId, ...labelDeliveryAddress(reading) }),
+                  body: JSON.stringify({ baseId: String(m.record.id), scanKey: item.id, captureNumber: item.num, driverId: item.driverId, ...labelDeliveryAddress(reading) }),
                   cache: 'no-store', signal: queueAbort.current.signal, retryNetwork: true, onRetry
                 })
                 saved = true
