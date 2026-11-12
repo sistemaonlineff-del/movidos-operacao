@@ -2,6 +2,16 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Fechamento e acesso as rotas (11/11/2026)
+
+A mesma planilha aceita MOVIDOS e BELLY na aba Pagamento Total, com uma linha por periodo/parceiro/CNPJReferencia; os totais permanecem separados. O erro "Datas de operacao sobrepostas ou ausentes" nao e causado por haver dois CNPJs: indica cadastros do mesmo ponto/parceiro com operacoes simultaneas. A mensagem agora informa IDs, responsaveis, inicio/fim e quinzena para localizar o conflito em Cadastros. Nenhuma data e corrigida automaticamente, nenhum cadastro e escolhido ao acaso e a importacao continua bloqueada ate resolver o conflito. Em troca de responsavel, informe o fim real do anterior e o inicio real do sucessor sem sobreposicao; nao ajuste datas apenas para passar na validacao.
+
+Configuracoes inclui **Gerenciar rotas** e o perfil **Somente rotas**, independente de **Leitor de etiquetas**. Requer aplicar pessoalmente `supabase/migrations/20261111230000_delegated_route_management.sql` antes deste frontend. A coluna inicia desativada para todos e a funcao RLS existente passa a aceitar a permissao explicita de contas ativas, preservando administradores e o acesso legado. As politicas existentes, dados de rotas e permissoes dos outros modulos nao sao reescritos. A permissao da tela de gestao nao concede o leitor nem amplia a funcao de dispatcher na API do leitor.
+
+Cada lote em **Rotas de entrega > Volumes e pre-rota** oferece Google Maps para paradas com endereco completo ja conferido, na sequencia cadastrada, dividido em trechos de ate quatro paradas com continuidade. Usa links comuns, sem chave, API paga ou otimizacao automatica. Lotes legados ou com enderecos nao conferidos ficam sem link; mantenha a conferencia dos enderecos completos na expedicao existente. Os links nao foram abertos com dados reais.
+
+Validacao: testes financeiros de dois CNPJs/datas e diagnostico, PGlite com migracao repetida/opt-in/RLS/conta inativa/revogacao/tentativa de autoliberacao, e App real com Configuracoes/conta exclusiva de rotas/Maps celular e desktop. Imagens sinteticas em `tmp/label-reader/screenshots/route-maps-mobile.png` e `route-maps-desktop.png`. Nenhuma alteracao remota de cadastros, SQL, permissao ou publicacao automatica.
+
 ## Bipagem automatica sem confirmacao (11/11/2026)
 
 A fila da camera nao exige **Conferir** nem **Confirmar este destino**. Capture o pacote e siga: quando a busca identifica uma unica rota com seguranca, a gravacao e automatica, mantendo a chave e o motorista da captura original. Isso substitui a conferencia manual adicionada anteriormente. O sucesso so e mostrado depois da resposta da API; falhas de gravacao continuam visiveis sem bloquear a captura seguinte.

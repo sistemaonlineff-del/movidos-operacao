@@ -9,7 +9,7 @@ export const permissionLabels: Record<string, string> = {
   cadastros_view: 'Ver cadastros', cadastros_create: 'Criar cadastros', cadastros_edit: 'Editar cadastros', cadastros_delete: 'Excluir cadastros',
   financeiro_view: 'Ver Financeiro', financeiro_manage: 'Gerenciar Financeiro',
   funcionarios_view: 'Ver Funcionários', funcionarios_manage: 'Gerenciar Funcionários', configuracoes_manage: 'Configurações',
-  label_reader_access: 'Leitor de etiquetas'
+  label_reader_access: 'Leitor de etiquetas', delivery_routes_manage: 'Gerenciar rotas'
 }
 export function AccessProvider({ children, revalidateMs = 0 }: any) {
   const [state, setState] = useState<any>({ loading: true, profile: null, permissions: {} })
@@ -25,7 +25,7 @@ export function AccessProvider({ children, revalidateMs = 0 }: any) {
       supabase.from('user_profiles').select('id,email,full_name,role,is_active').eq('id', auth.user.id).single(),
       supabase.from('user_module_permissions').select('*').eq('user_id', auth.user.id).maybeSingle()
     ])
-    setState({ loading: false, profile, permissions: permissions ?? {}, canReadLabels: Boolean(profile?.is_active && (profile?.role === 'admin' || permissions?.label_reader_access)), canManageDeliveryRoutes: Boolean(profile?.is_active && (profile?.role === 'admin' || canManageDeliveryRoutes(auth.user.email))) })
+    setState({ loading: false, profile, permissions: permissions ?? {}, canReadLabels: Boolean(profile?.is_active && (profile?.role === 'admin' || permissions?.label_reader_access)), canManageDeliveryRoutes: Boolean(profile?.is_active && (profile?.role === 'admin' || canManageDeliveryRoutes(auth.user.email) || permissions?.delivery_routes_manage === true)) })
   }
   useEffect(() => { void refresh() }, [])
   useEffect(() => {

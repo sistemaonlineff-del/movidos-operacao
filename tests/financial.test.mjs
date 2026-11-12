@@ -102,6 +102,7 @@ test('operation dates select historical owners and require an exact manual packa
   assert.deepEqual(split.map(row => [row.quantity_packages, row.unit_value]), [[70, .25], [30, .5]])
   assert.equal(allocateClosingPackages(100, transition, [0, 100])[0].quantity_packages, 0)
   assert.throws(() => select('2026-10-01', '2026-10-15', [davi, { ...gustavo, operation_started_at: '2026-10-10' }]), /sobrepostas/)
+  assert.throws(() => select('2026-10-01', '2026-10-15', [davi, { ...gustavo, operation_started_at: '2026-10-10' }]), error => /Davi.*cadastro davi.*2026-10-10.*Gustavo.*cadastro gustavo.*2026-10-10.*sucessor/.test(error.message))
   assert.throws(() => select('2026-10-01', '2026-10-15', [davi, { ...gustavo, operation_started_at: '2026-10-12' }]), /sem responsavel/)
   assert.throws(() => select('2026-07-01', '2026-07-15'), /Nenhum cadastro/)
   assert.throws(() => select('2026-10-16', '2026-10-31', [{ ...gustavo, monthly_value: null }]), /valor acordado/)

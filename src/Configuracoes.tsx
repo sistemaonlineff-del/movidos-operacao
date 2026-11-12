@@ -17,6 +17,7 @@ const presets: Record<string, any> = {
   'Somente Funcionários': { funcionarios_view: true },
   'Funcionários completos': { funcionarios_view: true, funcionarios_manage: true },
   'Somente leitor de etiquetas': { label_reader_access: true },
+  'Somente rotas': { delivery_routes_manage: true },
   'Sem acesso': {}
 }
 export default function Configuracoes() {

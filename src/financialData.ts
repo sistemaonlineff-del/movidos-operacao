@@ -167,7 +167,10 @@ export function closingOperators(dropName: unknown, partner: unknown, registrati
   for (let index = 1; index < ordered.length; index++) {
     const previous = ordered[index - 1];
     const current = ordered[index];
-    if (current.from <= previous.to) throw new Error(`Datas de operacao sobrepostas ou ausentes para ${description}. Corrija os cadastros antes de importar.`);
+    if (current.from <= previous.to) {
+      const describe = (entry: typeof current) => `${text(entry.row.responsible) || 'Responsavel nao informado'} (cadastro ${text(entry.row.id) || 'sem ID'}; inicio: ${text(entry.row.operation_started_at) || 'nao informado'}; fim: ${text(entry.row.operation_ended_at) || 'em aberto'})`;
+      throw new Error(`Datas de operacao sobrepostas ou ausentes para ${description}, na quinzena ${start} a ${end}: ${describe(previous)} e ${describe(current)}. Corrija as datas em Cadastros antes de importar; se houve troca de responsavel, o anterior deve terminar antes do inicio do sucessor. Nenhum cadastro foi escolhido automaticamente.`);
+    }
     const nextDay = new Date(`${previous.to}T12:00:00Z`);
     nextDay.setUTCDate(nextDay.getUTCDate() + 1);
     if (nextDay.toISOString().slice(0, 10) !== current.from) throw new Error(`Ha dias sem responsavel na quinzena de ${description}. Confira as datas de operacao.`);
