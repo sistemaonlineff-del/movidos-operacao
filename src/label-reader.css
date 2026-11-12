@@ -30,4 +30,6 @@
 .item-route-result small{display:block;font-size:11px;color:#60766c}
 .item-route-warning span{color:#a75a00;font-weight:600}
 .camera-batch-item{flex-wrap:wrap;cursor:default;border-radius:8px}
+.label-maps-shortcut{display:inline-flex!important;align-items:center;justify-content:center;gap:8px;min-height:44px;max-width:100%;box-sizing:border-box;padding:10px 14px;border:1px solid #176b50;border-radius:6px;color:#176b50;background:#fff;text-decoration:none;font-weight:600;overflow-wrap:anywhere;letter-spacing:0}
+.label-maps-shortcut svg{flex-shrink:0}.label-actions:has(>.label-maps-shortcut){display:flex;margin:0}.camera-batch-header button{display:inline-flex;align-items:center;gap:6px;max-width:100%;white-space:normal}.batch-item-erro{border-color:#b94a48;background:#fff7f7}.batch-item-erro .item-route-result small{color:#a72b2b}.camera-batch-item .item-details{overflow-wrap:anywhere}
 

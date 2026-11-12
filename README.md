@@ -2,6 +2,18 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Recuperacao da bipagem e acesso ao Maps (12/11/2026)
+
+A fila continua com captura sem pausa, ate tres trabalhos simultaneos e vinte fotos pendentes, sem conferencia ou confirmacao por pacote. Requisicoes repetem no maximo duas vezes em falhas temporarias informadas pela API (429/502/504 ou 503 explicitamente transitorio), respeitando Retry-After de ate sessenta segundos por espera. Erros de permissao, configuracao, migracao ou dados nao entram em repeticao automatica. Falha de rede no OCR nao dispara outra leitura automaticamente; o salvamento pode ser repetido com seguranca usando a mesma chave e motorista da captura. Nao ha fallback pago nem mudanca de modelo ou ativacao de faturamento.
+
+Os totais da camera distinguem salvos, em andamento e nao salvos. Falhas ao gravar ficam destacadas, mesmo quando a rota foi reconhecida. **Reprocessar falhas** e uma acao coletiva opcional: preserva a chave/motorista e reutiliza a extracao quando apenas a gravacao falhou, sem novo OCR. Enderecos ambiguos ou fora da base continuam sem gravacao automatica. As imagens e pendencias permanecem apenas na memoria da tela; nao feche/recarregue antes de resolver as falhas.
+
+Atalhos no inicio do leitor e no cabecalho da fila levam a **Expedicao por motorista**, mantida ao final da tela. A lista inicia na propria conta, inclusive para administrador, e o controle Google Maps permanece visivel quando bloqueado. Somente volumes realmente gravados, com motorista selecionado e todos os enderecos completos/conferidos, geram links. Mantem trechos de ate quatro paradas, continuidade, ordem da base e exportacao Excel; nao e otimizacao de trajeto nem envia enderecos automaticamente ao Google.
+
+As APIs agora distinguem erros permanentes do provedor e falta de atualizacao do banco, sem expor chaves, imagens, enderecos ou mensagens brutas. Falha na consulta de idempotencia impede a tentativa de insercao. Logs fixos `label-read provider error` e `label-volume storage error` fornecem somente classificacoes/codigos para diagnostico administrativo. Os prints nao provam excesso de velocidade nem identificam sozinhos a causa em producao: conferir os logs do ambiente se persistir. Nao foi verificado/corrigido o provedor ou banco real.
+
+Validacao local: testes de API/recuperacao/seguranca e App real com trinta capturas sinteticas em celular e desktop, 429 com espera, resposta perdida depois de gravar, falha permanente sem repeticao, reprocessamento sem novo OCR de volume ja lido, motorista original, nenhuma duplicata, oito trechos cobrindo as trinta paradas e fluxos anteriores de foto/lote/camera/Excel. Capturas em `tmp/label-reader/screenshots/recovery-maps-mobile.png`, `recovery-maps-desktop.png`, `recovery-queue-mobile.png` e `recovery-queue-desktop.png`. Sem SQL/dependencia nova, dados reais, merge ou publicacao automatica.
+
 ## Fechamento e acesso as rotas (11/11/2026)
 
 A mesma planilha aceita MOVIDOS e BELLY na aba Pagamento Total, com uma linha por periodo/parceiro/CNPJReferencia; os totais permanecem separados. O erro "Datas de operacao sobrepostas ou ausentes" nao e causado por haver dois CNPJs: indica cadastros do mesmo ponto/parceiro com operacoes simultaneas. A mensagem agora informa IDs, responsaveis, inicio/fim e quinzena para localizar o conflito em Cadastros. Nenhuma data e corrigida automaticamente, nenhum cadastro e escolhido ao acaso e a importacao continua bloqueada ate resolver o conflito. Em troca de responsavel, informe o fim real do anterior e o inicio real do sucessor sem sobreposicao; nao ajuste datas apenas para passar na validacao.

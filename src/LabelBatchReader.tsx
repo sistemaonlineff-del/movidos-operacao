@@ -3,6 +3,7 @@ import { supabase } from "./lib/supabase";
 import { extractionQuery, labelDeliveryAddress, parseLabelExtraction } from "./labelExtraction";
 import { findLabelMatches } from "./labelMatching";
 import type { LabelBase } from "./labelMatching";
+import { labelRequest } from "./labelRequest";
 
 type Save = { baseId:string; scanKey:string; driverId:string; packageAddress:string; addressConfirmed:boolean };
 type Result = { name:string; state:"aguardando"|"lendo"|"concluido"|"erro"; result?:string; error?:string; save?:Save; address?:string };
@@ -15,8 +16,7 @@ export default function LabelBatchReader({base,driverId,onSaved}:{base:LabelBase
  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
  const save=async(payload:Save)=>{
   const {data}=await supabase!.auth.getSession();
-  const response=await fetch('/api/label-volume',{method:'POST',headers:{Authorization:`Bearer ${data.session?.access_token??''}`,'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const result=await response.json();if(!response.ok)throw new Error(result.error||'Volume nao salvo. Tente novamente.');
+    await labelRequest('/api/label-volume',{method:'POST',headers:{Authorization:`Bearer ${data.session?.access_token??''}`,'Content-Type':'application/json'},body:JSON.stringify(payload),retryNetwork:true});
   if(alive.current)onSaved();
  };
  const retry=async(index:number,payload:Save)=>{
@@ -34,8 +34,7 @@ export default function LabelBatchReader({base,driverId,onSaved}:{base:LabelBase
    setRows(items=>items.map((row,position)=>position===current?{...row,state:'lendo'}:row));
    try{
     const {data}=await supabase!.auth.getSession(),image=await imageData(file);
-    const response=await fetch('/api/label-read',{method:'POST',headers:{Authorization:`Bearer ${data.session?.access_token??''}`,'Content-Type':'application/json'},body:JSON.stringify({image})});
-    const payload=await response.json();if(!response.ok)throw new Error(payload.error||'Falha na leitura.');
+    const payload=await labelRequest('/api/label-read',{method:'POST',headers:{Authorization:`Bearer ${data.session?.access_token??''}`,'Content-Type':'application/json'},body:JSON.stringify({image})});
     const extraction=parseLabelExtraction(payload.extraction),address=extractionQuery(extraction),matches=findLabelMatches(address,base.records);
     const safe=matches.length===1&&matches[0].streetMatch&&!matches[0].warnings.some(warning=>/nome aproximado|bairro divergente|rua não confirmada|cep lido é diferente/i.test(warning));
     if(!safe){if(alive.current)setRows(items=>items.map((row,position)=>position===current?{...row,state:'concluido',address,result:'Nao salvo: confira esta foto individualmente no leitor.'}:row));continue}

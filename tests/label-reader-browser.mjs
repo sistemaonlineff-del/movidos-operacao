@@ -14,14 +14,14 @@ async function fixture({logged=true,active=true,allowed=true,routesAllowed=false
   const context=await browser.newContext({viewport:{width:mobile?390:1440,height:mobile?844:1000},isMobile:mobile,hasTouch:mobile,serviceWorkers:'block',permissions:['camera']})
   const drivers=[{id:user.id,name:'Bruno'},{id:'22222222-2222-4222-8222-222222222222',name:'Jose'},{id:'33333333-3333-4333-8333-333333333333',name:'Rafael'}]
   const fixtureStreet=routeVariant==='letter'?'Rua Vinte e Dois de Abril':routeVariant==='neighborhood'?'Rua Aurora':'Rua Sintetica'
-  const state={active,allowed,routesAllowed,calls:[],errors:[],permissionWrites:[],dispatchRows:[],volumeRequests:[],failVolume:false,holdReading:false,pendingReads:[],readNumber:0,day:'',drivers}
+  const state={active,allowed,routesAllowed,calls:[],errors:[],permissionWrites:[],dispatchRows:[],volumeRequests:[],failVolume:false,postInsertFailures:0,readFailures:[],holdReading:false,pendingReads:[],readNumber:0,day:'',drivers}
   await context.addInitScript(({origin,user,token,logged})=>{
     if(location.origin!==origin||!logged)return
     localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token',JSON.stringify({access_token:token,refresh_token:'local-only',token_type:'bearer',expires_at:Math.floor(Date.now()/1000)+3600,expires_in:3600,user}))
   },{origin,user,token,logged})
   await context.route('**/*',async route=>{
     const request=route.request(),url=new URL(request.url())
-    const json=(data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)})
+    const json=(data,status=200,headers={})=>route.fulfill({status,headers,contentType:'application/json',body:JSON.stringify(data)})
     try{
       if(url.hostname==='hcpvmahmiqipghceylle.supabase.co'){
         state.calls.push(url.pathname)
@@ -68,8 +68,10 @@ async function fixture({logged=true,active=true,allowed=true,routesAllowed=false
           assert.ok(driver);assert.ok(body.packageAddress.includes(fixtureStreet))
           state.volumeRequests.push(body)
           if(state.failVolume)return json({error:'Falha sintetica ao salvar. Tente novamente.'},503)
-          if(!state.dispatchRows.some(row=>row.scan_key===body.scanKey))state.dispatchRows.push({id:crypto.randomUUID(),driver_id:body.driverId,driver_name:driver.name,recipient_address:body.packageAddress,address_confirmed:body.addressConfirmed,delivery_sequence:1,created_at:new Date().toISOString(),scan_key:body.scanKey,delivery_date:state.day})
-          return json({saved:true,zone:'Norte',route:body.baseId==='base-2'&&routeVariant==='conflict'?'R2':'R1',batch:1,sequence:1})
+          const duplicate=state.dispatchRows.some(row=>row.scan_key===body.scanKey)
+          if(!duplicate)state.dispatchRows.push({id:crypto.randomUUID(),driver_id:body.driverId,driver_name:driver.name,recipient_address:body.packageAddress,address_confirmed:body.addressConfirmed,delivery_sequence:1,created_at:new Date().toISOString(),scan_key:body.scanKey,delivery_date:state.day})
+          if(state.postInsertFailures>0){state.postInsertFailures--;return json({error:'Resposta perdida depois de salvar',retryable:true},503)}
+          return json({saved:true,duplicate,zone:'Norte',route:body.baseId==='base-2'&&routeVariant==='conflict'?'R2':'R1',batch:1,sequence:1})
         }
         if(url.pathname==='/api/label-routes'){
           const record={id:'base-1',street:fixtureStreet,neighborhood:routeVariant==='neighborhood'?'Jardim Horizonte II':'Centro',city:'Suzano',postalCode:'08600-000',zone:'Norte',route:'R1',deliverySequence:1}
@@ -81,6 +83,8 @@ async function fixture({logged=true,active=true,allowed=true,routesAllowed=false
           if(request.method()==='GET')return json({configured:true})
           const number=++state.readNumber
           if(state.holdReading)await new Promise(resolve=>state.pendingReads.push(resolve))
+          const failure=state.readFailures.shift()
+          if(failure)return json({error:failure.error,retryable:failure.retryable},failure.status,failure.retryAfter?{'Retry-After':failure.retryAfter}:{})
           return json({extraction:{recipient:{street:fixtureStreet,number:String(number),complement:null,neighborhood:routeVariant==='neighborhood'?'Jardim Horizonte II':'Centro',city:'Suzano',postalCode:'08600-000'},warnings:[],uncertainFields:[]}})
         }
         assert.equal(request.method(),'GET')
@@ -267,6 +271,84 @@ try{
   await automatic.context.close()
   }
   }
+  for(const mobile of[true,false]){
+    const recovery=await fixture({role:'admin',mobile,dispatchScenario:true})
+    const {page,state}=recovery
+    await page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()
+    assert.equal(await page.getByLabel('Lista do motorista',{exact:true}).inputValue(),user.id)
+    assert.equal(await page.getByRole('button',{name:'Google Maps',exact:true}).isDisabled(),true)
+    await page.getByRole('link',{name:'Google Maps e exportacao',exact:true}).click()
+    assert.ok(await page.locator('#label-dispatch').evaluate(element=>{const box=element.getBoundingClientRect();return box.top>=-1&&box.top<window.innerHeight}))
+    await page.getByRole('button',{name:'Abrir leitura cont\u00ednua sem pausa',exact:true}).click()
+    await page.waitForFunction(()=>{const video=document.querySelector('video');return video?.readyState>=2&&video.videoWidth>0})
+    const count=async total=>page.waitForFunction(total=>document.querySelector('.ld-totals strong')?.textContent===String(total),total)
+    state.readFailures.push({status:429,retryable:true,retryAfter:'2',error:'Limite sintetico'})
+    state.postInsertFailures=1
+    await page.getByRole('button',{name:'Capturar pacote #1',exact:true}).click()
+    await page.getByText('Aguardando nova tentativa 1/2...',{exact:true}).waitFor()
+    const savedAttempt=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/label-volume'&&request.method()==='POST')
+    await page.clock.runFor(2100)
+    await savedAttempt
+    await page.getByText('Aguardando nova tentativa 1/2...',{exact:true}).waitFor()
+    await page.clock.runFor(1100)
+    await count(1)
+    assert.equal(state.readNumber,2)
+    assert.equal(state.volumeRequests.length,2)
+    assert.equal(state.volumeRequests[0].scanKey,state.volumeRequests[1].scanKey)
+    assert.equal(state.dispatchRows.length,1)
+    state.readFailures.push({status:503,retryable:false,error:'Configuracao da leitura precisa do administrador'})
+    await page.getByRole('button',{name:'Capturar pacote #2',exact:true}).click()
+    await page.getByText('Configuracao da leitura precisa do administrador',{exact:true}).waitFor()
+    const permanentReadCount=state.readNumber
+    await page.clock.runFor(5000)
+    assert.equal(state.readNumber,permanentReadCount)
+    state.failVolume=true
+    await page.getByRole('button',{name:'Capturar pacote #3',exact:true}).click()
+    await page.getByText(/N\u00e3o salvo na pr\u00e9-rota: Falha sintetica/).waitFor()
+    const failedWrite=state.volumeRequests.at(-1),readBeforeRetry=state.readNumber
+    assert.equal(await page.locator('.camera-batch-item.batch-item-erro').count(),2)
+    await page.getByText('Total: 3 pacotes \u00b7 1 salvos \u00b7 0 em andamento \u00b7 2 nao salvos',{exact:true}).waitFor()
+    await page.getByLabel('Motorista das proximas leituras',{exact:true}).selectOption(state.drivers[1].id)
+    state.failVolume=false
+    await page.getByRole('button',{name:'Reprocessar falhas (2)',exact:true}).click()
+    await count(3)
+    assert.equal(state.readNumber,readBeforeRetry+1,'A save-only retry must reuse the OCR result')
+    const sameCapture=state.volumeRequests.filter(request=>request.scanKey===failedWrite.scanKey)
+    assert.equal(sameCapture.length,2)
+    assert.deepEqual(sameCapture[0],sameCapture[1])
+    assert.ok(state.dispatchRows.every(row=>row.driver_id===user.id))
+    await page.getByLabel('Motorista das proximas leituras',{exact:true}).selectOption(user.id)
+    for(const[start,end]of[[4,18],[19,30]]){
+      state.holdReading=true
+      for(let number=start;number<start+3;number++){
+        const reading=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/label-read'&&request.method()==='POST')
+        await page.getByRole('button',{name:`Capturar pacote #${number}`,exact:true}).click()
+        await reading
+      }
+      for(let number=start+3;number<=end;number++)await page.getByRole('button',{name:`Capturar pacote #${number}`,exact:true}).click()
+      await page.waitForFunction(()=>document.querySelectorAll('.camera-batch-item .tag-reading').length===3)
+      assert.equal(state.pendingReads.length,3,'Only three camera reads in flight')
+      assert.equal(await page.getByRole('button',{name:`Capturar pacote #${end+1}`,exact:true}).isEnabled(),true)
+      state.holdReading=false;state.pendingReads.splice(0).forEach(resolve=>resolve())
+      await count(end)
+    }
+    await page.getByText('Total: 30 pacotes \u00b7 30 salvos \u00b7 0 em andamento \u00b7 0 nao salvos',{exact:true}).waitFor()
+    assert.equal(state.dispatchRows.length,30)
+    assert.equal(new Set(state.volumeRequests.map(request=>request.scanKey)).size,30)
+    assert.equal(await page.locator('.camera-batch-item button').count(),0)
+    await page.getByRole('link',{name:'Exportar rota no Google Maps',exact:true}).click()
+    assert.ok(await page.locator('#label-dispatch').evaluate(element=>{const box=element.getBoundingClientRect();return box.top>=-1&&box.top<window.innerHeight}))
+    const links=await page.locator('.ld-links a').evaluateAll(elements=>elements.map(element=>element.href))
+    assert.equal(links.length,8)
+    const exported=[]
+    for(const link of links){const url=new URL(link);exported.push(...(url.searchParams.get('waypoints')?.split('|')??[]),url.searchParams.get('destination'))}
+    assert.deepEqual(exported,state.dispatchRows.map(row=>row.recipient_address))
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1))
+    await page.locator('#label-dispatch').screenshot({path:`tmp/label-reader/screenshots/recovery-maps-${mobile?'mobile':'desktop'}.png`})
+    await page.locator('.camera-batch-section').screenshot({path:`tmp/label-reader/screenshots/recovery-queue-${mobile?'mobile':'desktop'}.png`})
+    assert.deepEqual(state.errors,[])
+    await recovery.context.close()
+  }
   const expedition=await fixture({role:'admin',mobile:true,dispatchScenario:true,routeVariant:'duplicate'})
   const {page,state}=expedition
   await page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()
@@ -329,7 +411,7 @@ try{
   await page.screenshot({path:'tmp/label-reader/screenshots/dispatch-desktop.png',fullPage:true})
   assert.deepEqual(state.errors,[])
   await expedition.context.close()
-  console.log('PASS: real App isolation/revocation, alternating drivers, 9 saved photo/batch/continuous-camera packages, in-flight snapshots, per-day totals, retained address drafts, Maps and Excel; no real writes.')
+  console.log('PASS: real App isolation/revocation, alternating drivers, 30-camera recovery on mobile/desktop without duplicate writes, bounded retries, save-only replay, Maps shortcuts, 9 photo/batch/camera packages, retained drafts and Excel; no real writes.')
 }catch(error){
   for(const{page,state}of diagnostics.filter(({page})=>!page.isClosed())){
     console.error(JSON.stringify(state),await page.locator('body').innerText())
