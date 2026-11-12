@@ -1,3 +1,33 @@
+## Reparo da coluna scan_key ausente (12/11/2026)
+
+A consulta do usuario confirmou `scan_key` ausente em `delivery_volumes`. Aplicar pessoalmente, apos backup, somente [migrations/20261112140000_delivery_volumes_scan_key.sql](migrations/20261112140000_delivery_volumes_scan_key.sql). Requer a tabela existente; adiciona a coluna nullable e indice unico, reutilizando o nome do indice da estrutura original, e notifica o PostgREST para recarregar o esquema. Nao altera linhas, RLS, grants, atribuicoes de motorista ou permissoes. Nao reaplicar schema, `06_delivery_routes.sql` ou importacoes antigas.
+
+Volumes anteriores permanecem com `scan_key` nulo; nao sao apagados, mas nao entram automaticamente na expedicao de leituras, que filtra chaves preenchidas. Pacotes que falharam antes de gravar nao sao recuperados por adicionar a coluna. Depois do SQL, usar **Atualizar expedicao** na propria tela; nao recarregar/fechar a pagina enquanto houver fotos pendentes na memoria. A falha de leitura do provedor e independente deste reparo. Teste PostgreSQL local confere repeticao, indice em coluna ja existente, dados e RLS preservados, multiplos nulos e bloqueio de chave repetida. Nenhum SQL remoto foi executado pelo assistente.
+
+## Diagnostico da lista de expedicao (12/11/2026)
+
+A antiga mensagem "Lista indisponivel. Confira a migracao dos motoristas" era usada para qualquer falha na consulta de `delivery_volumes`; o print sozinho nao confirma migracao ausente. A API agora distingue esquema ausente, permissao negada e falha de consulta, registrando somente codigo/classificacao em `label-dispatch storage error`, sem mensagens brutas ou dados de pacotes. Teste focado cobre esses tres caminhos e mantem isolamento e idempotencia.
+
+No SQL Editor do projeto correto, execute primeiro somente a consulta de leitura abaixo. Ela retorna os campos ausentes; resultado vazio confirma apenas a presenca das colunas, nao permissoes, disponibilidade nem cache da API.
+
+```sql
+select required.column_name as campo_faltando
+from unnest(array[
+	'id', 'delivery_date', 'scan_key', 'driver_id', 'driver_name',
+	'recipient_address', 'address_confirmed', 'delivery_sequence',
+	'created_at', 'street', 'neighborhood', 'city', 'postal_code'
+]) as required(column_name)
+where not exists (
+	select 1 from information_schema.columns existing
+	where existing.table_schema = 'public'
+		and existing.table_name = 'delivery_volumes'
+		and existing.column_name = required.column_name
+)
+order by required.column_name;
+```
+
+`driver_id`, `recipient_address` e `address_confirmed` sao adicionados por [migrations/20261110110000_label_driver_dispatch.sql](migrations/20261110110000_label_driver_dispatch.sql), diferente da permissao configuravel de rotas de 11/11. Conferir os campos faltantes e backup antes de o usuario aplicar pessoalmente a migracao adequada. Nao reaplicar `06_delivery_routes.sql`, schema, importacoes ou permissoes globais para resolver a mensagem. Se nenhuma coluna faltar, conferir os logs do ambiente e a configuracao do projeto/servidor; nao presumir que adicionar colunas resolve. Nenhuma consulta ou alteracao remota foi executada pelo assistente.
+
 ## Permissao configuravel de rotas (11/11/2026)
 
 Antes de publicar o frontend correspondente, aplicar pessoalmente [migrations/20261111230000_delegated_route_management.sql](migrations/20261111230000_delegated_route_management.sql) no SQL Editor, apos backup. Requer `user_profiles`, `user_module_permissions`, `auth.uid()` e as politicas de rotas que usam `can_manage_delivery_routes()`. Nao reaplicar schema, imports de base, `05_user_permissions.sql` ou `06_delivery_routes.sql` para esta alteracao.
