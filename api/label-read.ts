@@ -46,7 +46,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const projectDenied = response.status === 403 && /project has been denied access/i.test(message)
       const reason = projectDenied ? 'project_denied' : invalidKey ? 'invalid_key' : response.status === 404 ? 'model_unavailable' : response.status === 403 ? 'permission_denied' : response.status === 400 ? 'invalid_request' : 'provider_unavailable'
       console.error('label-read provider error', { httpStatus: response.status, model, reason })
-      if (projectDenied || invalidKey || response.status === 401 || response.status === 403 || response.status === 404 || response.status === 400) throw new LabelApiError(503, 'A leitura automática está indisponível no momento. Tente novamente mais tarde ou consulte digitando o endereço.')
+      if (invalidKey || response.status === 401) throw new LabelApiError(503, 'A chave da leitura automatica precisa ser revisada pelo administrador. As fotos nao foram salvas na pre-rota.')
+      if (projectDenied || response.status === 403) throw new LabelApiError(503, 'O servico de leitura esta sem permissao no provedor. Avise o administrador.')
+      if (response.status === 404 || response.status === 400) throw new LabelApiError(503, 'A configuracao do modelo de leitura precisa ser revisada pelo administrador.')
     }
     if (!response.ok) throw new LabelApiError(502, 'A leitura automática está indisponível no momento. Tente novamente mais tarde.')
     const payload = await response.json()
@@ -57,8 +59,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try { extraction = parseLabelExtraction(JSON.parse(output)) } catch { throw new LabelApiError(502, 'A IA retornou dados incompletos. Tente novamente com outra foto.') }
     return res.status(200).json({ extraction })
   } catch (error) {
-    if (error instanceof LabelApiError) return res.status(error.status).json({ error: error.message })
-    if (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)) return res.status(504).json({ error: 'A leitura demorou para responder. Tente novamente.' })
-    return res.status(502).json({ error: 'Não foi possível concluir a leitura. Tente novamente.' })
+    if (error instanceof LabelApiError) return res.status(error.status).json({ error: error.message, retryable: [429, 502, 504].includes(error.status) })
+    if (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)) return res.status(504).json({ error: 'A leitura demorou para responder. Tente novamente.', retryable: true })
+    return res.status(502).json({ error: 'Não foi possível concluir a leitura. Tente novamente.', retryable: true })
   }
 }

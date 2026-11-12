@@ -12,6 +12,7 @@ export default function LabelDispatchPanel({ driverId, onDriverChange, revision 
   const [drafts, setDrafts] = useState<Record<string,string>>({}), [optimized, setOptimized] = useState<string[]>([])
   const request = useRef(0)
   const loadedDay = useRef(day)
+  const viewInitialized = useRef(false)
   const api = async (payload?: Record<string,unknown>) => {
     const session = await supabase!.auth.getSession()
     const response = await fetch(payload ? '/api/label-dispatch' : `/api/label-dispatch?day=${encodeURIComponent(day)}`, { method: payload ? 'POST' : 'GET', headers: { Authorization: `Bearer ${session.data.session?.access_token ?? ''}`, ...(payload ? { 'Content-Type': 'application/json' } : {}) }, ...(payload ? { body: JSON.stringify({ ...payload, day }) } : {}), cache: 'no-store' })
@@ -29,6 +30,8 @@ export default function LabelDispatchPanel({ driverId, onDriverChange, revision 
       setData(result)
       if (!driverId) onDriverChange(result.currentUserId)
       if (!result.dispatcher) setViewDriver(result.currentUserId)
+      else if (!viewInitialized.current) setViewDriver(driverId || result.currentUserId)
+      viewInitialized.current = true
     }).catch(failure => { if (current === request.current) setError(failure instanceof Error ? failure.message : 'Expedicao indisponivel.') }).finally(() => { if (current === request.current) setBusy(false) })
     return () => { request.current++ }
   }, [day, refresh, revision])
@@ -59,7 +62,7 @@ export default function LabelDispatchPanel({ driverId, onDriverChange, revision 
     const sheet = XLSX.utils.aoa_to_sheet([['Motorista','Dia','Ordem','Endereco','Conferido','Sequencia da base','Leitura'],...selected.map((row,index)=>[row.driver_name,day,index+1,dispatchAddress(row),row.address_confirmed?'Sim':'Pendente',row.delivery_sequence,row.id])])
     const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook,sheet,'Pacotes'); XLSX.writeFile(workbook,`pacotes-${day}.xlsx`)
   }
-  return <section className="label-dispatch">
+  return <section className="label-dispatch" id="label-dispatch" tabIndex={-1}>
     <header><h2><Route size={21}/>Expedicao por motorista</h2><button type="button" title="Atualizar expedicao" aria-label="Atualizar expedicao" disabled={busy} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={18}/></button></header>
     <div className="ld-controls"><label>Dia das leituras<input aria-label="Dia das leituras" type="date" value={day} onChange={event => { setDay(event.target.value); setOptimized([]) }}/></label>{data && <label>Motorista das proximas leituras<select aria-label="Motorista das proximas leituras" value={driverId} disabled={!data.dispatcher} onChange={event => onDriverChange(event.target.value)}>{data.drivers.map(driver => <option key={driver.id} value={driver.id}>{driver.name}</option>)}</select></label>}</div>
     {error && <p role="alert">{error}</p>}{busy && <p role="status">Atualizando expedicao...</p>}
@@ -69,6 +72,7 @@ export default function LabelDispatchPanel({ driverId, onDriverChange, revision 
       <p className="ld-note">{optimized.length ? 'Paradas intermediarias otimizadas pelo Google; destino final mantido.' : 'Ordem da sequencia cadastrada na base; paradas sem sequencia ficam por horario de leitura.'} Volumes atribuidos nao significam entregas concluidas.</p>
       {linkError && <p role="alert">{linkError}</p>}
       {links.length > 0 && <div className="ld-links">{links.map((link,index) => <a key={link} href={link} target="_blank" rel="noreferrer"><Navigation size={16}/>Google Maps: trecho {index+1}/{links.length}</a>)}</div>}
+      {links.length === 0 && <div className="ld-links"><button type="button" disabled><Navigation size={16} aria-hidden="true"/>Google Maps</button></div>}
       {!exportable && selected.length > 0 && <p className="ld-note">Selecione um motorista e confira os enderecos completos, incluindo numero, antes de abrir as paradas no Maps.</p>}
       {!rows.length && <p>Nenhuma leitura encontrada para este filtro.</p>}
       <div className="ld-table"><table><thead><tr><th>Motorista</th><th>Endereco do pacote</th><th>Sequencia</th><th>Conferencia</th></tr></thead><tbody>{selected.map(row => <tr key={row.id}><td>{row.driver_name || 'Sem motorista'}</td><td>{row.driver_id ? <input aria-label={`Endereco do pacote ${row.id}`} value={drafts[row.id] ?? dispatchAddress(row)} maxLength={2000} onChange={event => { setDrafts(previous => ({...previous,[row.id]:event.target.value})); setOptimized([]) }}/>:dispatchAddress(row)}</td><td>{row.delivery_sequence ?? '-'}</td><td>{row.address_confirmed && drafts[row.id] === undefined ? 'Conferido' : row.driver_id && <button type="button" title="Confirmar endereco completo" aria-label={`Confirmar endereco ${row.id}`} disabled={busy || !(drafts[row.id] ?? dispatchAddress(row)).trim()} onClick={() => void confirmAddress(row)}><Check size={17}/></button>}</td></tr>)}</tbody></table></div>

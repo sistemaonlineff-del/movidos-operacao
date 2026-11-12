@@ -26,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const packageAddress = typeof req.body?.packageAddress === 'string' ? req.body.packageAddress.trim() : ''
     if (packageAddress.length > 2000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(packageAddress)) throw new LabelApiError(400, 'Endereco invalido.')
     const { data: existing, error: existingError } = await admin.from('delivery_volumes').select('zone,route,batch_number,delivery_sequence,driver_id').eq('scan_key', scanKey).maybeSingle()
-    if (existingError && !/scan_key/i.test(existingError.message)) throw existingError
+    if (existingError) throw existingError
     if (existing) {
       if (existing.driver_id !== driverId) throw new LabelApiError(409, 'Esta leitura ja pertence a outro motorista ou ao historico anterior. Nao foi reatribuida.')
       return res.status(200).json({ saved: true, duplicate: true, zone: existing.zone, route: existing.route, batch: existing.batch_number, sequence: existing.delivery_sequence })
@@ -51,7 +51,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     return res.status(201).json({ saved: true, duplicate: false, zone: base.zone, route: base.route, batch, sequence: base.delivery_sequence })
   } catch (error) {
-    if (error instanceof LabelApiError) return res.status(error.status).json({ error: error.message })
-    return res.status(503).json({ error: 'Não foi possível adicionar este volume à pré-rota. Tente novamente.' })
+    if (error instanceof LabelApiError) return res.status(error.status).json({ error: error.message, retryable: false })
+    const rawCode = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : ''
+    const code = /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(rawCode) ? rawCode : 'unknown'
+    const schemaMissing = ['42P01', '42703', 'PGRST204', 'PGRST205'].includes(code)
+    const temporary = code === 'unknown' || /^(08|53|57|58)/.test(code) || ['PGRST000', 'PGRST001', 'PGRST002'].includes(code)
+    console.error('label-volume storage error', { code, reason: schemaMissing ? 'schema_missing' : temporary ? 'storage_unavailable' : 'storage_rejected' })
+    if (schemaMissing) return res.status(503).json({ error: 'A pre-rota precisa de atualizacao no banco de dados. Avise o administrador; este volume nao foi salvo.', retryable: false })
+    if (!temporary) return res.status(503).json({ error: 'O banco recusou o volume. Avise o administrador para conferir a configuracao da pre-rota.', retryable: false })
+    return res.status(503).json({ error: 'Não foi possível adicionar este volume à pré-rota. Tente novamente.', retryable: true })
   }
 }

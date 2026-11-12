@@ -8,6 +8,8 @@ import { addressFields, addressLabels, extractionQuery, labelDeliveryAddress, pa
 import type { LabelExtraction } from './labelExtraction'
 import LabelBatchReader from './LabelBatchReader'
 import LabelDispatchPanel from './LabelDispatchPanel'
+import { labelRequest } from './labelRequest'
+import { Navigation, RefreshCw } from 'lucide-react'
 
 const READ_MAX_EDGE = 1600
 const READ_JPEG_QUALITY = 0.75
@@ -25,6 +27,10 @@ type CameraBatchItem = {
   matchCount?: number
   routeSaveMsg?: string
   error?: string
+  reading?: LabelExtraction
+  saved?: boolean
+  saveFailed?: boolean
+  retryStatus?: string
 }
 
 export default function LabelReader() {
@@ -59,6 +65,7 @@ export default function LabelReader() {
   const scanKey = useRef('')
   const processingRef = useRef(new Set<string>())
   const captureNumber = useRef(0)
+  const queueAbort = useRef(new AbortController())
 
   const matches = useMemo(() => findLabelMatches(query, base?.records ?? []), [query, base])
   const primaryMatch = matches.length === 1 ? matches[0] : null
@@ -67,10 +74,12 @@ export default function LabelReader() {
 
   useEffect(() => {
     alive.current = true
+    queueAbort.current = new AbortController()
     return () => {
       alive.current = false; runId.current++
       streamRef.current?.getTracks().forEach(track => track.stop())
       requestRef.current?.abort()
+      queueAbort.current.abort()
     }
   }, [])
 
@@ -123,15 +132,16 @@ export default function LabelReader() {
       void (async () => {
         try {
           const { data } = await supabase!.auth.getSession()
-          const response = await fetch('/api/label-read', {
+          const onRetry = (attempt: number) => {
+            if (alive.current) setCameraItems(prev => prev.map(entry => entry.id === item.id ? { ...entry, retryStatus: `Aguardando nova tentativa ${attempt}/2...` } : entry))
+          }
+          const result = item.reading ? null : await labelRequest('/api/label-read', {
             method: 'POST',
             headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ image: item.image }),
-            cache: 'no-store'
+            cache: 'no-store', signal: queueAbort.current.signal, onRetry
           })
-          const result = await response.json()
-          if (!response.ok) throw new Error(result.error || 'Não foi possível ler a etiqueta.')
-          const reading = parseLabelExtraction(result.extraction)
+          const reading = item.reading ?? parseLabelExtraction(result.extraction)
           const address = extractionQuery(reading)
           const foundMatches = findLabelMatches(address, base.records)
 
@@ -139,6 +149,8 @@ export default function LabelReader() {
           let primaryRoute = ''
           let primarySeq: number | null = null
           let saveMsg = ''
+          let saved = false
+          let saveFailed = false
 
           if (canStoreAutomatically(foundMatches)) {
             const m = foundMatches[0]
@@ -148,18 +160,17 @@ export default function LabelReader() {
 
             if (canStoreAutomatically(foundMatches)) {
               try {
-                const volRes = await fetch('/api/label-volume', {
+                const volData = await labelRequest('/api/label-volume', {
                   method: 'POST',
                   headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' },
                   body: JSON.stringify({ baseId: String(m.record.id), scanKey: item.id, driverId: item.driverId, ...labelDeliveryAddress(reading) }),
-                  cache: 'no-store'
+                  cache: 'no-store', signal: queueAbort.current.signal, retryNetwork: true, onRetry
                 })
-                const volData = await volRes.json()
-                if (volRes.ok) {
-                  saveMsg = `${volData.duplicate ? 'Já na pré-rota' : 'Adicionado na pré-rota'} (Lote ${volData.batch})`
-                  if (alive.current) setDispatchRevision(value => value + 1)
-                } else throw new Error(volData.error || 'Falha ao salvar a pré-rota.')
+                saved = true
+                saveMsg = `${volData.duplicate ? 'Já na pré-rota' : 'Adicionado na pré-rota'} (Lote ${volData.batch})`
+                if (alive.current) setDispatchRevision(value => value + 1)
               } catch (saveError) {
+                saveFailed = true
                 saveMsg = `Não salvo na pré-rota: ${saveError instanceof Error ? saveError.message : 'falha de conexão'}`
               }
             }
@@ -175,6 +186,7 @@ export default function LabelReader() {
             primaryRoute,
             primarySeq,
             routeSaveMsg: saveMsg,
+            reading, saved, saveFailed, retryStatus: undefined,
             error: foundMatches.length === 0 ? (address ? 'Fora da cobertura da base' : 'Endereço não identificado na foto') : !canStoreAutomatically(foundMatches) ? 'Rota não definida — não salvo' : undefined
           } : i))
         } catch (err) {
@@ -216,9 +228,7 @@ export default function LabelReader() {
     setRouteSave('Adicionando à pré-rota...')
     try {
       const { data } = await supabase!.auth.getSession()
-      const response = await fetch('/api/label-volume', { method: 'POST', headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ baseId: String(match.record.id), scanKey: capturedKey, driverId: capturedDriver, ...(reading ? labelDeliveryAddress(reading) : { packageAddress: query.trim().replace(/\n/g, ', '), addressConfirmed: false }) }), cache: 'no-store' })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Não foi possível adicionar o volume à pré-rota.')
+      const result = await labelRequest('/api/label-volume', { method: 'POST', headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ baseId: String(match.record.id), scanKey: capturedKey, driverId: capturedDriver, ...(reading ? labelDeliveryAddress(reading) : { packageAddress: query.trim().replace(/\n/g, ', '), addressConfirmed: false }) }), cache: 'no-store', retryNetwork: true })
       if (alive.current) setDispatchRevision(value => value + 1)
       if (alive.current && id === runId.current) setRouteSave(`${result.duplicate ? 'Já estava' : 'Adicionado'} na pré-rota: ${result.zone} · Rota ${result.route}${result.sequence ? ` · Sequência ${result.sequence}` : ''} · Lote ${result.batch}.`)
     } catch (err) {
@@ -246,10 +256,7 @@ export default function LabelReader() {
         }
       }
       if (!alive.current || id !== runId.current || controller.signal.aborted) return
-      const response = await fetch('/api/label-read', { method: 'POST', headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ image: upload }), signal: controller.signal, cache: 'no-store' })
-      if (!(response.headers.get('content-type') || '').includes('application/json')) throw new Error('O serviço de leitura está indisponível. Tente novamente mais tarde.')
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'Não foi possível ler a etiqueta.')
+      const result = await labelRequest('/api/label-read', { method: 'POST', headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ image: upload }), signal: controller.signal, cache: 'no-store' })
       const reading = parseLabelExtraction(result.extraction)
       if (!alive.current || id !== runId.current) return
       const address = extractionQuery(reading)
@@ -336,10 +343,12 @@ export default function LabelReader() {
 
   if (!base) return <section className="card label-reader">{baseError ? <><p role="alert">{baseError}</p><button onClick={() => setRetry(value => value + 1)}>Tentar novamente</button></> : <p role="status">Carregando base e conferindo acesso...</p>}</section>
 
-  const completedCount = cameraItems.filter(i => i.status === 'concluido' || i.status === 'erro').length
+  const savedCount = cameraItems.filter(item => item.saved).length
   const pendingCount = cameraItems.filter(i => i.status === 'na_fila' || i.status === 'lendo').length
+  const failedCount = cameraItems.filter(item => item.status === 'erro' || item.saveFailed).length
 
   return <div className="label-reader">
+    <div className="label-actions"><a className="label-maps-shortcut" href="#label-dispatch"><Navigation size={18} aria-hidden="true"/>Google Maps e exportacao</a></div>
     <section className="card label-intro"><span className="label-badge">OPERAÇÃO RÁPIDA</span><h2>Leia a etiqueta e consulte a base</h2><p>Fotografe de perto, com o endereço inteiro e boa iluminação. Na câmera contínua, você pode disparar foto por foto sem parar; a leitura roda em segundo plano.</p><p className="label-muted">Base: {base.records.length} registros · {[...new Set(base.records.map(record => record.city))].join(' · ')}.</p></section>
     {aiConfigured !== true && <section className="card" role="status"><h3>{aiConfigured === null ? 'Preparando leitura...' : 'Leitura automática indisponível'}</h3><p>{baseError || 'A consulta digitada à base continua disponível.'}</p><button onClick={() => { setAiConfigured(null); setRetry(value => value + 1) }}>Tentar novamente</button></section>}
     <div className="label-grid">
@@ -380,18 +389,20 @@ export default function LabelReader() {
         <div className="camera-batch-header">
           <div>
             <h3>Fila de Leitura da Câmera (Sem Pausa)</h3>
-            <p className="label-muted">Total: {cameraItems.length} pacotes · {completedCount} concluídos · {pendingCount} em andamento</p>
+            <p className="label-muted">Total: {cameraItems.length} pacotes · {savedCount} salvos · {pendingCount} em andamento · {cameraItems.length - savedCount - pendingCount} nao salvos</p>
           </div>
+          <a className="label-maps-shortcut" href="#label-dispatch"><Navigation size={18} aria-hidden="true"/>Exportar rota no Google Maps</a>
+          {failedCount > 0 && <button disabled={pendingCount > 0} onClick={() => setCameraItems(prev => prev.map(item => item.status === 'erro' || item.saveFailed ? { ...item, status: 'na_fila', saveFailed: false, error: undefined, retryStatus: undefined } : item))}><RefreshCw size={17} aria-hidden="true"/>Reprocessar falhas ({failedCount})</button>}
           <button disabled={pendingCount > 0} onClick={() => setCameraItems([])}>Limpar fila da câmera</button>
         </div>
         <div className="camera-batch-grid">
           {cameraItems.map(item => (
-            <div key={item.id} className={`camera-batch-item batch-item-${item.status}`}>
+            <div key={item.id} className={`camera-batch-item batch-item-${item.saveFailed ? 'erro' : item.status}`}>
               <div className="item-num">#{item.num}</div>
               <img src={item.image} alt={`Pacote #${item.num}`} className="item-thumb" />
               <div className="item-details">
                 {item.status === 'na_fila' && <span className="batch-status-tag tag-queue">Na fila de envio...</span>}
-                {item.status === 'lendo' && <span className="batch-status-tag tag-reading">Lendo com IA...</span>}
+                {item.status === 'lendo' && <span className="batch-status-tag tag-reading">{item.retryStatus || (item.reading ? 'Salvando na pre-rota...' : 'Lendo com IA...')}</span>}
                 {item.status === 'concluido' && (
                   item.primaryZone ? (
                     <div className="item-route-result">
