@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
 			throw new Error('MOVIDOS_BACKEND_URL deve ser a origem HTTPS oficial, sem caminho, credenciais ou parametros.')
 		}
 	}
-	const labelApi = /^\/api\/label-(routes|read|volume)(?:\?|$)/
+	const labelApi = /^\/api\/label-(routes|read|volume|dispatch)(?:\?|$)/
 	const mailApi = /^\/api\/financial\/send-closing(?:\?|$)/
 	return {
 		plugins: [react(), {

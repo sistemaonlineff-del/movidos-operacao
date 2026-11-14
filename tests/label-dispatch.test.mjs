@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildSync } from 'esbuild'
+import { build, buildSync } from 'esbuild'
 import { readFile, readdir } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { PGlite } from '@electric-sql/pglite'
@@ -9,6 +9,37 @@ const compiled=buildSync({entryPoints:['src/labelDispatch.ts'],bundle:true,platf
 const domain=await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
 const extractionCode=buildSync({entryPoints:['src/labelExtraction.ts'],bundle:true,platform:'node',format:'esm',write:false})
 const extraction=await import(`data:text/javascript;base64,${Buffer.from(extractionCode.outputFiles[0].text).toString('base64')}`)
+test('dispatch shared modules load as native server ESM without bundling',async()=>{
+  buildSync({entryPoints:['src/labelDispatch.ts','src/labelExtraction.ts'],outdir:'tmp/label-dispatch-esm',bundle:false,platform:'node',format:'esm'})
+  const module=await import(pathToFileURL(`${process.cwd()}/tmp/label-dispatch-esm/labelDispatch.js`))
+  assert.equal(module.dispatchMapsAddress({recipient_address:'Rua Sintetica, 10, casa 9, Suzano'}),'R. Sintetica, 10, Suzano')
+})
+test('local dispatch API returns JSON configuration error instead of the SPA HTML',async()=>{
+  const code=await build({entryPoints:['vite.config.ts'],bundle:true,platform:'node',format:'esm',write:false,plugins:[{name:'config-framework',setup(build){
+    build.onResolve({filter:/^(vite|@vitejs\/plugin-react)$/},args=>({path:args.path,namespace:'framework'}))
+    build.onLoad({filter:/.*/,namespace:'framework'},args=>({contents:args.path==='vite'?'export const defineConfig=value=>value; export const loadEnv=()=>({});':'export default ()=>[];'}))
+  }}]})
+  const {default:configure}=await import(`data:text/javascript;base64,${Buffer.from(code.outputFiles[0].text).toString('base64')}`)
+  const config=configure({mode:'test'})
+  let middleware
+  config.plugins.find(plugin=>plugin.name==='local-label-api').configureServer({middlewares:{use(handler){middleware=handler}}})
+  const {createServer}=await import('node:http')
+  let server
+  try{
+    server=createServer((request,response)=>middleware(request,response,()=>{response.setHeader('Content-Type','text/html');response.end('<html>SPA</html>')}))
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+    const port=server.address().port
+    for(const method of['GET','POST']){
+      const response=await fetch(`http://127.0.0.1:${port}/api/label-dispatch?day=2026-11-13`,{method})
+      assert.equal(response.status,503)
+      assert.match(response.headers.get('content-type'),/application\/json/)
+      assert.match((await response.json()).error,/MOVIDOS_BACKEND_URL/)
+    }
+  }finally{
+    server?.closeAllConnections()
+    if(server)await new Promise(resolve=>server.close(resolve))
+  }
+})
 test('OCR preserves nullable legacy fields and requires a complete certain destination for Maps',()=>{
   const legacy={recipient:{street:'Rua Sintetica',neighborhood:null,city:'Suzano',postalCode:'08600000'},warnings:[],uncertainFields:[]}
   const old=extraction.parseLabelExtraction(legacy)

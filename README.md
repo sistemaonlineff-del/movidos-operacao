@@ -2,6 +2,14 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Carregamento da API de expedicao (13/11/2026)
+
+"Expedicao indisponivel neste ambiente" significa que a resposta nao tem Content-Type JSON; nao prova falta de coluna ou necessidade de repetir SQL. No dominio oficial informado pela operadora, `https://movidos-operacao.vercel.app`, GET sem autenticacao em `/api/label-dispatch?day=2026-11-13` e `/api/label-volume` retornou HTTP 500, HTML e `FUNCTION_INVOCATION_FAILED`. `/api/label-routes` retornou HTTP 401 JSON, esperado sem sessao. A falha da funcao foi reproduzida no dominio oficial, sem acessar dados ou alterar permissoes; nao e apenas protecao da URL de deploy.
+
+Corrigido o import de `labelExtraction.js` no modulo compartilhado `labelDispatch`: o teste nativo ESM, sem bundling, reproduziu ERR_MODULE_NOT_FOUND antes da correcao e passou depois. O middleware/proxy Vite agora inclui `/api/label-dispatch`; teste HTTP GET/POST verifica JSON 503 de configuracao quando nao ha backend, em vez do HTML da SPA. Nao remove protecoes nem configura automaticamente servidor remoto. Os testes anteriores de API empacotavam os modulos e nao detectavam a extensao ausente.
+
+Sem SQL novo ou publicacao automatica. A falha HTTP e compativel com o defeito ESM reproduzido localmente, mas os logs da funcao ainda sao necessarios para confirmar a causa exata em producao. A correcao depende de merge e deploy; depois, verificar novamente a resposta da API no dominio oficial. Nao recarregar a pagina com fotos pendentes na memoria; a atualizacao dentro da expedicao nao apaga a fila.
+
 ## Endereco para Maps e cinquenta pacotes (13/11/2026)
 
 O endereco completo do pacote continua na conferencia e no Excel. Para navegação, `maps_address` e gravado separadamente: fotos novas usam os campos estruturados da leitura, excluem o complemento inteiro (casa/apto/bloco/etc.) e abreviam o prefixo Rua para R., preservando numero, bairro, cidade e CEP. Nao inventa UF, CEP, coordenadas ou dados ausentes. Rua/R. e uma convencao de exibicao, nao uma exigencia universal do Google nem garantia de geocodificacao.
