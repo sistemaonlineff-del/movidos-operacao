@@ -1,4 +1,4 @@
-import { mapsAddressText } from './labelExtraction'
+import { mapsAddressText } from './labelExtraction.js'
 
 export type DispatchDriver = { id: string; name: string }
 export type DispatchVolume = { id: string; driver_id: string | null; driver_name: string | null; capture_number?: number | null; maps_address?: string | null; recipient_address: string | null; address_confirmed: boolean; delivery_sequence: number | null; created_at: string; street: string | null; neighborhood: string | null; city: string | null; postal_code: string | null }
