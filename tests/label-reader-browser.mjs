@@ -14,7 +14,7 @@ async function fixture({logged=true,active=true,allowed=true,routesAllowed=false
   const context=await browser.newContext({viewport:{width:mobile?390:1440,height:mobile?844:1000},isMobile:mobile,hasTouch:mobile,serviceWorkers:'block',permissions:['camera']})
   const drivers=[{id:user.id,name:'Bruno'},{id:'22222222-2222-4222-8222-222222222222',name:'Jose'},{id:'33333333-3333-4333-8333-333333333333',name:'Rafael'}]
   const fixtureStreet=routeVariant==='letter'?'Rua Vinte e Dois de Abril':routeVariant==='neighborhood'?'Rua Aurora':'Rua Sintetica'
-  const state={active,allowed,routesAllowed,calls:[],errors:[],permissionWrites:[],dispatchRows:[],volumeRequests:[],failVolume:false,postInsertFailures:0,readFailures:[],holdReading:false,pendingReads:[],readNumber:0,day:'',drivers}
+  const state={active,allowed,routesAllowed,calls:[],errors:[],permissionWrites:[],dispatchRows:[],volumeRequests:[],dispatchRequests:[],failVolume:false,postInsertFailures:0,readFailures:[],readOverrides:[],holdReading:false,pendingReads:[],readNumber:0,day:'',drivers}
   await context.addInitScript(({origin,user,token,logged})=>{
     if(location.origin!==origin||!logged)return
     localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token',JSON.stringify({access_token:token,refresh_token:'local-only',token_type:'bearer',expires_at:Math.floor(Date.now()/1000)+3600,expires_in:3600,user}))
@@ -56,7 +56,8 @@ async function fixture({logged=true,active=true,allowed=true,routesAllowed=false
           if(dispatchUnavailable)return json({error:'Lista indisponivel. Confira a migracao dos motoristas.'},503)
           if(request.method()==='POST'){
             const body=request.postDataJSON()
-            if(body.mode==='confirm-address'){const row=state.dispatchRows.find(row=>row.id===body.id);row.recipient_address=body.address;row.address_confirmed=true;return json({saved:true})}
+            state.dispatchRequests.push(body)
+            if(body.mode==='confirm-address'){const row=state.dispatchRows.find(row=>row.id===body.id);row.recipient_address=body.address;row.maps_address=body.mapsAddress;row.address_confirmed=true;return json({saved:true})}
             throw new Error('Unexpected dispatch action')
           }
           state.day=url.searchParams.get('day')
@@ -69,7 +70,7 @@ async function fixture({logged=true,active=true,allowed=true,routesAllowed=false
           state.volumeRequests.push(body)
           if(state.failVolume)return json({error:'Falha sintetica ao salvar. Tente novamente.'},503)
           const duplicate=state.dispatchRows.some(row=>row.scan_key===body.scanKey)
-          if(!duplicate)state.dispatchRows.push({id:crypto.randomUUID(),driver_id:body.driverId,driver_name:driver.name,capture_number:body.captureNumber??null,recipient_address:body.packageAddress,address_confirmed:body.addressConfirmed,delivery_sequence:1,created_at:new Date().toISOString(),scan_key:body.scanKey,delivery_date:state.day})
+          if(!duplicate)state.dispatchRows.push({id:crypto.randomUUID(),driver_id:body.driverId,driver_name:driver.name,capture_number:body.captureNumber??null,maps_address:body.mapsAddress??null,recipient_address:body.packageAddress,address_confirmed:body.addressConfirmed,delivery_sequence:1,created_at:new Date().toISOString(),scan_key:body.scanKey,delivery_date:state.day})
           if(state.postInsertFailures>0){state.postInsertFailures--;return json({error:'Resposta perdida depois de salvar',retryable:true},503)}
           return json({saved:true,duplicate,zone:'Norte',route:body.baseId==='base-2'&&routeVariant==='conflict'?'R2':'R1',batch:1,sequence:1})
         }
@@ -85,7 +86,7 @@ async function fixture({logged=true,active=true,allowed=true,routesAllowed=false
           if(state.holdReading)await new Promise(resolve=>state.pendingReads.push(resolve))
           const failure=state.readFailures.shift()
           if(failure)return json({error:failure.error,retryable:failure.retryable},failure.status,failure.retryAfter?{'Retry-After':failure.retryAfter}:{})
-          return json({extraction:{recipient:{street:fixtureStreet,number:String(number),complement:null,neighborhood:routeVariant==='neighborhood'?'Jardim Horizonte II':'Centro',city:'Suzano',postalCode:'08600-000'},warnings:[],uncertainFields:[]}})
+          return json({extraction:state.readOverrides.shift()??{recipient:{street:fixtureStreet,number:String(number),complement:null,neighborhood:routeVariant==='neighborhood'?'Jardim Horizonte II':'Centro',city:'Suzano',postalCode:'08600-000'},warnings:[],uncertainFields:[]}})
         }
         assert.equal(request.method(),'GET')
         throw new Error(`Unexpected API request: ${url.pathname}`)
@@ -101,6 +102,7 @@ async function fixture({logged=true,active=true,allowed=true,routesAllowed=false
   return{context,page,state}
 }
 try{
+  if(process.env.LABEL_READER_CASE!=='correction'){
   const anonymous=await fixture({logged:false})
   await anonymous.page.getByRole('button',{name:'Entrar no sistema',exact:true}).waitFor()
   assert.equal(await anonymous.page.locator('meta[name="viewport"]').getAttribute('content'),'width=device-width, initial-scale=1')
@@ -214,7 +216,7 @@ try{
     assert.equal(links.length,2)
     const stops=[]
     for(const link of links){const url=new URL(link);assert.equal(url.hostname,'www.google.com');assert.ok((url.searchParams.get('waypoints')?.split('|')??[]).length<=3);stops.push(...(url.searchParams.get('waypoints')?.split('|')??[]),url.searchParams.get('destination'))}
-    assert.deepEqual(stops,[5,4,3,2,1].map(number=>`Rua Sintetica, ${number}, Centro, Suzano, 08600-000`))
+    assert.deepEqual(stops,[5,4,3,2,1].map(number=>`R. Sintetica, ${number}, Centro, Suzano, 08600-000`))
     assert.equal(new URL(links[1]).searchParams.get('origin'),stops[3])
     await routes.page.getByText('Confira o endereco completo de todas as paradas antes de exportar.',{exact:true}).waitFor()
     assert.equal(await routes.page.locator('.route-maps-links a').evaluateAll(links=>links.every(link=>link.scrollWidth<=link.clientWidth)),true)
@@ -226,6 +228,90 @@ try{
     assert.equal(await routes.page.locator('.route-maps-links a').count(),0)
     await routes.context.close()
   }
+  }
+  for(const mobile of[true,false]){
+    const manual=await fixture({role:'admin',mobile,dispatchScenario:true,routeVariant:'conflict'})
+    const {page,state}=manual
+    await page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()
+    await page.getByRole('button',{name:'Abrir leitura cont\u00ednua sem pausa',exact:true}).click()
+    await page.waitForFunction(()=>{const video=document.querySelector('video');return video?.readyState>=2&&video.videoWidth>0})
+    await page.getByRole('button',{name:'Capturar pacote #1',exact:true}).click()
+    await page.getByText('Rota n\u00e3o definida \u2014 n\u00e3o salvo',{exact:true}).waitFor()
+    assert.equal(state.volumeRequests.length,0,'An ambiguous route must never be confirmed automatically')
+    await page.getByRole('link',{name:'Editar leitura #1',exact:true}).click()
+    assert.equal(await page.locator('.label-correction').getAttribute('open'),'')
+    await page.getByLabel('Rota da foto #1',{exact:true}).selectOption('base-2')
+    await page.getByLabel('Motorista da foto #1',{exact:true}).selectOption(state.drivers[1].id)
+    state.failVolume=true
+    await page.getByRole('button',{name:'Salvar correcao',exact:true}).click()
+    await page.getByRole('button',{name:'Repetir salvamento',exact:true}).waitFor()
+    await page.waitForFunction(()=>document.querySelector('.label-correction [role="alert"]')?.textContent.includes('Falha sintetica'))
+    const failed=state.volumeRequests.at(-1),readCount=state.readNumber
+    assert.equal(failed.captureNumber,1);assert.equal(failed.baseId,'base-2');assert.equal(failed.driverId,state.drivers[1].id);assert.equal(failed.addressConfirmed,true)
+    assert.equal(await page.getByLabel('Rota da foto #1',{exact:true}).isDisabled(),true)
+    assert.equal(await page.getByLabel('Motorista da foto #1',{exact:true}).isDisabled(),true)
+    await page.getByRole('button',{name:'Capturar pacote #2',exact:true}).click()
+    await page.waitForFunction(()=>document.querySelectorAll('.camera-batch-item').length===2&&document.querySelector('.camera-batch-item .item-route-warning'))
+    assert.equal(state.volumeRequests.length,1,'Next photo must continue without saving its ambiguous destination')
+    state.failVolume=false;state.postInsertFailures=1
+    await page.getByRole('button',{name:'Repetir salvamento',exact:true}).click()
+    await page.getByText('Aguardando nova tentativa 1/2...',{exact:true}).waitFor()
+    await page.clock.runFor(1100)
+    await page.waitForFunction(()=>document.querySelector('.ld-totals strong')?.textContent==='1')
+    assert.equal(state.readNumber,readCount+1,'Manual recovery must not repeat OCR')
+    assert.equal(state.dispatchRows.length,1)
+    for(const request of state.volumeRequests)assert.deepEqual(request,failed,'Retries must preserve the corrected address, route, driver, scan key and photo number')
+    assert.equal(state.dispatchRows[0].capture_number,1)
+    assert.equal(await page.getByLabel('Motorista das proximas leituras',{exact:true}).inputValue(),user.id)
+    await page.getByLabel('Lista do motorista',{exact:true}).selectOption(state.drivers[1].id)
+    const link=page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true})
+    await link.waitFor()
+    const url=new URL(await link.getAttribute('href'))
+    assert.equal(url.searchParams.get('destination'),failed.mapsAddress)
+    assert.equal(state.dispatchRequests.length,0,'A corrected complete address needs no separate confirm click')
+    const download=page.waitForEvent('download');await page.getByRole('button',{name:'Excel',exact:true}).click()
+    const file=await download,workbook=XLSX.read(await readFile(await file.path()),{type:'buffer'})
+    const rows=XLSX.utils.sheet_to_json(workbook.Sheets.Pacotes)
+    assert.equal(rows[0]['Numero da foto'],1);assert.equal(rows[0].Motorista,'Jose')
+    await page.getByRole('link',{name:'Editar leitura #2',exact:true}).click()
+    assert.equal(await page.locator('.label-correction-content').evaluateAll(elements=>elements.every(element=>element.scrollWidth<=element.clientWidth)),true)
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1))
+    await page.locator('#label-dispatch').screenshot({path:`tmp/label-reader/screenshots/correction-${mobile?'mobile':'desktop'}.png`})
+    assert.deepEqual(state.errors,[])
+    await manual.context.close()
+  }
+  for(const scenario of['outside','uncertain','ocr-error']){
+    const manual=await fixture({mobile:true,dispatchScenario:true})
+    const {page,state}=manual
+    await page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()
+    const reading={recipient:{street:'Rua Sintetica',number:null,complement:null,neighborhood:'Centro',city:'Suzano',postalCode:'08600-000'},warnings:['Numero nao identificado'],uncertainFields:['recipient.number']}
+    if(scenario==='outside')Object.assign(reading.recipient,{street:'Rua Fora da Base',postalCode:'99999-999'})
+    if(scenario==='uncertain')reading.uncertainFields.push('recipient.street')
+    if(scenario==='ocr-error')state.readFailures.push({status:503,retryable:false,error:'OCR sintetico indisponivel'})
+    else state.readOverrides.push(reading)
+    await page.getByRole('button',{name:'Abrir leitura cont\u00ednua sem pausa',exact:true}).click()
+    await page.waitForFunction(()=>{const video=document.querySelector('video');return video?.readyState>=2&&video.videoWidth>0})
+    await page.getByRole('button',{name:'Capturar pacote #1',exact:true}).click()
+    await page.getByRole('link',{name:'Editar leitura #1',exact:true}).click()
+    assert.equal(state.volumeRequests.length,0)
+    await page.getByRole('button',{name:'Salvar correcao',exact:true}).click()
+    await page.getByRole('alert').filter({hasText:'Preencha rua, numero, cidade e CEP completo conforme a foto.'}).waitFor()
+    assert.equal(state.volumeRequests.length,0,'Incomplete addresses must stay out of Maps')
+    for(const[label,value]of[['Rua / Logradouro','Rua Sintetica'],['Numero','123'],['Cidade','Suzano'],['CEP','08600-000']])await page.getByLabel(`${label} da foto #1`,{exact:true}).fill(value)
+    await page.getByLabel('Rota da foto #1',{exact:true}).selectOption('base-1')
+    assert.equal(await page.getByLabel('Motorista da foto #1',{exact:true}).isDisabled(),true,'An operator cannot assign another driver')
+    const readCount=state.readNumber
+    await page.getByRole('button',{name:'Salvar correcao',exact:true}).click()
+    await page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true}).waitFor()
+    assert.equal(state.readNumber,readCount)
+    assert.equal(state.volumeRequests.length,1)
+    assert.equal(state.volumeRequests[0].driverId,user.id)
+    assert.equal(state.volumeRequests[0].addressConfirmed,true)
+    assert.equal(state.dispatchRequests.length,0)
+    assert.deepEqual(state.errors,[])
+    await manual.context.close()
+  }
+  if(process.env.LABEL_READER_CASE!=='correction'){
   for(const mobile of [true,false]){
   const ambiguous=await fixture({role:'admin',mobile,dispatchScenario:true,routeVariant:'conflict'})
   await ambiguous.page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()
@@ -283,6 +369,7 @@ try{
     await page.waitForFunction(()=>{const video=document.querySelector('video');return video?.readyState>=2&&video.videoWidth>0})
     const count=async total=>page.waitForFunction(total=>document.querySelector('.ld-totals strong')?.textContent===String(total),total)
     state.readFailures.push({status:429,retryable:true,retryAfter:'2',error:'Limite sintetico'})
+    state.readOverrides.push({recipient:{street:'Rua Sintetica',number:'1',complement:'Casa dos fundos apto 9 bloco B',neighborhood:'Centro',city:'Suzano - SP',postalCode:'08600-000'},warnings:[],uncertainFields:[]})
     state.postInsertFailures=1
     await page.getByRole('button',{name:'Capturar pacote #1',exact:true}).click()
     await page.getByText('Aguardando nova tentativa 1/2...',{exact:true}).waitFor()
@@ -298,6 +385,8 @@ try{
     assert.equal(state.volumeRequests[0].captureNumber,1)
     assert.equal(state.volumeRequests[1].captureNumber,1)
     assert.equal(state.dispatchRows.length,1)
+    assert.ok(state.dispatchRows[0].recipient_address.includes('Casa dos fundos apto 9 bloco B'))
+    assert.equal(state.dispatchRows[0].maps_address,'R. Sintetica, 1, Centro, Suzano - SP, 08600-000')
     state.readFailures.push({status:503,retryable:false,error:'Configuracao da leitura precisa do administrador'})
     await page.getByRole('button',{name:'Capturar pacote #2',exact:true}).click()
     await page.getByText('Configuracao da leitura precisa do administrador',{exact:true}).waitFor()
@@ -320,7 +409,7 @@ try{
     assert.deepEqual(sameCapture[0],sameCapture[1])
     assert.ok(state.dispatchRows.every(row=>row.driver_id===user.id))
     await page.getByLabel('Motorista das proximas leituras',{exact:true}).selectOption(user.id)
-    for(const[start,end]of[[4,18],[19,30]]){
+    for(const[start,end]of[[4,18],[19,30],[31,45],[46,50]]){
       state.holdReading=true
       for(let number=start;number<start+3;number++){
         const reading=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/label-read'&&request.method()==='POST')
@@ -334,38 +423,48 @@ try{
       state.holdReading=false;state.pendingReads.splice(0).forEach(resolve=>resolve())
       await count(end)
     }
-    await page.getByText('Total: 30 pacotes \u00b7 30 salvos \u00b7 0 em andamento \u00b7 0 nao salvos',{exact:true}).waitFor()
-    assert.equal(state.dispatchRows.length,30)
-    assert.equal(new Set(state.volumeRequests.map(request=>request.scanKey)).size,30)
+    await page.getByText('Total: 50 pacotes \u00b7 50 salvos \u00b7 0 em andamento \u00b7 0 nao salvos',{exact:true}).waitFor()
+    assert.equal(state.dispatchRows.length,50)
+    assert.equal(new Set(state.volumeRequests.map(request=>request.scanKey)).size,50)
     const captureNumbers=new Map(state.dispatchRows.map(row=>[row.scan_key,row.capture_number]))
-    assert.deepEqual([...captureNumbers.values()].sort((first,second)=>first-second),Array.from({length:30},(_,index)=>index+1))
+    assert.deepEqual([...captureNumbers.values()].sort((first,second)=>first-second),Array.from({length:50},(_,index)=>index+1))
     for(const request of state.volumeRequests)assert.equal(request.captureNumber,captureNumbers.get(request.scanKey))
     assert.equal(await page.locator('.camera-batch-item button').count(),0)
     await page.getByRole('link',{name:'Exportar rota no Google Maps',exact:true}).click()
     assert.ok(await page.locator('#label-dispatch').evaluate(element=>{const box=element.getBoundingClientRect();return box.top>=-1&&box.top<window.innerHeight}))
     const links=await page.locator('.ld-links a').evaluateAll(elements=>elements.map(element=>element.href))
-    assert.equal(links.length,8)
+    assert.equal(links.length,13)
     const exported=[]
     for(const link of links){const url=new URL(link);exported.push(...(url.searchParams.get('waypoints')?.split('|')??[]),url.searchParams.get('destination'))}
-    assert.deepEqual(exported,state.dispatchRows.map(row=>row.recipient_address))
-    state.dispatchRows.forEach(row=>{row.delivery_sequence=31-row.capture_number})
+    assert.deepEqual(exported,state.dispatchRows.map(row=>row.maps_address))
+    await page.getByLabel('Paradas por trecho',{exact:true}).selectOption('10')
+    const appLinks=await page.locator('.ld-links a').evaluateAll(elements=>elements.map(element=>element.href)),appAddresses=[]
+    assert.equal(appLinks.length,5)
+    let previous=null
+    for(const link of appLinks){const url=new URL(link),waypoints=url.searchParams.get('waypoints')?.split('|')??[];assert.ok(waypoints.length<=9);assert.ok(link.length<=2048);assert.equal(url.searchParams.get('dir_action'),'navigate');assert.equal(url.searchParams.get('origin'),previous);appAddresses.push(...waypoints,url.searchParams.get('destination'));previous=url.searchParams.get('destination')}
+    assert.deepEqual(appAddresses,state.dispatchRows.map(row=>row.maps_address))
+    assert.equal(state.dispatchRequests.length,0,'Fifty complete certain OCR addresses must open Maps without per-package confirmation')
+    state.dispatchRows.forEach(row=>{row.delivery_sequence=51-row.capture_number})
     state.dispatchRows.sort((first,second)=>first.delivery_sequence-second.delivery_sequence)
     await page.getByRole('button',{name:'Atualizar expedicao',exact:true}).click()
-    await page.waitForFunction(()=>document.querySelector('.ld-table tbody tr')?.children[2]?.textContent==='#30')
+    await page.waitForFunction(()=>document.querySelector('.ld-table tbody tr')?.children[2]?.textContent==='#50')
     const numberedDownload=page.waitForEvent('download')
     await page.getByRole('button',{name:'Excel',exact:true}).click()
     const numberedFile=await numberedDownload,numberedWorkbook=XLSX.read(await readFile(await numberedFile.path()),{type:'buffer'})
     const numberedRows=XLSX.utils.sheet_to_json(numberedWorkbook.Sheets.Pacotes)
-    assert.deepEqual(numberedRows.map(row=>row['Numero da foto']),Array.from({length:30},(_,index)=>30-index))
-    assert.deepEqual(numberedRows.map(row=>row.Ordem),Array.from({length:30},(_,index)=>index+1))
+    assert.deepEqual(numberedRows.map(row=>row['Numero da foto']),Array.from({length:50},(_,index)=>50-index))
+    assert.deepEqual(numberedRows.map(row=>row.Ordem),Array.from({length:50},(_,index)=>index+1))
     assert.deepEqual(numberedRows.map(row=>row.Leitura),state.dispatchRows.map(row=>row.id))
+    assert.ok(numberedRows.find(row=>row['Numero da foto']===1).Endereco.includes('Casa dos fundos apto 9 bloco B'),'The full complement must remain in Excel')
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1))
     await page.locator('#label-dispatch').screenshot({path:`tmp/label-reader/screenshots/recovery-maps-${mobile?'mobile':'desktop'}.png`})
     await page.locator('.camera-batch-section').screenshot({path:`tmp/label-reader/screenshots/recovery-queue-${mobile?'mobile':'desktop'}.png`})
     const readCount=state.readNumber
     await page.reload()
-    await count(30)
-    assert.equal(await page.locator('.ld-table tbody tr').first().locator('td').nth(2).innerText(),'#30')
+    await count(50)
+    assert.equal(await page.locator('.ld-table tbody tr').first().locator('td').nth(2).innerText(),'#50')
+    const firstRow=state.dispatchRows.find(row=>row.capture_number===1)
+    assert.equal(await page.getByLabel(`Endereco para Maps ${firstRow.id}`,{exact:true}).inputValue(),firstRow.maps_address)
     assert.equal(state.readNumber,readCount)
     assert.deepEqual(state.errors,[])
     await recovery.context.close()
@@ -396,6 +495,13 @@ try{
   assert.equal(await page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true}).count(),0)
   await page.getByRole('button',{name:`Confirmar endereco ${row.id}`,exact:true}).click()
   await page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true}).waitFor()
+  const fullAddress=row.recipient_address
+  await page.getByLabel(`Endereco para Maps ${row.id}`,{exact:true}).fill('R. Sintetica, 123, Suzano SP')
+  assert.equal(await page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true}).count(),0)
+  await page.getByRole('button',{name:`Confirmar endereco ${row.id}`,exact:true}).click()
+  await page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true}).waitFor()
+  assert.equal(row.recipient_address,fullAddress,'Editing only Maps must not alter the full package address')
+  assert.equal(row.maps_address,'R. Sintetica, 123, Suzano SP')
   const download=page.waitForEvent('download');await page.getByRole('button',{name:'Excel',exact:true}).click()
   const excel=await download,workbook=XLSX.read(await readFile(await excel.path()),{type:'buffer'})
   assert.equal(XLSX.utils.sheet_to_json(workbook.Sheets.Pacotes).length,2)
@@ -433,7 +539,8 @@ try{
   await page.screenshot({path:'tmp/label-reader/screenshots/dispatch-desktop.png',fullPage:true})
   assert.deepEqual(state.errors,[])
   await expedition.context.close()
-  console.log('PASS: real App isolation/revocation, alternating drivers, 30-camera recovery on mobile/desktop without duplicate writes, bounded retries, save-only replay, Maps shortcuts, 9 photo/batch/camera packages, retained drafts and Excel; no real writes.')
+  }
+  console.log(process.env.LABEL_READER_CASE==='correction'?'PASS: manual correction mobile/desktop, ambiguous and outside-base routes, uncertain and unavailable OCR, driver permissions, frozen retries without duplicate writes, Maps and Excel; no real writes.':'PASS: real App isolation/revocation, manual corrections, alternating drivers, 50-camera recovery on mobile/desktop without duplicate writes or per-package address confirmation, bounded retries, save-only replay, 4/10-stop Maps modes with all 50 destinations, separate clean Maps address, full complements in Excel, 9 photo/batch/camera packages and retained drafts; no real writes.')
 }catch(error){
   for(const{page,state}of diagnostics.filter(({page})=>!page.isClosed())){
     console.error(JSON.stringify(state),await page.locator('body').innerText())

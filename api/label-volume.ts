@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { authorizeLabelReaderContext, LabelApiError } from '../server/label-auth.js'
+import { mapsAddressText } from '../src/labelExtraction.js'
 import dispatch from '../server/label-dispatch.js'
 
 const dateInBrazil = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()).split('/').reverse().join('-')
@@ -27,6 +28,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const packageAddress = typeof req.body?.packageAddress === 'string' ? req.body.packageAddress.trim() : ''
     if (packageAddress.length > 2000 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(packageAddress)) throw new LabelApiError(400, 'Endereco invalido.')
+    if (req.body?.mapsAddress !== undefined && typeof req.body.mapsAddress !== 'string') throw new LabelApiError(400, 'Endereco do Maps invalido.')
+    const mapsAddress = req.body?.mapsAddress === undefined ? mapsAddressText(packageAddress) : req.body.mapsAddress.trim()
+    if (mapsAddress.length > 2000 || /[\x00-\x1f]/.test(mapsAddress)) throw new LabelApiError(400, 'Endereco do Maps invalido.')
     const { data: existing, error: existingError } = await admin.from('delivery_volumes').select('zone,route,batch_number,delivery_sequence,driver_id,capture_number').eq('scan_key', scanKey).maybeSingle()
     if (existingError) throw existingError
     if (existing) {
@@ -42,7 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { count, error: countError } = await admin.from('delivery_volumes').select('id', { count: 'exact', head: true }).eq('delivery_date', deliveryDate).eq('zone', base.zone).eq('route', base.route).eq('batch_number', batch)
     if (countError) throw countError
     if ((count ?? 0) >= 100) batch += 1
-    const { error: insertError } = await admin.from('delivery_volumes').insert({ delivery_date: deliveryDate, zone: base.zone, route: base.route, batch_number: batch, street: base.street, neighborhood: base.neighborhood, city: base.city, postal_code: base.postal_code, delivery_sequence: base.delivery_sequence, scan_key: scanKey, capture_number: captureNumber, driver_id: driverId, driver_name: String(driverName).slice(0,200), created_by: user.id, recipient_address: packageAddress || null, address_confirmed: Boolean(packageAddress && req.body?.addressConfirmed === true) })
+    const { error: insertError } = await admin.from('delivery_volumes').insert({ delivery_date: deliveryDate, zone: base.zone, route: base.route, batch_number: batch, street: base.street, neighborhood: base.neighborhood, city: base.city, postal_code: base.postal_code, delivery_sequence: base.delivery_sequence, scan_key: scanKey, capture_number: captureNumber, maps_address: mapsAddress || null, driver_id: driverId, driver_name: String(driverName).slice(0,200), created_by: user.id, recipient_address: packageAddress || null, address_confirmed: Boolean(packageAddress && req.body?.addressConfirmed === true) })
     if (insertError) {
       if (insertError.code === '23505') {
         const winner = await admin.from('delivery_volumes').select('driver_id,capture_number').eq('scan_key', scanKey).maybeSingle()

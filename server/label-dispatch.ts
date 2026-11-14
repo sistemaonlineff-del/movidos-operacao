@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { authorizeLabelReaderContext, LabelApiError } from './label-auth.js'
-import { orderedDispatch, type DispatchVolume } from '../src/labelDispatch.js'
+import { dispatchMapsAddress, orderedDispatch, type DispatchVolume } from '../src/labelDispatch.js'
+import { mapsAddressText } from '../src/labelExtraction.js'
 
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 const validDay = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0,10) === value
@@ -17,7 +18,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const driverId = dispatcher ? requested : user.id
     const rows: DispatchVolume[] = []
     for (let offset = 0; ; offset += 200) {
-      let query = admin.from('delivery_volumes').select('id,driver_id,driver_name,capture_number,recipient_address,address_confirmed,delivery_sequence,created_at,street,neighborhood,city,postal_code').eq('delivery_date', day).not('scan_key','is',null).order('created_at').order('id').range(offset, offset + 199)
+      let query = admin.from('delivery_volumes').select('id,driver_id,driver_name,capture_number,maps_address,recipient_address,address_confirmed,delivery_sequence,created_at,street,neighborhood,city,postal_code').eq('delivery_date', day).not('scan_key','is',null).order('created_at').order('id').range(offset, offset + 199)
       if (driverId) query = query.eq('driver_id', driverId)
       const result = await query
       if (result.error) {
@@ -35,7 +36,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const row = rows.find(item => item.id === req.body.id)
       const address = typeof req.body.address === 'string' ? req.body.address.trim() : ''
       if (!row?.driver_id || !address || address.length > 2000 || /[\x00-\x1f]/.test(address)) throw new LabelApiError(400, 'Informe o endereco completo com numero, bairro e cidade.')
-      const result = await admin.from('delivery_volumes').update({ recipient_address: address, address_confirmed: true }).eq('id', row.id).eq('driver_id', row.driver_id)
+      if (req.body.mapsAddress !== undefined && typeof req.body.mapsAddress !== 'string') throw new LabelApiError(400, 'Endereco do Maps invalido.')
+      const mapsAddress = req.body.mapsAddress === undefined ? mapsAddressText(address) : req.body.mapsAddress.trim()
+      if (!mapsAddress || mapsAddress.length > 2000 || /[\x00-\x1f]/.test(mapsAddress)) throw new LabelApiError(400, 'Endereco do Maps invalido.')
+      const result = await admin.from('delivery_volumes').update({ recipient_address: address, maps_address: mapsAddress, address_confirmed: true }).eq('id', row.id).eq('driver_id', row.driver_id)
       if (result.error) throw new LabelApiError(409, 'Nao foi possivel confirmar o endereco.')
       return res.status(200).json({ saved: true })
     }
@@ -47,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const key = process.env.GOOGLE_ROUTES_API_KEY?.trim()
       if (!key) throw new LabelApiError(503, 'Otimizacao nao configurada. Os links comuns mantem a sequencia da base.')
       const ordered = orderedDispatch(rows), destination = ordered[ordered.length - 1]
-      const response = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': 'routes.optimizedIntermediateWaypointIndex' }, body: JSON.stringify({ origin: { address: origin }, destination: { address: destination.recipient_address }, intermediates: ordered.slice(0,-1).map(row => ({ address: row.recipient_address })), travelMode: 'DRIVE', routingPreference: 'TRAFFIC_AWARE', optimizeWaypointOrder: true }), signal: AbortSignal.timeout(20000) })
+      const response = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': 'routes.optimizedIntermediateWaypointIndex' }, body: JSON.stringify({ origin: { address: mapsAddressText(origin) }, destination: { address: dispatchMapsAddress(destination) }, intermediates: ordered.slice(0,-1).map(row => ({ address: dispatchMapsAddress(row) })), travelMode: 'DRIVE', routingPreference: 'TRAFFIC_AWARE', optimizeWaypointOrder: true }), signal: AbortSignal.timeout(20000) })
       if (!response.ok) throw new LabelApiError(502, 'O Google nao conseguiu otimizar. Nenhuma lista foi alterada.')
       const result = await response.json(), indices = result.routes?.[0]?.optimizedIntermediateWaypointIndex
       if (!Array.isArray(indices) || indices.length !== ordered.length - 1 || new Set(indices).size !== indices.length || indices.some(index => !Number.isInteger(index) || index < 0 || index >= ordered.length - 1)) throw new LabelApiError(502, 'Ordem de rota invalida recebida do Google.')
