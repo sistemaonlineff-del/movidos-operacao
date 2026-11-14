@@ -4,12 +4,13 @@ import { findLabelMatches, postalCodes } from './labelMatching'
 import type { LabelBase } from './labelMatching'
 import type { LabelMatch } from './labelMatching'
 import './label-reader.css'
-import { addressFields, addressLabels, extractionQuery, labelDeliveryAddress, parseLabelExtraction } from './labelExtraction'
+import { addressFields, addressLabels, extractionQuery, labelDeliveryAddress, labelMapsAddress, parseLabelExtraction } from './labelExtraction'
 import type { LabelExtraction } from './labelExtraction'
 import LabelBatchReader from './LabelBatchReader'
 import LabelDispatchPanel from './LabelDispatchPanel'
 import { labelRequest } from './labelRequest'
-import { Navigation, RefreshCw } from 'lucide-react'
+import { Navigation, Pencil, RefreshCw, Save } from 'lucide-react'
+import type { DispatchDriver } from './labelDispatch'
 
 const READ_MAX_EDGE = 1600
 const READ_JPEG_QUALITY = 0.75
@@ -31,6 +32,7 @@ type CameraBatchItem = {
   saved?: boolean
   saveFailed?: boolean
   retryStatus?: string
+  correction?: { baseId: string; reading: LabelExtraction }
 }
 
 export default function LabelReader() {
@@ -52,6 +54,8 @@ export default function LabelReader() {
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
   const [cameraItems, setCameraItems] = useState<CameraBatchItem[]>([])
   const [captureToast, setCaptureToast] = useState('')
+  const [correctionId, setCorrectionId] = useState('')
+  const [dispatchAccess, setDispatchAccess] = useState<{ drivers: DispatchDriver[]; dispatcher: boolean }>({ drivers: [], dispatcher: false })
   const [driverId, setDriverId] = useState(''), [dispatchRevision, setDispatchRevision] = useState(0)
   const driverRef = useRef(''), scanDriver = useRef('')
   const chooseDriver = (id: string) => { driverRef.current = id; setDriverId(id) }
@@ -141,9 +145,10 @@ export default function LabelReader() {
             body: JSON.stringify({ image: item.image }),
             cache: 'no-store', signal: queueAbort.current.signal, onRetry
           })
-          const reading = item.reading ?? parseLabelExtraction(result.extraction)
+          const reading = item.correction?.reading ?? item.reading ?? parseLabelExtraction(result.extraction)
           const address = extractionQuery(reading)
           const foundMatches = findLabelMatches(address, base.records)
+          const selectedRecord = item.correction ? base.records.find(record => String(record.id) === item.correction!.baseId) : canStoreAutomatically(foundMatches) ? foundMatches[0].record : null
 
           let primaryZone = ''
           let primaryRoute = ''
@@ -152,27 +157,27 @@ export default function LabelReader() {
           let saved = false
           let saveFailed = false
 
-          if (canStoreAutomatically(foundMatches)) {
-            const m = foundMatches[0]
-            primaryZone = String(m.record.zone || m.record.region || 'Não informada')
-            primaryRoute = String(m.record.route || 'A definir')
-            primarySeq = m.record.deliverySequence ?? null
+          if (selectedRecord) {
+            primaryZone = String(selectedRecord.zone || selectedRecord.region || 'Não informada')
+            primaryRoute = String(selectedRecord.route || 'A definir')
+            primarySeq = selectedRecord.deliverySequence ?? null
 
-            if (canStoreAutomatically(foundMatches)) {
-              try {
-                const volData = await labelRequest('/api/label-volume', {
-                  method: 'POST',
-                  headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ baseId: String(m.record.id), scanKey: item.id, captureNumber: item.num, driverId: item.driverId, ...labelDeliveryAddress(reading) }),
-                  cache: 'no-store', signal: queueAbort.current.signal, retryNetwork: true, onRetry
-                })
-                saved = true
-                saveMsg = `${volData.duplicate ? 'Já na pré-rota' : 'Adicionado na pré-rota'} (Lote ${volData.batch})`
-                if (alive.current) setDispatchRevision(value => value + 1)
-              } catch (saveError) {
-                saveFailed = true
-                saveMsg = `Não salvo na pré-rota: ${saveError instanceof Error ? saveError.message : 'falha de conexão'}`
-              }
+            try {
+              const volData = await labelRequest('/api/label-volume', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ baseId: String(selectedRecord.id), scanKey: item.id, captureNumber: item.num, driverId: item.driverId, ...labelDeliveryAddress(reading), mapsAddress: labelMapsAddress(reading) }),
+                cache: 'no-store', signal: queueAbort.current.signal, retryNetwork: true, onRetry
+              })
+              saved = true
+              primaryZone = volData.zone ?? primaryZone
+              primaryRoute = volData.route ?? primaryRoute
+              primarySeq = volData.sequence ?? primarySeq
+              saveMsg = `${volData.duplicate ? 'Já na pré-rota' : 'Adicionado na pré-rota'} (Lote ${volData.batch})`
+              if (alive.current) setDispatchRevision(value => value + 1)
+            } catch (saveError) {
+              saveFailed = true
+              saveMsg = `Não salvo na pré-rota: ${saveError instanceof Error ? saveError.message : 'falha de conexão'}`
             }
           }
 
@@ -187,7 +192,7 @@ export default function LabelReader() {
             primarySeq,
             routeSaveMsg: saveMsg,
             reading, saved, saveFailed, retryStatus: undefined,
-            error: foundMatches.length === 0 ? (address ? 'Fora da cobertura da base' : 'Endereço não identificado na foto') : !canStoreAutomatically(foundMatches) ? 'Rota não definida — não salvo' : undefined
+            error: selectedRecord ? undefined : foundMatches.length === 0 ? (address ? 'Fora da cobertura da base' : 'Endereço não identificado na foto') : 'Rota não definida — não salvo'
           } : i))
         } catch (err) {
           if (!alive.current) return
@@ -228,7 +233,7 @@ export default function LabelReader() {
     setRouteSave('Adicionando à pré-rota...')
     try {
       const { data } = await supabase!.auth.getSession()
-      const result = await labelRequest('/api/label-volume', { method: 'POST', headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ baseId: String(match.record.id), scanKey: capturedKey, driverId: capturedDriver, ...(reading ? labelDeliveryAddress(reading) : { packageAddress: query.trim().replace(/\n/g, ', '), addressConfirmed: false }) }), cache: 'no-store', retryNetwork: true })
+      const result = await labelRequest('/api/label-volume', { method: 'POST', headers: { Authorization: `Bearer ${data.session?.access_token ?? ''}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ baseId: String(match.record.id), scanKey: capturedKey, driverId: capturedDriver, ...(reading ? { ...labelDeliveryAddress(reading), mapsAddress: labelMapsAddress(reading) } : { packageAddress: query.trim().replace(/\n/g, ', '), addressConfirmed: false }) }), cache: 'no-store', retryNetwork: true })
       if (alive.current) setDispatchRevision(value => value + 1)
       if (alive.current && id === runId.current) setRouteSave(`${result.duplicate ? 'Já estava' : 'Adicionado'} na pré-rota: ${result.zone} · Rota ${result.route}${result.sequence ? ` · Sequência ${result.sequence}` : ''} · Lote ${result.batch}.`)
     } catch (err) {
@@ -401,6 +406,7 @@ export default function LabelReader() {
               <div className="item-num">#{item.num}</div>
               <img src={item.image} alt={`Pacote #${item.num}`} className="item-thumb" />
               <div className="item-details">
+                {!item.saved && !item.saveFailed && (item.status === 'concluido' || item.status === 'erro') && <a className="label-correction-link" href={`#label-correction-${item.id}`} title={`Editar leitura #${item.num}`} aria-label={`Editar leitura #${item.num}`} onClick={() => setCorrectionId(item.id)}><Pencil size={17} aria-hidden="true"/>Editar</a>}
                 {item.status === 'na_fila' && <span className="batch-status-tag tag-queue">Na fila de envio...</span>}
                 {item.status === 'lendo' && <span className="batch-status-tag tag-reading">{item.retryStatus || (item.reading ? 'Salvando na pre-rota...' : 'Lendo com IA...')}</span>}
                 {item.status === 'concluido' && (
@@ -429,7 +435,42 @@ export default function LabelReader() {
     </section>
     <details className="card"><summary>Ver base completa ({base.records.length} registros)</summary><p className="label-muted">Arquivos: {base.source}. Dados importados como recebidos, sem validação cadastral externa.</p><div className="label-table-wrap"><table><thead><tr><th>Região / ROTA</th><th>Rua / Logradouro</th><th>Bairro</th><th>CEP</th><th>Cidade</th><th>Localização no Maps</th><th>Rota no Maps</th><th>Arquivo de origem</th></tr></thead><tbody>{base.records.map(record => <tr key={record.id}><td>{record.region || 'Não informada'}</td><td>{record.street}</td><td>{record.neighborhood}</td><td>{record.postalCode}</td><td>{record.city}</td><td>{record.mapsUrl ? <a href={record.mapsUrl} target="_blank" rel="noreferrer">Abrir no Maps</a> : 'Não informado'}</td><td>{record.routeUrl ? <a href={record.routeUrl} target="_blank" rel="noreferrer">Traçar rota</a> : 'Não informado'}</td><td>{record.sourceFile}</td></tr>)}</tbody></table></div><h4>Resumos dos arquivos originais</h4>{base.summary.map((row, index) => <p key={index}>{Object.entries(row).map(([key, value]) => `${key}: ${value}`).join(' · ')}</p>)}</details>
     <LabelBatchReader base={base} driverId={driverId} onSaved={() => setDispatchRevision(value => value + 1)} />
-    <LabelDispatchPanel driverId={driverId} onDriverChange={chooseDriver} revision={dispatchRevision}/>
+    <LabelDispatchPanel driverId={driverId} onDriverChange={chooseDriver} revision={dispatchRevision} onAccessLoaded={setDispatchAccess}>
+      {cameraItems.filter(item => !item.saved && (item.correction || (!item.saveFailed && (item.status === 'concluido' || item.status === 'erro')))).map(item => <CameraCorrection key={item.id} item={item} base={base} access={dispatchAccess} open={correctionId === item.id} onOpen={open => setCorrectionId(previous => open ? item.id : previous === item.id ? '' : previous)} onSubmit={(reading, baseId, correctedDriver) => setCameraItems(previous => previous.map(entry => entry.id === item.id && !entry.saved && !processingRef.current.has(entry.id) ? { ...entry, driverId: entry.correction ? entry.driverId : correctedDriver, correction: entry.correction ?? { baseId, reading }, reading, status: 'na_fila', error: undefined, saveFailed: false, retryStatus: undefined } : entry))}/>)}
+    </LabelDispatchPanel>
   </div>
+}
+
+function CameraCorrection({ item, base, access, open, onOpen, onSubmit }: { item: CameraBatchItem; base: LabelBase; access: { drivers: DispatchDriver[]; dispatcher: boolean }; open: boolean; onOpen: (open: boolean) => void; onSubmit: (reading: LabelExtraction, baseId: string, driverId: string) => void }) {
+  const [recipient, setRecipient] = useState(item.correction?.reading.recipient ?? item.reading?.recipient ?? Object.fromEntries(addressFields.map(field => [field, null])) as LabelExtraction['recipient'])
+  const [baseId, setBaseId] = useState(item.correction?.baseId ?? '')
+  const [selectedDriver, setSelectedDriver] = useState(item.driverId)
+  const [error, setError] = useState('')
+  const pending = item.status === 'na_fila' || item.status === 'lendo'
+  const locked = Boolean(item.correction)
+  const submit = () => {
+    setError('')
+    try {
+      const reading = item.correction?.reading ?? parseLabelExtraction({ recipient, warnings: [], uncertainFields: [] })
+      if (!labelDeliveryAddress(reading).addressConfirmed) throw new Error('Preencha rua, numero, cidade e CEP completo conforme a foto.')
+      if (!base.records.some(record => String(record.id) === baseId)) throw new Error('Escolha a rota cadastrada para este pacote.')
+      if (!selectedDriver || (!locked && !access.drivers.some(driver => driver.id === selectedDriver))) throw new Error('Escolha um motorista autorizado.')
+      onSubmit(reading, baseId, selectedDriver)
+    } catch (failure) { setError((failure as Error).message) }
+  }
+  return <details className="label-correction" id={`label-correction-${item.id}`} open={open} onToggle={event => onOpen(event.currentTarget.open)}>
+    <summary>Foto #{item.num} · {pending ? 'Salvando correcao...' : item.saveFailed ? 'Correcao nao salva' : 'Endereco / rota pendente'}</summary>
+    <div className="label-correction-content">
+      <img src={item.image} alt={`Conferencia da foto #${item.num}`}/>
+      <form onSubmit={event => { event.preventDefault(); if (!pending) submit() }}>
+        <div className="label-correction-fields">{addressFields.map(field => <label key={field}>{addressLabels[field]}<input aria-label={`${addressLabels[field]} da foto #${item.num}`} value={recipient[field] ?? ''} maxLength={500} disabled={pending || locked} onChange={event => { setRecipient(previous => ({ ...previous, [field]: event.target.value || null })); if (field !== 'number' && field !== 'complement') setBaseId('') }}/></label>)}</div>
+        <label>Rota do pacote<select aria-label={`Rota da foto #${item.num}`} value={baseId} disabled={pending || locked} onChange={event => setBaseId(event.target.value)}><option value="">Selecionar rota</option>{base.records.map(record => <option key={record.id} value={String(record.id)}>{record.zone || record.region} · {record.route || 'A definir'} · {record.street} · {record.neighborhood} · {record.city}</option>)}</select></label>
+        <label>Motorista do pacote<select aria-label={`Motorista da foto #${item.num}`} value={selectedDriver} disabled={pending || locked || !access.dispatcher} onChange={event => setSelectedDriver(event.target.value)}>{access.drivers.map(driver => <option key={driver.id} value={driver.id}>{driver.name}</option>)}</select></label>
+        {error && <p role="alert">{error}</p>}
+        {item.saveFailed && <p role="alert">{item.routeSaveMsg}</p>}
+        <button type="submit" disabled={pending || !access.drivers.length}><Save size={17} aria-hidden="true"/>{locked ? 'Repetir salvamento' : 'Salvar correcao'}</button>
+      </form>
+    </div>
+  </details>
 }
 

@@ -1,3 +1,9 @@
+## Endereco separado para Maps (13/11/2026)
+
+Aplicar pessoalmente, apos backup e antes da API/frontend correspondentes, [migrations/20261113220000_delivery_maps_address.sql](migrations/20261113220000_delivery_maps_address.sql). Requer `delivery_volumes` e as migracoes anteriores do leitor, incluindo o numero da foto. Adiciona somente `maps_address text` nullable e recarrega o schema PostgREST. Nao altera enderecos completos, confirmacao, dados anteriores, RLS, grants ou atribuicoes. Nao reaplicar schema ou `06_delivery_routes.sql`.
+
+Fotos novas gravam o endereco sem complemento a partir dos campos estruturados. Registros antigos ficam nulos e usam limpeza conservadora ao montar os links, sem backfill automatico. A expedicao permite corrigir so o texto de Maps preservando `recipient_address`. Testes locais conferem migracao repetida, legado/RLS, API/validacao e reenvios sem sobrescrever os dados. Nenhum SQL remoto foi executado pelo assistente.
+
 ## Numero original da foto (12/11/2026)
 
 Aplicar pessoalmente, apos backup e antes da API/frontend correspondentes, [migrations/20261112160000_delivery_capture_number.sql](migrations/20261112160000_delivery_capture_number.sql). Requer `delivery_volumes` existente. Adiciona somente `capture_number integer` nullable com verificacao de valor positivo e notifica o PostgREST para recarregar o esquema. Nao altera RLS, grants, atribuicoes, `scan_key` ou dados antigos. Nao reaplicar schema ou importacoes.
@@ -20,7 +26,7 @@ No SQL Editor do projeto correto, execute primeiro somente a consulta de leitura
 select required.column_name as campo_faltando
 from unnest(array[
 	'id', 'delivery_date', 'scan_key', 'driver_id', 'driver_name', 'capture_number',
-	'recipient_address', 'address_confirmed', 'delivery_sequence',
+	'recipient_address', 'maps_address', 'address_confirmed', 'delivery_sequence',
 	'created_at', 'street', 'neighborhood', 'city', 'postal_code'
 ]) as required(column_name)
 where not exists (

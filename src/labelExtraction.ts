@@ -40,3 +40,11 @@ export function labelDeliveryAddress(data: LabelExtraction) {
   const packageAddress = addressFields.filter(field => !data.uncertainFields.includes(`recipient.${field}`)).map(field => data.recipient[field]).filter(Boolean).join(', ')
   return { packageAddress, addressConfirmed: !data.uncertainFields.length && !data.warnings.length && ['street','number','city','postalCode'].every(field => Boolean(data.recipient[field as keyof LabelAddress])) }
 }
+
+export function mapsAddressText(address: string): string {
+  return address.split(',').map(part => part.trim()).filter((part, index) => index === 0 || !/^(?:casa|apt\.?|apto\.?|apartamento|ap\.?|bloco|bl\.?|andar|sala)\s+(?:\d[\w\s./-]*|[a-z])$/i.test(part)).join(', ').replace(/^rua\s+/i, 'R. ')
+}
+
+export function labelMapsAddress(data: LabelExtraction): string {
+  return addressFields.filter(field => field !== 'complement' && !data.uncertainFields.includes(`recipient.${field}`)).map(field => data.recipient[field]).filter(Boolean).join(', ').replace(/^rua\s+/i, 'R. ')
+}

@@ -1,11 +1,11 @@
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { supabase } from "./lib/supabase";
-import { extractionQuery, labelDeliveryAddress, parseLabelExtraction } from "./labelExtraction";
+import { extractionQuery, labelDeliveryAddress, labelMapsAddress, parseLabelExtraction } from "./labelExtraction";
 import { findLabelMatches } from "./labelMatching";
 import type { LabelBase } from "./labelMatching";
 import { labelRequest } from "./labelRequest";
 
-type Save = { baseId:string; scanKey:string; driverId:string; packageAddress:string; addressConfirmed:boolean };
+type Save = { baseId:string; scanKey:string; driverId:string; packageAddress:string; addressConfirmed:boolean; mapsAddress:string };
 type Result = { name:string; state:"aguardando"|"lendo"|"concluido"|"erro"; result?:string; error?:string; save?:Save; address?:string };
 const MAX_EDGE=1600;
 async function imageData(file:File){ const url=URL.createObjectURL(file); try { const image=new Image(); image.src=url; await image.decode(); const scale=Math.min(1,MAX_EDGE/Math.max(image.width,image.height)); const canvas=document.createElement("canvas"); canvas.width=Math.round(image.width*scale); canvas.height=Math.round(image.height*scale); canvas.getContext("2d")!.drawImage(image,0,0,canvas.width,canvas.height); return canvas.toDataURL("image/jpeg",.75) } finally { URL.revokeObjectURL(url) } }
@@ -38,7 +38,7 @@ export default function LabelBatchReader({base,driverId,onSaved}:{base:LabelBase
     const extraction=parseLabelExtraction(payload.extraction),address=extractionQuery(extraction),matches=findLabelMatches(address,base.records);
     const safe=matches.length===1&&matches[0].streetMatch&&!matches[0].warnings.some(warning=>/nome aproximado|bairro divergente|rua não confirmada|cep lido é diferente/i.test(warning));
     if(!safe){if(alive.current)setRows(items=>items.map((row,position)=>position===current?{...row,state:'concluido',address,result:'Nao salvo: confira esta foto individualmente no leitor.'}:row));continue}
-    const record:Save={baseId:String(matches[0].record.id),scanKey,driverId:selectedDriver,...labelDeliveryAddress(extraction)};
+    const record:Save={baseId:String(matches[0].record.id),scanKey,driverId:selectedDriver,...labelDeliveryAddress(extraction),mapsAddress:labelMapsAddress(extraction)};
     if(alive.current)setRows(items=>items.map((row,position)=>position===current?{...row,save:record,address}:row));
     await save(record);
     if(alive.current)setRows(items=>items.map((row,position)=>position===current?{...row,state:'concluido',result:'Salvo na lista do motorista',save:undefined}:row));

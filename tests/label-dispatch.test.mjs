@@ -28,8 +28,47 @@ test('Maps export preserves all packages, curated order, mobile waypoint cap and
   assert.equal(ordered[0].id,'9');assert.equal(links.length,3)
   const addresses=[];let previous='Deposito, 100, Cidade SP'
   for(const link of links){const url=new URL(link);assert.equal(url.searchParams.get('origin'),previous);const waypoints=url.searchParams.get('waypoints')?.split('|')??[];assert.ok(waypoints.length<=3);addresses.push(...waypoints,url.searchParams.get('destination'));previous=url.searchParams.get('destination')}
-  assert.deepEqual(addresses,ordered.map(row=>row.recipient_address))
+  assert.deepEqual(addresses,ordered.map(domain.dispatchMapsAddress))
   assert.throws(()=>domain.dispatchMapsLinks([{...rows[0],address_confirmed:false}]),/Confira/)
+})
+
+test('Maps address excludes structured complements and preserves the original package fields',()=>{
+  const reading=extraction.parseLabelExtraction({recipient:{street:'Rua Sintetica',number:'532',complement:'Casa dos fundos, apto 9 bloco B',neighborhood:'Casa Branca',city:'Suzano - SP',postalCode:'08600-000'},warnings:[],uncertainFields:[]})
+  const original=structuredClone(reading)
+  assert.equal(extraction.labelMapsAddress(reading),'R. Sintetica, 532, Casa Branca, Suzano - SP, 08600-000')
+  assert.ok(extraction.labelDeliveryAddress(reading).packageAddress.includes('Casa dos fundos, apto 9 bloco B'))
+  assert.equal(extraction.mapsAddressText('Rua Sintetica, 532, casa 9, apto 42, bloco B, Casa Branca, Suzano - SP, 08600-000'),'R. Sintetica, 532, Casa Branca, Suzano - SP, 08600-000')
+  assert.equal(extraction.mapsAddressText('Rua Casa Grande, 532, Casa Branca, Suzano'),'R. Casa Grande, 532, Casa Branca, Suzano')
+  assert.equal(extraction.mapsAddressText('Avenida Sintetica, 1000, Suzano'),'Avenida Sintetica, 1000, Suzano')
+  assert.deepEqual(reading,original)
+})
+
+test('fifty Maps destinations preserve all packages in mobile and app modes with bounded URLs',()=>{
+  const rows=Array.from({length:50},(_,index)=>({id:String(index),capture_number:index+1,recipient_address:`Rua Sintetica, ${index+1}, casa 9, Suzano`,maps_address:`R. Sintetica, ${index+1}, Suzano`,address_confirmed:true}))
+  for(const[limit,total]of[[4,13],[10,5]]){
+    const links=domain.dispatchMapsLinks(rows,'Rua Deposito, 100, casa 2, Suzano',limit)
+    assert.equal(links.length,total)
+    const addresses=[];let previous='R. Deposito, 100, Suzano'
+    for(const link of links){const url=new URL(link),waypoints=url.searchParams.get('waypoints')?.split('|')??[];assert.equal(url.searchParams.get('origin'),previous);assert.equal(url.searchParams.get('dir_action'),'navigate');assert.ok(waypoints.length<=limit-1);assert.ok(link.length<=2048);addresses.push(...waypoints,url.searchParams.get('destination'));previous=url.searchParams.get('destination')}
+    assert.deepEqual(addresses,rows.map(row=>row.maps_address))
+    assert.ok(rows.every(row=>row.recipient_address.includes('casa 9')))
+  }
+  const long=rows.map(row=>({...row,maps_address:row.maps_address+' '+('a b '.repeat(75))}))
+  const links=domain.dispatchMapsLinks(long,'',10),addresses=[]
+  for(const link of links){assert.ok(link.length<=2048);const url=new URL(link);addresses.push(...(url.searchParams.get('waypoints')?.split('|')??[]),url.searchParams.get('destination'))}
+  assert.deepEqual(addresses,long.map(domain.dispatchMapsAddress))
+  assert.throws(()=>domain.dispatchMapsLinks(rows,'',50),/4 ou ate 10/)
+})
+
+test('Maps address migration preserves full legacy addresses, confirmation and RLS',async()=>{
+  const db=new PGlite()
+  try{
+    await db.exec("create table delivery_volumes(id integer primary key,recipient_address text,address_confirmed boolean);insert into delivery_volumes values(1,'Rua Sintetica, 532, casa 9, Suzano',true);alter table delivery_volumes enable row level security;")
+    const sql=await readFile('supabase/migrations/20261113220000_delivery_maps_address.sql','utf8')
+    await db.exec(sql);await db.exec(sql)
+    assert.deepEqual((await db.query('select * from delivery_volumes')).rows,[{id:1,recipient_address:'Rua Sintetica, 532, casa 9, Suzano',address_confirmed:true,maps_address:null}])
+    assert.equal((await db.query("select relrowsecurity from pg_class where oid='delivery_volumes'::regclass")).rows[0].relrowsecurity,true)
+  }finally{await db.close()}
 })
 
 test('spreadsheet keeps the original photo numbers when route order differs and leaves legacy numbers blank',()=>{
@@ -238,18 +277,26 @@ test('dispatch API scopes own lists, denies cross-driver writes, preserves assig
     assert.equal(throughRewrite.status,200);assert.deepEqual(throughRewrite.body,response.body)
     assert.equal((await invoke(volume,{mode:'confirm-address',day:'2026-11-10',id:rows[0].id,address:'Rua A, 11, Suzano SP'},'POST',{__labelDispatch:'1'})).status,200)
     assert.equal(rows[0].recipient_address,'Rua A, 11, Suzano SP')
+    assert.equal(rows[0].maps_address,'R. A, 11, Suzano SP')
     assert.equal((await invoke(volume,null,'GET',{day:'2026-11-10',__labelDispatch:'1',driverId:second})).status,403)
     assert.equal((await invoke(dispatch,null,'GET',{day:'2026-11-10',driverId:second})).status,403)
     assert.equal((await invoke(dispatch,{mode:'confirm-address',day:'2026-11-10',id:rows[2].id,address:'forged'},'POST')).status,400)
-    const payload={baseId:'base-1',scanKey:'new-scan-key-123456',captureNumber:4,driverId:second,packageAddress:'Rua C, 30, Suzano SP',addressConfirmed:true}
+    const payload={baseId:'base-1',scanKey:'new-scan-key-123456',captureNumber:4,driverId:second,packageAddress:'Rua C, 30, casa 9, Suzano SP',mapsAddress:'R. C, 30, Suzano SP',addressConfirmed:true}
     for(const captureNumber of[0,-1,1.5,'4',2147483648])assert.equal((await invoke(volume,{...payload,captureNumber},'POST')).status,400)
     assert.equal((await invoke(volume,payload,'POST')).status,403)
     role='admin';response=await invoke(dispatch);assert.equal(response.body.rows.length,3);assert.equal(response.body.drivers.length,2)
+    for(const mapsAddress of[123,null,'bad\naddress','x'.repeat(2001)])assert.equal((await invoke(volume,{...payload,mapsAddress},'POST')).status,400)
     assert.equal((await invoke(volume,payload,'POST')).status,201)
     const saved=rows.at(-1);assert.equal(saved.driver_id,second);assert.equal(saved.created_by,first);assert.equal(saved.recipient_address,payload.packageAddress)
     assert.equal(saved.capture_number,4)
+    assert.equal(saved.maps_address,payload.mapsAddress)
     assert.equal((await invoke(dispatch,null,'GET',{day:saved.delivery_date})).body.rows.find(row=>row.id===saved.id).capture_number,4)
     assert.equal((await invoke(volume,payload,'POST')).body.duplicate,true)
+    assert.equal((await invoke(volume,{...payload,mapsAddress:'Outro endereco'},'POST')).body.duplicate,true)
+    assert.equal(saved.maps_address,payload.mapsAddress)
+    const returned=(await invoke(dispatch,null,'GET',{day:saved.delivery_date})).body.rows.find(row=>row.id===saved.id)
+    assert.equal(returned.maps_address,payload.mapsAddress)
+    for(const mapsAddress of[123,'bad\naddress'])assert.equal((await invoke(dispatch,{mode:'confirm-address',day:saved.delivery_date,id:saved.id,address:saved.recipient_address,mapsAddress},'POST')).status,400)
     assert.equal((await invoke(volume,{...payload,captureNumber:10},'POST')).body.captureNumber,4)
     assert.equal(saved.capture_number,4)
     assert.equal((await invoke(volume,{...payload,driverId:first},'POST')).status,409)

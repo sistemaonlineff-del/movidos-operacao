@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, Download, Navigation, RefreshCw, Route } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { supabase } from './lib/supabase'
-import { brazilDay, dispatchAddress, dispatchMapsLinks, dispatchSpreadsheetRows, type DispatchDriver, type DispatchVolume } from './labelDispatch'
+import { brazilDay, dispatchAddress, dispatchMapsAddress, dispatchMapsLinks, dispatchSpreadsheetRows, type DispatchDriver, type DispatchVolume } from './labelDispatch'
+import { mapsAddressText } from './labelExtraction'
 import './label-dispatch.css'
 
 type Data = { rows: DispatchVolume[]; drivers: DispatchDriver[]; dispatcher: boolean; currentUserId: string; optimizationConfigured: boolean }
-export default function LabelDispatchPanel({ driverId, onDriverChange, revision }: { driverId: string; onDriverChange: (id: string) => void; revision: number }) {
+export default function LabelDispatchPanel({ driverId, onDriverChange, revision, onAccessLoaded, children }: { driverId: string; onDriverChange: (id: string) => void; revision: number; onAccessLoaded?: (access: { drivers: DispatchDriver[]; dispatcher: boolean }) => void; children?: ReactNode }) {
   const [day, setDay] = useState(brazilDay), [data, setData] = useState<Data | null>(null), [viewDriver, setViewDriver] = useState('')
   const [refresh, setRefresh] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState(''), [origin, setOrigin] = useState('')
   const [drafts, setDrafts] = useState<Record<string,string>>({}), [optimized, setOptimized] = useState<string[]>([])
+  const [mapsDrafts, setMapsDrafts] = useState<Record<string,string>>({}), [stopsPerLink, setStopsPerLink] = useState(4)
   const request = useRef(0)
   const loadedDay = useRef(day)
   const viewInitialized = useRef(false)
@@ -24,10 +26,11 @@ export default function LabelDispatchPanel({ driverId, onDriverChange, revision 
   useEffect(() => {
     const current = ++request.current
     setBusy(true); setError(''); setOptimized([])
-    if (loadedDay.current !== day) { loadedDay.current = day; setData(null); setDrafts({}) }
+    if (loadedDay.current !== day) { loadedDay.current = day; setData(null); setDrafts({}); setMapsDrafts({}) }
     void api().then((result: Data) => {
       if (current !== request.current) return
       setData(result)
+      onAccessLoaded?.({ drivers: result.drivers, dispatcher: result.dispatcher })
       if (!driverId) onDriverChange(result.currentUserId)
       if (!result.dispatcher) setViewDriver(result.currentUserId)
       else if (!viewInitialized.current) setViewDriver(driverId || result.currentUserId)
@@ -37,16 +40,16 @@ export default function LabelDispatchPanel({ driverId, onDriverChange, revision 
   }, [day, refresh, revision])
   const rows = data?.rows.filter(row => viewDriver === 'unassigned' ? !row.driver_id : !viewDriver || row.driver_id === viewDriver) ?? []
   const selected = optimized.length ? optimized.map(id => rows.find(row => row.id === id)).filter((row): row is DispatchVolume => Boolean(row)) : rows
-  const exportable = Boolean(viewDriver && viewDriver !== 'unassigned' && selected.length && selected.every(row => row.address_confirmed && row.recipient_address && drafts[row.id] === undefined))
+  const exportable = Boolean(viewDriver && viewDriver !== 'unassigned' && selected.length && selected.every(row => row.address_confirmed && row.recipient_address && drafts[row.id] === undefined && mapsDrafts[row.id] === undefined))
   let links: string[] = []
   let linkError = ''
-  if (exportable) { try { links = dispatchMapsLinks(selected, origin) } catch (failure) { linkError = (failure as Error).message } }
+  if (exportable) { try { links = dispatchMapsLinks(selected, origin, stopsPerLink) } catch (failure) { linkError = (failure as Error).message } }
   const counts = new Map<string,{name:string;count:number}>()
   for (const row of data?.rows ?? []) { const key = row.driver_id || 'unassigned', group = counts.get(key) ?? { name: row.driver_name || (row.driver_id ? 'Motorista' : 'Historico sem motorista'), count: 0 }; group.count++; counts.set(key,group) }
   const confirmAddress = async (row: DispatchVolume) => {
     const current = request.current
     setError(''); setBusy(true)
-    try { await api({ mode: 'confirm-address', id: row.id, address: drafts[row.id] ?? dispatchAddress(row) }); if (current === request.current) { setDrafts(previous => { const next = {...previous}; delete next[row.id]; return next }); setRefresh(value => value + 1) } }
+    try { await api({ mode: 'confirm-address', id: row.id, address: drafts[row.id] ?? dispatchAddress(row), mapsAddress: mapsDrafts[row.id] ?? dispatchMapsAddress(row) }); if (current === request.current) { setDrafts(previous => { const next = {...previous}; delete next[row.id]; return next }); setMapsDrafts(previous => { const next = {...previous}; delete next[row.id]; return next }); setRefresh(value => value + 1) } }
     catch (failure) { setError((failure as Error).message) } finally { setBusy(false) }
   }
   const optimize = async () => {
@@ -70,13 +73,15 @@ export default function LabelDispatchPanel({ driverId, onDriverChange, revision 
     {data && <><div className="ld-totals"><span><strong>{data.rows.length}</strong> volumes bipados</span><span><strong>{[...counts.keys()].filter(key => key !== 'unassigned').length}</strong> motoristas com volumes</span><span><strong>{counts.get('unassigned')?.count ?? 0}</strong> sem motorista</span></div>
       <div className="ld-driver-totals">{[...counts.entries()].map(([key,group]) => <button type="button" key={key} onClick={() => { setViewDriver(key); setOptimized([]) }}>{group.name}: {group.count}</button>)}</div>
       <div className="ld-controls"><label>Lista do motorista<select aria-label="Lista do motorista" value={viewDriver} onChange={event => { setViewDriver(event.target.value); setOptimized([]) }}>{data.dispatcher && <><option value="">Todos</option><option value="unassigned">Historico sem motorista</option></>}{[...new Map([...data.drivers,...data.rows.filter(row => row.driver_id).map(row => ({ id: row.driver_id!, name: row.driver_name || 'Motorista' }))].map(driver => [driver.id,driver])).values()].map(driver => <option key={driver.id} value={driver.id}>{driver.name}</option>)}</select></label><label>Endereco de partida<input aria-label="Endereco de partida" value={origin} maxLength={500} onChange={event => { setOrigin(event.target.value); setOptimized([]) }}/></label><button type="button" disabled={!selected.length} onClick={excel}><Download size={17}/>Excel</button>{data.optimizationConfigured && <button type="button" disabled={busy || !exportable || !origin.trim() || rows.length < 2 || rows.length > 25} onClick={() => void optimize()}><Navigation size={17}/>Otimizar no Google</button>}</div>
+      <div className="ld-controls"><label>Paradas por trecho<select aria-label="Paradas por trecho" value={stopsPerLink} onChange={event => setStopsPerLink(Number(event.target.value))}><option value="4">Ate 4 / navegador movel</option><option value="10">Ate 10 / aplicativo ou PC</option></select></label></div>
       <p className="ld-note">{optimized.length ? 'Paradas intermediarias otimizadas pelo Google; destino final mantido.' : 'Ordem da sequencia cadastrada na base; paradas sem sequencia ficam por horario de leitura.'} Volumes atribuidos nao significam entregas concluidas.</p>
       {linkError && <p role="alert">{linkError}</p>}
       {links.length > 0 && <div className="ld-links">{links.map((link,index) => <a key={link} href={link} target="_blank" rel="noreferrer"><Navigation size={16}/>Google Maps: trecho {index+1}/{links.length}</a>)}</div>}
       {links.length === 0 && <div className="ld-links"><button type="button" disabled><Navigation size={16} aria-hidden="true"/>Google Maps</button></div>}
       {!exportable && selected.length > 0 && <p className="ld-note">Selecione um motorista e confira os enderecos completos, incluindo numero, antes de abrir as paradas no Maps.</p>}
       {!rows.length && <p>Nenhuma leitura encontrada para este filtro.</p>}
-      <div className="ld-table"><table><thead><tr><th>Motorista</th><th>Endereco do pacote</th><th>Foto</th><th>Sequencia</th><th>Conferencia</th></tr></thead><tbody>{selected.map(row => <tr key={row.id}><td>{row.driver_name || 'Sem motorista'}</td><td>{row.driver_id ? <input aria-label={`Endereco do pacote ${row.id}`} value={drafts[row.id] ?? dispatchAddress(row)} maxLength={2000} onChange={event => { setDrafts(previous => ({...previous,[row.id]:event.target.value})); setOptimized([]) }}/>:dispatchAddress(row)}</td><td>{row.capture_number == null ? '-' : `#${row.capture_number}`}</td><td>{row.delivery_sequence ?? '-'}</td><td>{row.address_confirmed && drafts[row.id] === undefined ? 'Conferido' : row.driver_id && <button type="button" title="Confirmar endereco completo" aria-label={`Confirmar endereco ${row.id}`} disabled={busy || !(drafts[row.id] ?? dispatchAddress(row)).trim()} onClick={() => void confirmAddress(row)}><Check size={17}/></button>}</td></tr>)}</tbody></table></div>
+      <div className="ld-table"><table><thead><tr><th>Motorista</th><th>Endereco do pacote</th><th>Foto</th><th>Sequencia</th><th>Conferencia</th><th>Endereco para Maps</th></tr></thead><tbody>{selected.map(row => <tr key={row.id}><td>{row.driver_name || 'Sem motorista'}</td><td>{row.driver_id ? <input aria-label={`Endereco do pacote ${row.id}`} value={drafts[row.id] ?? dispatchAddress(row)} maxLength={2000} onChange={event => { setDrafts(previous => ({...previous,[row.id]:event.target.value})); setMapsDrafts(previous => ({...previous,[row.id]:mapsAddressText(event.target.value)})); setOptimized([]) }}/>:dispatchAddress(row)}</td><td>{row.capture_number == null ? '-' : `#${row.capture_number}`}</td><td>{row.delivery_sequence ?? '-'}</td><td>{row.address_confirmed && drafts[row.id] === undefined && mapsDrafts[row.id] === undefined ? 'Conferido' : row.driver_id && <button type="button" title="Confirmar endereco completo" aria-label={`Confirmar endereco ${row.id}`} disabled={busy || !(drafts[row.id] ?? dispatchAddress(row)).trim() || !(mapsDrafts[row.id] ?? dispatchMapsAddress(row)).trim()} onClick={() => void confirmAddress(row)}><Check size={17}/></button>}</td><td>{row.driver_id ? <input aria-label={`Endereco para Maps ${row.id}`} value={mapsDrafts[row.id] ?? dispatchMapsAddress(row)} maxLength={2000} onChange={event => { setMapsDrafts(previous => ({...previous,[row.id]:event.target.value})); setOptimized([]) }}/>:dispatchMapsAddress(row)}</td></tr>)}</tbody></table></div>
     </>}
+    {children}
   </section>
 }
