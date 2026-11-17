@@ -154,7 +154,7 @@ export function closingWindow(start: string, end: string, label = '') {
   if ((namedMonth >= 0 && namedMonth + 1 !== Number(start.slice(5, 7))) || (namedHalf && Number(namedHalf[1]) !== (firstDay === 1 ? 1 : 2)) || (namedYear && namedYear[1] !== start.slice(0, 4))) throw new Error('As datas da quinzena nao correspondem ao periodo informado no titulo.');
   return { start, end };
 }
-export function closingOperators(dropName: unknown, partner: unknown, registrations: DataRow[], start: string, end: string, fallbackUnit = 0) {
+export function closingOperators(dropName: unknown, partner: unknown, registrations: DataRow[], start: string, end: string, fallbackUnit = 0, options: { useCurrentActive?: boolean } = {}) {
   closingWindow(start, end);
   const candidates = registrations.filter(row => key(row.name) === key(dropName) && (row.is_active !== false || row.operation_started_at || row.operation_ended_at));
   const exact = candidates.filter(row => key(normalizePartner(row.partner)) === key(normalizePartner(text(partner))));
@@ -163,13 +163,28 @@ export function closingOperators(dropName: unknown, partner: unknown, registrati
   const description = `${text(dropName)} / ${text(partner)}`;
   if (!selected.length) throw new Error(`Nenhum cadastro com operacao no periodo para ${description}. Confira as datas e o cadastro historico.`);
   const ordered = selected.map(row => ({ row, from: row.operation_started_at || '0001-01-01', to: row.operation_ended_at || '9999-12-31' })).sort((first, second) => first.from.localeCompare(second.from));
+  let resolution: { mode: string; warning: string; ignoredRegistrationIds: unknown[] } | undefined;
   if (ordered.some(entry => entry.from > entry.to)) throw new Error(`Datas de operacao invalidas para ${description}.`);
   for (let index = 1; index < ordered.length; index++) {
     const previous = ordered[index - 1];
     const current = ordered[index];
     if (current.from <= previous.to) {
       const describe = (entry: typeof current) => `${text(entry.row.responsible) || 'Responsavel nao informado'} (cadastro ${text(entry.row.id) || 'sem ID'}; inicio: ${text(entry.row.operation_started_at) || 'nao informado'}; fim: ${text(entry.row.operation_ended_at) || 'em aberto'})`;
-      throw new Error(`Datas de operacao sobrepostas ou ausentes para ${description}, na quinzena ${start} a ${end}: ${describe(previous)} e ${describe(current)}. Corrija as datas em Cadastros antes de importar; se houve troca de responsavel, o anterior deve terminar antes do inicio do sucessor. Nenhum cadastro foi escolhido automaticamente.`);
+      const conflict = `Datas de operacao sobrepostas ou ausentes para ${description}, na quinzena ${start} a ${end}: ${describe(previous)} e ${describe(current)}.`;
+      if (options.useCurrentActive) {
+        const active = selected.filter(row => row.is_active !== false && key(row.status) === 'ATIVO');
+        if (active.length === 1) {
+          if (active[0].monthly_value == null) throw new Error(`Preencha o valor acordado de ${text(active[0].responsible) || description} no cadastro. A tarifa de outro responsavel nao sera reutilizada.`);
+          resolution = {
+            mode: 'current-active-override',
+            warning: conflict,
+            ignoredRegistrationIds: selected.filter(row => row.id !== active[0].id).map(row => row.id).sort(),
+          };
+          ordered.splice(0, ordered.length, { row: active[0], from: active[0].operation_started_at || '0001-01-01', to: active[0].operation_ended_at || '9999-12-31' });
+          break;
+        }
+      }
+      throw new Error(`${conflict} Corrija as datas em Cadastros antes de importar; se houve troca de responsavel, o anterior deve terminar antes do inicio do sucessor. Nenhum cadastro foi escolhido automaticamente.`);
     }
     const nextDay = new Date(`${previous.to}T12:00:00Z`);
     nextDay.setUTCDate(nextDay.getUTCDate() + 1);
@@ -178,7 +193,7 @@ export function closingOperators(dropName: unknown, partner: unknown, registrati
   return ordered.map(({ row }) => {
     if (row.monthly_value == null && (row.operation_started_at || row.operation_ended_at)) throw new Error(`Preencha o valor acordado de ${text(row.responsible) || description} no cadastro. A tarifa de outro responsavel nao sera reutilizada.`);
     return {
-      registration_snapshot: { ...registrationSnapshot(row), closingStart: start, closingEnd: end, effectiveStart: row.operation_started_at && row.operation_started_at > start ? row.operation_started_at : start, effectiveEnd: row.operation_ended_at && row.operation_ended_at < end ? row.operation_ended_at : end },
+      registration_snapshot: { ...registrationSnapshot(row), closingStart: start, closingEnd: end, effectiveStart: row.operation_started_at && row.operation_started_at > start ? row.operation_started_at : start, effectiveEnd: row.operation_ended_at && row.operation_ended_at < end ? row.operation_ended_at : end, ...(resolution ? { registrationResolution: resolution } : {}) },
       unit_value: row.monthly_value == null ? fallbackUnit : number(row.monthly_value),
     };
   });

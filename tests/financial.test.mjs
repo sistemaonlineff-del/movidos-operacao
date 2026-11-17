@@ -488,3 +488,33 @@ if (process.env.GENERATE_PDF_FIXTURES === '1') {
   await writeFile('tmp/financial-tests/multiplas-paginas.pdf', Buffer.from(doc.output('arraybuffer')))
   console.log(`PDF fixtures: reference model and ${doc.getNumberOfPages()}-page overflow check.`)
 }
+
+test('closing conflict override requires opt-in and one active owner, audits ignored registrations and preserves financial guards', () => {
+  const registrations = [
+    { id: 'legacy', name: 'RDJ 19', partner: 'iMile', responsible: 'Anterior', status: 'EXCLU\u00cdDO', is_active: true, monthly_value: null, cnpj: 'old-document', pix_key: 'old-pix' },
+    { id: 'current', name: 'RDJ 19', partner: 'iMile', responsible: 'Atual', status: 'ATIVO', is_active: true, monthly_value: 0.15, cnpj: 'current-document', pix_key: 'current-pix' },
+    { id: 'another-partner', name: 'RDJ 19', partner: 'Outro', responsible: 'Outro parceiro', status: 'ATIVO', monthly_value: 0.8 },
+  ]
+  const before = structuredClone(registrations)
+  const resolve = (rows = registrations, enabled = true) => closingOperators('RDJ 19', 'iMile', rows, '2026-10-16', '2026-10-31', 0.99, { useCurrentActive: enabled })
+  assert.throws(() => resolve(registrations, false), /sobrepostas ou ausentes/)
+  const selected = resolve()
+  assert.equal(selected.length, 1)
+  assert.equal(selected[0].unit_value, 0.15)
+  assert.equal(selected[0].registration_snapshot.dropId, 'current')
+  assert.equal(selected[0].registration_snapshot.document, 'current-document')
+  assert.equal(selected[0].registration_snapshot.pix, 'current-pix')
+  assert.equal(selected[0].registration_snapshot.operationStartedAt, '')
+  assert.equal(selected[0].registration_snapshot.operationEndedAt, '')
+  assert.equal(selected[0].registration_snapshot.registrationResolution.mode, 'current-active-override')
+  assert.deepEqual(selected[0].registration_snapshot.registrationResolution.ignoredRegistrationIds, ['legacy'])
+  assert.match(selected[0].registration_snapshot.registrationResolution.warning, /sobrepostas ou ausentes/)
+  assert.deepEqual(registrations, before)
+  assert.throws(() => resolve(registrations.map(row => ({ ...row, status: 'ATIVO' }))), /sobrepostas ou ausentes/)
+  assert.throws(() => resolve(registrations.map(row => ({ ...row, status: 'EXCLU\u00cdDO' }))), /sobrepostas ou ausentes/)
+  assert.throws(() => resolve(registrations.map(row => row.id === 'current' ? { ...row, monthly_value: null } : row)), /valor acordado/)
+  assert.equal(resolve(registrations.map(row => row.id === 'current' ? { ...row, monthly_value: 0 } : row))[0].unit_value, 0)
+  const inactive = resolve(registrations.map(row => row.id === 'current' ? { ...row, is_active: false } : row))
+  assert.equal(inactive[0].registration_snapshot.dropId, 'legacy')
+  assert.equal(inactive[0].registration_snapshot.registrationResolution, undefined)
+})

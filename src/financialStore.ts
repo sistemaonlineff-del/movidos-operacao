@@ -4,7 +4,7 @@ import type { DataRow } from './financialData'
 const pending = new Map<string, Promise<DataRow[]>>()
 const columns: Record<string, string> = {
   drops: 'id,legacy_id,name,partner,responsible,status,cpf,cnpj,pix_key,pix_holder_name,email,monthly_value,is_active,created_at',
-  operation_drops: 'id,name,partner,responsible,cpf,cnpj,pix_key,pix_holder_name,email,monthly_value,is_active,operation_started_at,operation_ended_at',
+  operation_drops: 'id,name,partner,responsible,status,cpf,cnpj,pix_key,pix_holder_name,email,monthly_value,is_active,operation_started_at,operation_ended_at',
   financial_periods: 'id,label,partner,logistics_partner,responsible,reference_cnpj,financial_view_id,payment_date,net_amount,status',
   financial_payment_history: 'id,drop_id,financial_period_id,period_label,partner,drop_name_snapshot,responsible,package_quantity,amount,subtotal,loss_amount,reimbursement,total_receivable,paid_at,pix_key,pix_holder_name,cnpj,email,observation',
   financial_drop_items: '*',
