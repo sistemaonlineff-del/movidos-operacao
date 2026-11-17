@@ -12,6 +12,10 @@
 .closing-allocation legend { font-weight: 700; max-width: 100%; overflow-wrap: anywhere; }
 .closing-allocation-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, 160px); align-items: center; gap: 1rem; padding: .5rem 0; }
 .closing-allocation-row span { display: block; font-size: .85rem; }
+.finance-page .closing-conflict-mode { display: flex; align-items: flex-start; gap: .6rem; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.finance-page .closing-conflict-mode input { flex: 0 0 18px; width: 18px; height: 18px; margin: .15rem 0 0; }
+.closing-conflict-entry { display: grid; gap: .4rem; padding: .8rem 0; border-bottom: 1px solid #c8dadc; min-width: 0; overflow-wrap: anywhere; }
+.closing-conflict-entry span { font-size: .9rem; }
 .app:has(.finance-page) > .content, .finance-page { min-width: 0; }
 @media (max-width: 640px) { .closing-period-dates, .closing-allocation-row { grid-template-columns: minmax(0, 1fr); } .closing-allocation { scroll-margin-top: 100px; } .app:has(.finance-page) { grid-template-columns: minmax(0, 1fr); } .finance-upload > * { min-width: 0; max-width: 100%; } }
 @media (min-width: 851px) {

@@ -95,6 +95,9 @@ const mockRequests = async route => {
     }
     if (!url.pathname.startsWith('/rest/v1/')) return json([])
     const table = url.pathname.split('/').pop()
+    if (process.env.FINANCIAL_CONFLICT_ONLY === '1' && table === 'drops' && url.searchParams.get('select')?.includes('operation_started_at')) {
+      assert.ok(url.searchParams.get('select').split(',').includes('status'))
+    }
     if(url.pathname.includes('/rpc/')&&table==='clear_route_postal_codes'){
       const payload=request.postDataJSON();writes.push({table,payload})
       const selected=tables.delivery_route_base.filter(row=>payload.route_ids.includes(row.id)&&row.is_active!==false&&row.postal_code)
@@ -261,7 +264,89 @@ const page = await context.newPage()
 page.on('pageerror', error => failures.push(error.message))
 page.setDefaultTimeout(15000)
 try {
-  if (process.env.CONTRACT_ONLY === '1') {
+  if (process.env.FINANCIAL_CONFLICT_ONLY === '1') {
+    const dropNames = ['BRA 75', 'NSR 4', 'PDR 5', 'RDJ 17', 'RDJ 19', 'RDJ 21', 'RDJ 22', 'VLG 5', 'VLS 3', 'DROP VALIDO']
+    tables.drops = dropNames.flatMap((name, index) => [
+      ...(index < 9 ? [{ id: `old-${index}`, name, partner, responsible: `Anterior ${index}`, status: 'EXCLUIDO', is_active: true, monthly_value: null, cnpj: `old-document-${index}`, pix_key: `old-pix-${index}` }] : []),
+      { id: `current-${index}`, name, partner, responsible: `Atual ${index}`, status: 'ATIVO', is_active: true, monthly_value: .15, cnpj: `current-document-${index}`, pix_key: `current-pix-${index}` },
+    ])
+    tables.financial_payment_history = []; tables.loss_events = []
+    const historic = { id: 'historic-item', financial_period_id: 'p1', drop_name_snapshot: 'HISTORICO', quantity_packages: 10, unit_value: .1, is_active: true, registration_snapshot: { version: 1, dropId: 'old-history', responsible: 'Historico preservado', pix: 'historic-pix', document: 'historic-document' } }
+    tables.financial_drop_items = [structuredClone(historic)]
+    const registrationsBefore = structuredClone(tables.drops)
+    const period = '38. 2Q DE OUTUBRO'
+    const workbook = createClosingTemplate(period)
+    workbook.Sheets.Fechamento = XLSX.utils.aoa_to_sheet([
+      ['Periodo','Parceiro','Drop','QuantidadePacote','CNPJReferencia'],
+      ...dropNames.map((name, index) => [period, partner, name, 100 + index, 'MOVIDOS']),
+    ])
+    workbook.Sheets.Extravios = XLSX.utils.aoa_to_sheet([
+      ['Periodo','Parceiro','Drop','CNPJReferencia','Waybill','CodigoEtiqueta','Saca','Status','Seller','DataRecebimento','ValorExtravio','Obs'],
+      ...dropNames.map((name, index) => [period, partner, name, 'MOVIDOS', `WB-${index}`, '', '', 'D2D Missing', '', '', 2, '']),
+    ])
+    workbook.Sheets['Pagamento Total'] = XLSX.utils.aoa_to_sheet([
+      ['Periodo','Parceiro','TotalLiquidoAReceber','DataPagamento','CNPJReferencia'],
+      [period, partner, 136.75, '06/12/2026', 'MOVIDOS'],
+    ])
+    const file = { name: 'conflicts.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) }
+    await page.goto('http://127.0.0.1:5173/financeiro')
+    await page.getByLabel('Período do fechamento').fill(period)
+    await page.getByLabel('Início da quinzena', { exact: true }).fill('2026-10-16')
+    await page.getByLabel('Fim da quinzena', { exact: true }).fill('2026-10-31')
+    const mode = page.getByLabel('Usar cadastro ATIVO nos conflitos cadastrais', { exact: true })
+    assert.equal(await mode.isChecked(), false)
+    const writesBefore = writes.length
+    await page.locator('.finance-upload input[type="file"]').setInputFiles(file)
+    await page.getByText(/Datas de operacao sobrepostas ou ausentes/).waitFor()
+    assert.equal(writes.length, writesBefore)
+    await mode.check()
+    await page.locator('.finance-upload input[type="file"]').setInputFiles(file)
+    const review = page.getByRole('form', { name: 'Divisão por responsável', exact: true })
+    await review.waitFor()
+    assert.equal(await review.locator('.closing-conflict-entry').count(), 9)
+    assert.equal(writes.length, writesBefore)
+    assert.equal(await mode.isDisabled(), true)
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport)
+      await review.scrollIntoViewIfNeeded()
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+      for (const control of await review.locator('input,select,button').all()) {
+        assert.ok(await control.evaluate(element => { const box = element.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth + 1 }))
+      }
+      await page.screenshot({ path: `tmp/browser-tests/closing-conflicts-${viewport.width}.png`, fullPage: true })
+    }
+    const confirmation = review.getByRole('button', { name: 'Confirmar divisão e importar', exact: true })
+    await confirmation.click()
+    assert.equal(writes.length, writesBefore)
+    await review.getByLabel('Confirmo os responsaveis, documentos e dados de pagamento acima para esta quinzena.', { exact: true }).check()
+    tables.drops.find(row => row.id === 'current-0').monthly_value = .2
+    await confirmation.click()
+    await page.getByText(/Os cadastros ou valores mudaram durante a conferencia/).waitFor()
+    assert.equal(writes.length, writesBefore)
+    tables.drops.find(row => row.id === 'current-0').monthly_value = .15
+    await confirmation.click()
+    await page.getByText(`View de ${period} importada com sucesso e consolidado geral atualizado.`, { exact: true }).waitFor()
+    const imported = tables.financial_drop_items.filter(row => row.id !== historic.id)
+    assert.equal(imported.length, 10)
+    assert.equal(imported.reduce((sum, row) => sum + row.quantity_packages, 0), 1045)
+    for (const [index, name] of dropNames.entries()) {
+      const item = imported.find(row => row.drop_name_snapshot === name)
+      assert.equal(item.registration_snapshot.dropId, `current-${index}`)
+      assert.equal(item.registration_snapshot.document, `current-document-${index}`)
+      assert.equal(item.registration_snapshot.pix, `current-pix-${index}`)
+      assert.equal(item.quantity_packages, 100 + index)
+      assert.equal(item.unit_value, .15)
+      assert.equal(Boolean(item.registration_snapshot.registrationResolution), index < 9)
+    }
+    assert.deepEqual(tables.loss_events.map(row => row.drop_id).sort(), dropNames.map((name, index) => `current-${index}`).sort())
+    const audit = JSON.parse(tables.financial_views.find(row => row.title === period).notes).registrationResolution
+    assert.equal(audit.confirmed, true)
+    assert.equal(audit.conflicts.length, 9)
+    assert.deepEqual(tables.financial_drop_items.find(row => row.id === historic.id), historic)
+    assert.deepEqual(tables.drops, registrationsBefore)
+    assert.equal(failures.length, 0, failures.join('\n'))
+    console.log('PASS: strict import blocks; opt-in reviews nine conflicts; confirmation and stale-data checks prevent writes; all ten drops, 1045 packages and ten losses import with audited owners; history and registrations unchanged; desktop/mobile screenshots captured')
+  } else if (process.env.CONTRACT_ONLY === '1') {
     await page.goto('http://127.0.0.1:5173/cadastros/novo?edit=drop1', { waitUntil: 'domcontentloaded' })
     await page.getByLabel('Início da operação', { exact: true }).fill('')
     await page.getByLabel('Fim da operação', { exact: true }).fill('')
@@ -283,7 +368,7 @@ try {
     assert.equal(await page.locator('script[type="module"][src*="/src/main.tsx"], script[type="module"][src*="/assets/index-"]').count(), 1)
     console.log('PASS: contract and termination download valid PDFs with blank operation dates and no database writes')
   }
-  if (process.env.CAMERA_ONLY !== '1' && process.env.CONTRACT_ONLY !== '1') {
+  if (process.env.CAMERA_ONLY !== '1' && process.env.CONTRACT_ONLY !== '1' && process.env.FINANCIAL_CONFLICT_ONLY !== '1') {
   await page.goto('http://127.0.0.1:5173/financeiro/notas-fiscais')
   await page.getByRole('cell',{name:'DROP TESTE',exact:true}).waitFor()
   await page.getByRole('cell',{name:'Pendente',exact:true}).waitFor()
@@ -1775,7 +1860,7 @@ try {
   console.log('PASS: real mobile viewport and touch keep reader navigation compact in portrait/landscape/tablet, including expanded submenu; camera opens')
   console.log('PASS: dashboard, registrations and financial retain previous desktop-style mobile layout on direct access, after reader navigation, history back/forward and reload')
   }
-  for (const nativeSize of process.env.CONTRACT_ONLY === '1' ? [] : [{width:360,height:640},{width:640,height:360}]) {
+  for (const nativeSize of process.env.CONTRACT_ONLY === '1' || process.env.FINANCIAL_CONFLICT_ONLY === '1' ? [] : [{width:360,height:640},{width:640,height:360}]) {
     const portraitContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,storageState:await context.storageState()})
     await portraitContext.route('**/*',mockRequests)
     await portraitContext.addInitScript(({user,jwt})=>{
