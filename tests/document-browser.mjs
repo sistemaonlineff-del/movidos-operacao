@@ -265,10 +265,17 @@ page.on('pageerror', error => failures.push(error.message))
 page.setDefaultTimeout(15000)
 try {
   if (process.env.FINANCIAL_CONFLICT_ONLY === '1') {
-    const dropNames = ['BRA 75', 'NSR 4', 'PDR 5', 'RDJ 17', 'RDJ 19', 'RDJ 21', 'RDJ 22', 'VLG 5', 'VLS 3', 'DROP VALIDO']
+    const conflictNames = ['BRA 75', 'NSR 4', 'PDR 5', 'RDJ 17', 'RDJ 19', 'RDJ 21', 'RDJ 22', 'VLG 5', 'VLS 3']
+    const realWorkbookPath = process.env.FINANCIAL_WORKBOOK
+    const realBytes = realWorkbookPath ? await readFile(realWorkbookPath) : null
+    const realWorkbook = realBytes ? XLSX.read(realBytes, { type: 'buffer', cellDates: true }) : null
+    const realClosing = realWorkbook ? XLSX.utils.sheet_to_json(realWorkbook.Sheets.Fechamento, { defval: '' }) : null
+    const dropNames = realClosing ? realClosing.map(row => String(row.Drop).trim()) : [...conflictNames, 'DROP VALIDO', 'BRA 108']
+    assert.equal(new Set(dropNames).size, dropNames.length)
+    assert.ok(conflictNames.every(name => dropNames.includes(name)))
     tables.drops = dropNames.flatMap((name, index) => [
-      ...(index < 9 ? [{ id: `old-${index}`, name, partner, responsible: `Anterior ${index}`, status: 'EXCLUIDO', is_active: true, monthly_value: null, cnpj: `old-document-${index}`, pix_key: `old-pix-${index}` }] : []),
-      { id: `current-${index}`, name, partner, responsible: `Atual ${index}`, status: 'ATIVO', is_active: true, monthly_value: .15, cnpj: `current-document-${index}`, pix_key: `current-pix-${index}` },
+      ...(conflictNames.includes(name) ? [{ id: `old-${index}`, name, partner, responsible: `Anterior ${index}`, status: 'EXCLUIDO', is_active: true, monthly_value: null, cnpj: `old-document-${index}`, pix_key: `old-pix-${index}` }] : []),
+      { id: `current-${index}`, name, partner, responsible: name === 'BRA 108' ? 'Fabiana' : `Atual ${index}`, status: 'ATIVO', is_active: true, monthly_value: .15, cnpj: `current-document-${index}`, pix_key: `current-pix-${index}`, ...(name === 'BRA 108' ? { operation_started_at: '2026-11-03', operation_ended_at: null } : {}) },
     ])
     tables.financial_payment_history = []; tables.loss_events = []
     const historic = { id: 'historic-item', financial_period_id: 'p1', drop_name_snapshot: 'HISTORICO', quantity_packages: 10, unit_value: .1, is_active: true, registration_snapshot: { version: 1, dropId: 'old-history', responsible: 'Historico preservado', pix: 'historic-pix', document: 'historic-document' } }
@@ -288,7 +295,15 @@ try {
       ['Periodo','Parceiro','TotalLiquidoAReceber','DataPagamento','CNPJReferencia'],
       [period, partner, 136.75, '06/12/2026', 'MOVIDOS'],
     ])
-    const file = { name: 'conflicts.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) }
+    const uploadedWorkbook = realWorkbook ?? workbook
+    const expectedClosing = XLSX.utils.sheet_to_json(uploadedWorkbook.Sheets.Fechamento, { defval: '' })
+    const expectedLosses = XLSX.utils.sheet_to_json(uploadedWorkbook.Sheets.Extravios, { defval: '' })
+    const expectedPayments = XLSX.utils.sheet_to_json(uploadedWorkbook.Sheets['Pagamento Total'], { defval: '' })
+    const expectedConflictCount = new Set([...expectedClosing, ...expectedLosses]
+      .filter(row => [...conflictNames, 'BRA 108'].includes(String(row.Drop).trim()))
+      .map(row => `${String(row.Drop).trim()}|${String(row.Parceiro).trim()}|${String(row.CNPJReferencia).trim().toUpperCase()}`)).size
+    const packageTotal = expectedClosing.reduce((sum, row) => sum + Number(row.QuantidadePacote), 0)
+    const file = { name: realWorkbookPath ? 'modelo-fechamento-financeiro.xlsx' : 'conflicts.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: realBytes ?? XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) }
     await page.goto('http://127.0.0.1:5173/financeiro')
     await page.getByLabel('Período do fechamento').fill(period)
     await page.getByLabel('Início da quinzena', { exact: true }).fill('2026-10-16')
@@ -303,7 +318,11 @@ try {
     await page.locator('.finance-upload input[type="file"]').setInputFiles(file)
     const review = page.getByRole('form', { name: 'Divisão por responsável', exact: true })
     await review.waitFor()
-    assert.equal(await review.locator('.closing-conflict-entry').count(), 9)
+    assert.equal(await review.locator('.closing-conflict-entry').count(), expectedConflictCount)
+    const outsideWarning = review.locator('.closing-conflict-entry').filter({ hasText: 'BRA 108|' })
+    await outsideWarning.getByText(/Atribuicao financeira fora do periodo operacional/).waitFor()
+    assert.match(await outsideWarning.textContent(), /Fabiana/)
+    assert.match(await outsideWarning.textContent(), /2026-11-03/)
     assert.equal(writes.length, writesBefore)
     assert.equal(await mode.isDisabled(), true)
     for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
@@ -313,7 +332,7 @@ try {
       for (const control of await review.locator('input,select,button').all()) {
         assert.ok(await control.evaluate(element => { const box = element.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth + 1 }))
       }
-      await page.screenshot({ path: `tmp/browser-tests/closing-conflicts-${viewport.width}.png`, fullPage: true })
+      await page.screenshot({ path: `tmp/browser-tests/closing-${realWorkbookPath ? 'real-workbook' : 'conflicts'}-${viewport.width}.png`, fullPage: !realWorkbookPath })
     }
     const confirmation = review.getByRole('button', { name: 'Confirmar divisão e importar', exact: true })
     await confirmation.click()
@@ -324,28 +343,71 @@ try {
     await page.getByText(/Os cadastros ou valores mudaram durante a conferencia/).waitFor()
     assert.equal(writes.length, writesBefore)
     tables.drops.find(row => row.id === 'current-0').monthly_value = .15
+    tables.drops.find(row => row.name === 'BRA 108').operation_started_at = '2026-11-04'
+    await confirmation.click()
+    await page.getByText(/Os cadastros ou valores mudaram durante a conferencia/).waitFor()
+    assert.equal(writes.length, writesBefore)
+    tables.drops.find(row => row.name === 'BRA 108').operation_started_at = '2026-11-03'
     await confirmation.click()
     await page.getByText(`View de ${period} importada com sucesso e consolidado geral atualizado.`, { exact: true }).waitFor()
     const imported = tables.financial_drop_items.filter(row => row.id !== historic.id)
-    assert.equal(imported.length, 10)
-    assert.equal(imported.reduce((sum, row) => sum + row.quantity_packages, 0), 1045)
+    assert.equal(imported.length, expectedClosing.length)
+    assert.equal(imported.reduce((sum, row) => sum + row.quantity_packages, 0), packageTotal)
     for (const [index, name] of dropNames.entries()) {
       const item = imported.find(row => row.drop_name_snapshot === name)
       assert.equal(item.registration_snapshot.dropId, `current-${index}`)
       assert.equal(item.registration_snapshot.document, `current-document-${index}`)
       assert.equal(item.registration_snapshot.pix, `current-pix-${index}`)
-      assert.equal(item.quantity_packages, 100 + index)
+      assert.equal(item.quantity_packages, Number(expectedClosing[index].QuantidadePacote))
+      const itemPeriod = tables.financial_periods.find(row => row.id === item.financial_period_id)
+      assert.equal(itemPeriod.reference_cnpj, String(expectedClosing[index].CNPJReferencia).trim().toUpperCase())
       assert.equal(item.unit_value, .15)
-      assert.equal(Boolean(item.registration_snapshot.registrationResolution), index < 9)
+      assert.equal(Boolean(item.registration_snapshot.registrationResolution), [...conflictNames, 'BRA 108'].includes(name))
+      if (name === 'BRA 108') {
+        assert.equal(item.registration_snapshot.responsible, 'Fabiana')
+        assert.equal(item.registration_snapshot.operationStartedAt, '2026-11-03')
+        assert.equal(item.registration_snapshot.effectiveStart, null)
+        assert.equal(item.registration_snapshot.effectiveEnd, null)
+        assert.equal(item.registration_snapshot.registrationResolution.mode, 'current-active-outside-period')
+      }
     }
-    assert.deepEqual(tables.loss_events.map(row => row.drop_id).sort(), dropNames.map((name, index) => `current-${index}`).sort())
+    assert.equal(tables.loss_events.length, expectedLosses.length)
+    assert.deepEqual(tables.loss_events.map(row => row.drop_id).sort(), expectedLosses.map(row => `current-${dropNames.indexOf(String(row.Drop).trim())}`).sort())
+    for (const [index, expected] of expectedLosses.entries()) {
+      const actual = tables.loss_events[index]
+      assert.equal(actual.waybill, String(expected.Waybill ?? '').trim())
+      assert.equal(actual.amount, Number(expected.ValorExtravio))
+      assert.equal(actual.drop_name_snapshot, String(expected.Drop).trim())
+      const lossPeriod = tables.financial_periods.find(row => row.id === actual.financial_period_id)
+      assert.equal(lossPeriod.reference_cnpj, String(expected.CNPJReferencia).trim().toUpperCase())
+    }
+    const importedView = tables.financial_views.find(row => row.title === period)
+    assert.equal(importedView.source_rows, expectedClosing.length + expectedLosses.length)
+    assert.equal(importedView.import_status, 'importado')
+    const importedPeriods = tables.financial_periods.filter(row => row.financial_view_id === importedView.id)
+    assert.equal(importedPeriods.length, expectedPayments.length)
+    for (const expected of expectedPayments) {
+      const saved = importedPeriods.find(row => row.reference_cnpj === String(expected.CNPJReferencia).trim().toUpperCase())
+      assert.ok(saved)
+      assert.equal(saved.net_amount, Number(expected.TotalLiquidoAReceber))
+      assert.equal(String(saved.payment_date).slice(0, 10), '2026-12-06')
+    }
     const audit = JSON.parse(tables.financial_views.find(row => row.title === period).notes).registrationResolution
     assert.equal(audit.confirmed, true)
-    assert.equal(audit.conflicts.length, 9)
+    assert.equal(audit.conflicts.length, expectedConflictCount)
     assert.deepEqual(tables.financial_drop_items.find(row => row.id === historic.id), historic)
     assert.deepEqual(tables.drops, registrationsBefore)
+    if (realWorkbookPath) {
+      const writesAfterImport = writes.length
+      await page.getByLabel('Período do fechamento').fill(period)
+      await page.locator('.finance-upload input[type="file"]').setInputFiles(file)
+      await page.getByText(/J\u00e1 existe fechamento ativo para este per\u00edodo/).waitFor()
+      assert.equal(writes.length, writesAfterImport)
+      assert.equal(tables.financial_drop_items.length, expectedClosing.length + 1)
+      assert.equal(tables.loss_events.length, expectedLosses.length)
+    }
     assert.equal(failures.length, 0, failures.join('\n'))
-    console.log('PASS: strict import blocks; opt-in reviews nine conflicts; confirmation and stale-data checks prevent writes; all ten drops, 1045 packages and ten losses import with audited owners; history and registrations unchanged; desktop/mobile screenshots captured')
+    console.log(`PASS: ${realWorkbookPath ? 'real workbook' : 'synthetic workbook'}; strict import blocks; opt-in reviews ${expectedConflictCount} drop/reference conflicts; confirmation and stale-data checks prevent writes; ${imported.length} drops, ${packageTotal} packages and ${tables.loss_events.length} losses imported; ${importedPeriods.length} payment references and totals preserved; history/registrations unchanged; desktop/mobile captured${realWorkbookPath ? '; duplicate reupload blocked' : ''}`)
   } else if (process.env.CONTRACT_ONLY === '1') {
     await page.goto('http://127.0.0.1:5173/cadastros/novo?edit=drop1', { waitUntil: 'domcontentloaded' })
     await page.getByLabel('Início da operação', { exact: true }).fill('')
