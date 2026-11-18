@@ -161,9 +161,21 @@ export function closingOperators(dropName: unknown, partner: unknown, registrati
   const matches = exact.length ? exact : candidates.filter(row => !text(row.partner));
   const selected = matches.filter(row => (!row.operation_started_at || row.operation_started_at <= end) && (!row.operation_ended_at || row.operation_ended_at >= start));
   const description = `${text(dropName)} / ${text(partner)}`;
+  let resolution: { mode: string; warning: string; ignoredRegistrationIds: unknown[] } | undefined;
+  if (!selected.length && options.useCurrentActive) {
+    const active = matches.filter(row => row.is_active !== false && key(row.status) === 'ATIVO');
+    if (active.length === 1) {
+      if (active[0].monthly_value == null) throw new Error(`Preencha o valor acordado de ${text(active[0].responsible) || description} no cadastro. A tarifa de outro responsavel nao sera reutilizada.`);
+      selected.push(active[0]);
+      resolution = {
+        mode: 'current-active-outside-period',
+        warning: `Atribuicao financeira fora do periodo operacional para ${description}: ${text(active[0].responsible)} (cadastro ${text(active[0].id)}; inicio: ${text(active[0].operation_started_at) || 'nao informado'}; fim: ${text(active[0].operation_ended_at) || 'em aberto'}). Confirme que os valores de ${start} a ${end} pertencem a este responsavel. As datas do cadastro nao serao alteradas.`,
+        ignoredRegistrationIds: [],
+      };
+    }
+  }
   if (!selected.length) throw new Error(`Nenhum cadastro com operacao no periodo para ${description}. Confira as datas e o cadastro historico.`);
   const ordered = selected.map(row => ({ row, from: row.operation_started_at || '0001-01-01', to: row.operation_ended_at || '9999-12-31' })).sort((first, second) => first.from.localeCompare(second.from));
-  let resolution: { mode: string; warning: string; ignoredRegistrationIds: unknown[] } | undefined;
   if (ordered.some(entry => entry.from > entry.to)) throw new Error(`Datas de operacao invalidas para ${description}.`);
   for (let index = 1; index < ordered.length; index++) {
     const previous = ordered[index - 1];
@@ -193,7 +205,7 @@ export function closingOperators(dropName: unknown, partner: unknown, registrati
   return ordered.map(({ row }) => {
     if (row.monthly_value == null && (row.operation_started_at || row.operation_ended_at)) throw new Error(`Preencha o valor acordado de ${text(row.responsible) || description} no cadastro. A tarifa de outro responsavel nao sera reutilizada.`);
     return {
-      registration_snapshot: { ...registrationSnapshot(row), closingStart: start, closingEnd: end, effectiveStart: row.operation_started_at && row.operation_started_at > start ? row.operation_started_at : start, effectiveEnd: row.operation_ended_at && row.operation_ended_at < end ? row.operation_ended_at : end, ...(resolution ? { registrationResolution: resolution } : {}) },
+      registration_snapshot: { ...registrationSnapshot(row), closingStart: start, closingEnd: end, effectiveStart: resolution?.mode === 'current-active-outside-period' ? null : row.operation_started_at && row.operation_started_at > start ? row.operation_started_at : start, effectiveEnd: resolution?.mode === 'current-active-outside-period' ? null : row.operation_ended_at && row.operation_ended_at < end ? row.operation_ended_at : end, ...(resolution ? { registrationResolution: resolution } : {}) },
       unit_value: row.monthly_value == null ? fallbackUnit : number(row.monthly_value),
     };
   });

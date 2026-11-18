@@ -86,6 +86,38 @@ const periods = [{ id: 'p1', label: '33. 1Q DE AGOSTO', partner: 'IMILE DELIVERY
 const item = { id: 'i1', financial_period_id: 'p1', drop_name_snapshot: 'VNM', quantity_packages: 2168, unit_value: .13, reimbursement: 0 }
 const loss = (id, status, amount, period = 'p1') => ({ id, financial_period_id: period, period_label: periods[0].label, drop_name_snapshot: 'VNM', status, amount })
 
+test('closing outside-period assignment requires opt-in and one active owner without changing operation dates', () => {
+  const registrations = [{ id: 'fabiana', name: 'BRA 108', partner: 'iMile', responsible: 'Fabiana', status: 'ATIVO', is_active: true, monthly_value: .15, operation_started_at: '2026-11-03', operation_ended_at: null, cnpj: 'document', pix_key: 'pix' }]
+  const before = structuredClone(registrations)
+  const resolve = (rows = registrations, enabled = true) => closingOperators('BRA 108', 'iMile', rows, '2026-10-16', '2026-10-31', .99, { useCurrentActive: enabled })
+  assert.throws(() => resolve(registrations, false), /Nenhum cadastro/)
+  const [operator] = resolve()
+  assert.equal(operator.unit_value, .15)
+  assert.equal(operator.registration_snapshot.dropId, 'fabiana')
+  assert.equal(operator.registration_snapshot.operationStartedAt, '2026-11-03')
+  assert.equal(operator.registration_snapshot.operationEndedAt, '')
+  assert.equal(operator.registration_snapshot.effectiveStart, null)
+  assert.equal(operator.registration_snapshot.effectiveEnd, null)
+  assert.equal(operator.registration_snapshot.registrationResolution.mode, 'current-active-outside-period')
+  assert.match(operator.registration_snapshot.registrationResolution.warning, /2026-11-03/)
+  assert.match(operator.registration_snapshot.registrationResolution.warning, /2026-10-16 a 2026-10-31/)
+  assert.equal(allocateClosingPackages(1265, [operator])[0].quantity_packages, 1265)
+  assert.deepEqual(registrations, before)
+  assert.throws(() => resolve([...registrations, { ...registrations[0], id: 'another' }]), /Nenhum cadastro/)
+  for (const change of [{ status: 'EXCLUIDO' }, { is_active: false }, { partner: 'Outro' }]) {
+    assert.throws(() => resolve([{ ...registrations[0], ...change }]), /Nenhum cadastro/)
+  }
+  assert.throws(() => resolve([{ ...registrations[0], monthly_value: null }]), /valor acordado/)
+  assert.equal(resolve([{ ...registrations[0], monthly_value: 0 }])[0].unit_value, 0)
+  assert.throws(() => resolve([{ ...registrations[0], operation_ended_at: '2026-11-01' }]), /Datas de operacao invalidas/)
+  const [past] = resolve([{ ...registrations[0], operation_started_at: '2026-01-01', operation_ended_at: '2026-09-30' }])
+  assert.equal(past.registration_snapshot.operationEndedAt, '2026-09-30')
+  assert.equal(past.registration_snapshot.effectiveEnd, null)
+  const [historical] = resolve([...registrations, { ...registrations[0], id: 'historical', status: 'EXCLUIDO', operation_started_at: '2026-09-01', operation_ended_at: '2026-10-31' }])
+  assert.equal(historical.registration_snapshot.dropId, 'historical')
+  assert.equal(historical.registration_snapshot.registrationResolution, undefined)
+})
+
 test('operation dates select historical owners and require an exact manual package split at transition', () => {
   const davi = { id: 'davi', name: 'MGC 5', partner: periods[0].partner, responsible: 'Davi', monthly_value: .25, pix_key: '00123', operation_started_at: '2026-08-01', operation_ended_at: '2026-10-10', is_active: false }
   const gustavo = { ...davi, id: 'gustavo', responsible: 'Gustavo', monthly_value: .5, pix_key: '99999', operation_started_at: '2026-10-11', operation_ended_at: null, is_active: true }
