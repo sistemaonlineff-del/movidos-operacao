@@ -1,6 +1,7 @@
 // @ts-nocheck
 import {useEffect,useMemo,useRef,useState} from 'react'
 import L from 'leaflet'
+import {Check,Copy,ExternalLink} from 'lucide-react'
 import 'leaflet/dist/leaflet.css'
 import type { Drop } from './lib/types'
 import { DROP_STATUSES } from './dropOptions'
@@ -12,6 +13,11 @@ export default function DropMap({drops}:{drops:Drop[]}) {
 	const holder=useRef<HTMLDivElement>(null)
 	const [city,setCity]=useState(''), [status,setStatus]=useState(''), [activity,setActivity]=useState('enabled')
 	const [search,setSearch]=useState('')
+	const [copyStatus,setCopyStatus]=useState('')
+	const copyMapLink=async()=>{
+		try{await navigator.clipboard.writeText(new URL('/mapa-drops',window.location.origin).href);setCopyStatus('copied')}
+		catch{setCopyStatus('error')}
+	}
 	const points=useMemo(()=>drops.filter(mapLocation),[drops])
 	const cities=useMemo(()=>[...new Set(points.map(drop=>String(drop.municipality??'')).filter(Boolean))].sort((first,second)=>first.localeCompare(second,'pt-BR')),[points])
 	const filtered=useMemo(()=>points.filter(drop=>{
@@ -33,7 +39,7 @@ export default function DropMap({drops}:{drops:Drop[]}) {
 		if(bounds.length)map.fitBounds(bounds,{padding:[32,32],maxZoom:12})
 		return()=>{map.remove()}
 	},[filtered])
-	return <section className="card map-card"><div className="map-heading"><div><p className="eyebrow">MAPA OPERACIONAL</p><h2>Pontos de coleta</h2></div><span>{filtered.length} localizacoes exibidas</span></div>
+	return <section className="card map-card"><div className="map-heading"><div><p className="eyebrow">MAPA OPERACIONAL</p><h2>Pontos de coleta</h2></div><span>{filtered.length} localizacoes exibidas</span><div className="map-external-actions"><a className="secondary map-external-link" href="/mapa-drops" target="_blank" rel="noopener noreferrer"><ExternalLink size={17} aria-hidden="true"/>Mapa externo</a><button type="button" className="secondary map-copy-link" aria-label="Copiar link do mapa externo" title={copyStatus==='copied'?'Link copiado':'Copiar link do mapa externo'} onClick={()=>void copyMapLink()}>{copyStatus==='copied'?<Check size={18} aria-hidden="true"/>:<Copy size={18} aria-hidden="true"/>}</button><span className="map-link-status" role="status">{copyStatus==='copied'?'Link copiado.':copyStatus==='error'?'Nao foi possivel copiar o link. Abra o mapa externo para copiar o endereco.':''}</span></div></div>
 		<label className="map-search">Buscar no mapa<input aria-label="Buscar no mapa" type="search" value={search} onChange={event=>setSearch(event.target.value)} /></label>
 		<div className="map-controls"><label>Filtrar por cidade<input list="cities-map" value={city} onChange={event=>setCity(event.target.value)}/></label><label>Status no mapa<select aria-label="Status no mapa" value={status} onChange={event=>setStatus(event.target.value)}><option value="">Todos os status</option>{DROP_STATUSES.map(value=><option key={value}>{value}</option>)}</select></label><label>Situação cadastral<select aria-label="Situação cadastral" value={activity} onChange={event=>setActivity(event.target.value)}><option value="enabled">Não desativados</option><option value="disabled">Desativados</option><option value="">Todos</option></select></label><button type="button" className="secondary" onClick={()=>{setSearch('');setCity('');setStatus('');setActivity('')}}>Limpar mapa</button><datalist id="cities-map">{cities.map(item=><option key={item} value={item}/>)}</datalist></div>
 		<div className="map-legend"><span><i className="status-dot status-active"/>Ativo</span><span><i className="status-dot status-progress"/>Em andamento</span><span><i className="status-dot status-frozen"/>Congelado</span><span><i className="status-dot status-problem"/>Problema / excluido</span></div><div className="drops-map" ref={holder}/></section>

@@ -1,9 +1,13 @@
 .map-card { margin-top: 1.25rem; }
 .app:has(.map-card) > .content, .map-card { min-width: 0; }
 @media(max-width:850px) { .app:has(.map-card) { grid-template-columns: minmax(0,1fr); } }
-.map-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.map-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
 .map-heading h2 { margin: 0; }
 .map-heading > span { color: #637278; font-size: .85rem; }
+.map-external-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; min-width: 0; max-width: 100%; }
+.map-external-link { display: inline-flex; align-items: center; gap: .45rem; padding: .65rem .8rem; text-decoration: none; }
+.map-copy-link { display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px; padding: 0; flex: 0 0 42px; }
+.map-link-status { font-size: .8rem; overflow-wrap: anywhere; }
 .map-controls { display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; margin: 0 0 .8rem; }
 .map-controls label { display: grid; gap: .35rem; font-size: .78rem; font-weight: 800; color: #415258; min-width: min(100%, 280px); }
 .map-controls input { border: 1px solid #d5e4e5; border-radius: 8px; padding: .68rem .75rem; background: #fff; }
