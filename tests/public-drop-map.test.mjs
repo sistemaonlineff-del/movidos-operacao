@@ -36,6 +36,65 @@ test('public map exposes only safe columns of enabled active drop-offs without w
   }finally{await db.close()}
 })
 
+test('dashboard offers public map opening and copying beside the operational map on desktop/mobile',async()=>{
+  const origin=process.env.MAP_BASE_URL||'http://127.0.0.1:5175',browser=await chromium.launch({channel:'msedge',headless:true})
+  const user={id:'11111111-1111-4111-8111-111111111111',email:'local-test@example.com',aud:'authenticated'}
+  const jwt=['header',Buffer.from(JSON.stringify({sub:user.id,exp:Math.floor(Date.now()/1000)+3600})).toString('base64url'),'test-signature'].join('.')
+  try{
+    await mkdir('tmp/public-map',{recursive:true})
+    for(const width of[360,1440]){
+      const context=await browser.newContext({viewport:{width,height:900},serviceWorkers:'block'}),errors=[]
+      await context.addInitScript(({user,jwt})=>{
+        localStorage.setItem('sb-hcpvmahmiqipghceylle-auth-token',JSON.stringify({access_token:jwt,refresh_token:'local-only',token_type:'bearer',expires_at:Math.floor(Date.now()/1000)+3600,expires_in:3600,user}))
+        Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{
+          if(window.__rejectMapCopy)throw new Error('Clipboard denied')
+          window.__copiedMapLink=value
+        }}})
+      },{user,jwt})
+      await context.route('**/*',async route=>{
+        const request=route.request(),url=new URL(request.url())
+        if(url.hostname.endsWith('.supabase.co')){
+          assert.ok(['GET','HEAD','POST'].includes(request.method()))
+          if(url.pathname==='/auth/v1/user')return route.fulfill({json:user})
+          if(url.pathname==='/rest/v1/rpc/public_active_drops')return route.fulfill({json:[]})
+          assert.equal(request.method(),'GET')
+          const rows=url.pathname==='/rest/v1/user_profiles'?[{...user,role:'admin',is_active:true}]:[]
+          return route.fulfill({json:request.headers().accept?.includes('application/vnd.pgrst.object')?rows[0]??null:rows})
+        }
+        if(url.hostname.endsWith('.tile.openstreetmap.org'))return route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')})
+        assert.equal(url.origin,origin);return route.continue()
+      })
+      const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message))
+      await page.goto(origin)
+      const map=page.locator('.map-card'),link=map.getByRole('link',{name:'Mapa externo',exact:true})
+      await link.waitFor()
+      assert.equal(await link.getAttribute('href'),'/mapa-drops')
+      assert.equal(await link.getAttribute('target'),'_blank')
+      assert.match(await link.getAttribute('rel'),/noopener/)
+      const copy=map.getByRole('button',{name:'Copiar link do mapa externo',exact:true})
+      await copy.click()
+      await map.getByRole('status').filter({hasText:'Link copiado.'}).waitFor()
+      assert.equal(await page.evaluate(()=>window.__copiedMapLink),`${origin}/mapa-drops`)
+      await page.evaluate(()=>{window.__rejectMapCopy=true})
+      await copy.click()
+      await map.getByRole('status').filter({hasText:'Nao foi possivel copiar o link.'}).waitFor()
+      await page.evaluate(()=>{window.__rejectMapCopy=false})
+      await copy.click()
+      await page.screenshot({path:`tmp/public-map/dashboard-map-${width}.png`,fullPage:false})
+      const popupEvent=page.waitForEvent('popup');await link.click();const popup=await popupEvent
+      await popup.waitForURL(`${origin}/mapa-drops`)
+      await popup.getByRole('heading',{name:'Pontos de coleta',exact:true}).waitFor()
+      await popup.close()
+      await map.scrollIntoViewIfNeeded()
+      const geometry=await page.evaluate(()=>({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth}))
+      assert.ok(geometry.scroll<=geometry.width+1,JSON.stringify(geometry))
+      for(const control of[link,copy])assert.ok(await control.evaluate(element=>{const box=element.getBoundingClientRect();return box.left>=0&&box.right<=innerWidth+1}))
+      assert.deepEqual(errors,[])
+      await context.close()
+    }
+  }finally{await browser.close()}
+})
+
 test('public map loads anonymously, filters city/neighborhood/address and renders on desktop/mobile',async()=>{
   const origin=process.env.MAP_BASE_URL||'http://127.0.0.1:5175',browser=await chromium.launch({channel:'msedge',headless:true})
   try{
