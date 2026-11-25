@@ -101,7 +101,90 @@ async function fixture({logged=true,active=true,allowed=true,routesAllowed=false
   await page.goto(`${origin}${path}`)
   return{context,page,state}
 }
+async function openMapsSegments(page){
+  const details=page.locator('.ld-map-segments')
+  if(await details.getAttribute('open')===null)await details.locator('summary').click()
+}
 try{
+  if(process.env.LABEL_READER_CASE==='itinerary'){
+    for(const [total,mobile]of[[50,false],[100,true]]){
+      const {page,state,context}=await fixture({role:'admin',mobile,dispatchScenario:true})
+      await page.getByLabel('Lista do motorista',{exact:true}).waitFor()
+      const day=state.day
+      state.dispatchRows=Array.from({length:total},(_,index)=>({id:`stop-${index}`,driver_id:user.id,driver_name:'Bruno',capture_number:total-index,recipient_address:`Rua Sintetica, ${index+1}, Casa dos fundos, Suzano`,maps_address:`R. Sintetica, ${index+1}, Suzano`,address_confirmed:true,delivery_sequence:index+1,created_at:'2026-11-25T10:00:00Z',delivery_date:day}))
+      state.dispatchRows.push({id:'jose-stop',driver_id:state.drivers[1].id,driver_name:'Jose',capture_number:999,recipient_address:'Rua Outro Destino, 1, Suzano',maps_address:'R. Outro Destino, 1, Suzano',address_confirmed:true,delivery_sequence:1,created_at:'2026-11-25T10:00:00Z',delivery_date:day})
+      const refresh=async()=>{
+        const response=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/label-dispatch'&&response.request().method()==='GET')
+        await page.getByRole('button',{name:'Atualizar expedicao',exact:true}).click();await response
+        await page.waitForFunction(()=>!document.querySelector('#label-dispatch>header button')?.disabled)
+      }
+      await refresh()
+      const itinerary=page.getByRole('region',{name:'Roteiro unico do motorista',exact:true})
+      await itinerary.waitFor()
+      assert.equal(await page.locator('.ld-map-segments').getAttribute('open'),null)
+      assert.equal(await itinerary.getByLabel('Parada atual',{exact:true}).locator('option').count(),total)
+      assert.equal(await itinerary.getByRole('button',{name:'Parada anterior',exact:true}).isDisabled(),true)
+      const before=structuredClone(state.dispatchRows),destinations=[]
+      for(let index=0;index<total;index++){
+        assert.equal(await itinerary.getByRole('status').innerText(),`Parada ${index+1} de ${total}`)
+        assert.equal(await itinerary.getByLabel('Parada atual',{exact:true}).inputValue(),`stop-${index}`)
+        const link=itinerary.getByRole('link',{name:'Ir para parada',exact:true}),url=new URL(await link.getAttribute('href'))
+        assert.equal(url.searchParams.get('origin'),null)
+        assert.equal(url.searchParams.get('waypoints'),null)
+        assert.equal(url.searchParams.get('dir_action'),'navigate')
+        destinations.push(url.searchParams.get('destination'))
+        if(index<total-1)await itinerary.getByRole('button',{name:'Proxima parada',exact:true}).click()
+      }
+      assert.deepEqual(destinations,before.filter(row=>row.driver_id===user.id).map(row=>row.maps_address))
+      assert.deepEqual(state.dispatchRows,before,'Moving between stops must not change delivery records')
+      assert.equal(state.dispatchRequests.length,0)
+      assert.equal(await itinerary.getByRole('button',{name:'Proxima parada',exact:true}).isDisabled(),true)
+      await itinerary.getByRole('button',{name:'Parada anterior',exact:true}).click()
+      assert.equal(await itinerary.getByLabel('Parada atual',{exact:true}).inputValue(),`stop-${total-2}`)
+      await itinerary.getByLabel('Parada atual',{exact:true}).selectOption('stop-17')
+      await refresh()
+      assert.equal(await itinerary.getByLabel('Parada atual',{exact:true}).inputValue(),'stop-17')
+      state.dispatchRows.reverse();await refresh()
+      assert.equal(await itinerary.getByLabel('Parada atual',{exact:true}).inputValue(),'stop-17','Refresh/reordering must preserve stop identity, not its old index')
+      const first=state.dispatchRows.find(row=>row.driver_id===user.id)
+      state.dispatchRows.push({...first,id:'new-stop',capture_number:1001})
+      await refresh()
+      assert.equal(await itinerary.getByLabel('Parada atual',{exact:true}).locator('option').count(),total+1)
+      assert.equal(await itinerary.getByLabel('Parada atual',{exact:true}).inputValue(),'stop-17')
+      await page.getByLabel('Lista do motorista',{exact:true}).selectOption(state.drivers[1].id)
+      assert.equal(await itinerary.getByLabel('Parada atual',{exact:true}).inputValue(),'jose-stop')
+      await page.getByLabel('Lista do motorista',{exact:true}).selectOption('')
+      assert.equal(await itinerary.count(),0)
+      await page.getByLabel('Lista do motorista',{exact:true}).selectOption('unassigned')
+      assert.equal(await itinerary.count(),0)
+      await page.getByLabel('Lista do motorista',{exact:true}).selectOption(user.id)
+      assert.equal(await itinerary.getByLabel('Parada atual',{exact:true}).inputValue(),first.id)
+      await page.getByLabel('Dia das leituras',{exact:true}).fill('2026-01-01')
+      await page.getByText('Nenhuma leitura encontrada para este filtro.',{exact:true}).waitFor()
+      assert.equal(await itinerary.count(),0)
+      await page.getByLabel('Dia das leituras',{exact:true}).fill(day)
+      await itinerary.waitFor()
+      assert.equal(await itinerary.getByLabel('Parada atual',{exact:true}).inputValue(),first.id)
+      await page.getByLabel(`Endereco para Maps ${first.id}`,{exact:true}).fill('R. Corrigida, 10, Suzano')
+      assert.equal(await itinerary.getByRole('link',{name:'Ir para parada',exact:true}).count(),0)
+      assert.equal(await itinerary.getByRole('button',{name:'Proxima parada',exact:true}).isDisabled(),true)
+      await page.getByRole('button',{name:`Confirmar endereco ${first.id}`,exact:true}).click()
+      await itinerary.getByRole('link',{name:'Ir para parada',exact:true}).waitFor()
+      assert.equal(new URL(await itinerary.getByRole('link',{name:'Ir para parada',exact:true}).getAttribute('href')).searchParams.get('destination'),'R. Corrigida, 10, Suzano')
+      assert.equal(state.dispatchRequests.length,1)
+      assert.equal(state.dispatchRequests[0].mode,'confirm-address')
+      first.address_confirmed=false;await refresh()
+      assert.equal(await itinerary.getByRole('link',{name:'Ir para parada',exact:true}).count(),0)
+      first.address_confirmed=true;await refresh()
+      await itinerary.getByRole('link',{name:'Ir para parada',exact:true}).waitFor()
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1))
+      for(const control of await itinerary.locator('button,select,a').all())assert.ok(await control.evaluate(element=>{const box=element.getBoundingClientRect();return box.left>=0&&box.right<=innerWidth+1}))
+      await itinerary.screenshot({path:`tmp/label-reader/screenshots/itinerary-${mobile?'mobile':'desktop'}.png`})
+      assert.deepEqual(state.errors,[])
+      await context.close()
+    }
+    console.log('PASS: single itinerary with 50/100 stops on desktop/mobile, all destinations preserved, no Google requests or delivery writes; previous/next/selection, refresh identity, appended stops, day/driver isolation and address confirmation guards')
+  }else{
   if(process.env.LABEL_READER_CASE!=='correction'){
   const anonymous=await fixture({logged:false})
   await anonymous.page.getByRole('button',{name:'Entrar no sistema',exact:true}).waitFor()
@@ -131,6 +214,7 @@ try{
     state.allowed=true
     await page.evaluate(()=>window.dispatchEvent(new Event('focus')))
     await page.getByLabel('Enviar foto',{exact:true}).waitFor()
+    await page.getByRole('heading',{name:'Preparando leitura...',exact:true}).waitFor({state:'hidden'})
     state.active=false
     await page.evaluate(()=>window.dispatchEvent(new Event('focus')))
     await page.getByRole('heading',{name:'Acesso restrito',exact:true}).waitFor()
@@ -264,6 +348,7 @@ try{
     assert.equal(state.dispatchRows[0].capture_number,1)
     assert.equal(await page.getByLabel('Motorista das proximas leituras',{exact:true}).inputValue(),user.id)
     await page.getByLabel('Lista do motorista',{exact:true}).selectOption(state.drivers[1].id)
+    await openMapsSegments(page)
     const link=page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true})
     await link.waitFor()
     const url=new URL(await link.getAttribute('href'))
@@ -302,6 +387,7 @@ try{
     assert.equal(await page.getByLabel('Motorista da foto #1',{exact:true}).isDisabled(),true,'An operator cannot assign another driver')
     const readCount=state.readNumber
     await page.getByRole('button',{name:'Salvar correcao',exact:true}).click()
+    await openMapsSegments(page)
     await page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true}).waitFor()
     assert.equal(state.readNumber,readCount)
     assert.equal(state.volumeRequests.length,1)
@@ -362,6 +448,7 @@ try{
     const {page,state}=recovery
     await page.getByLabel('Motorista das proximas leituras',{exact:true}).waitFor()
     assert.equal(await page.getByLabel('Lista do motorista',{exact:true}).inputValue(),user.id)
+    await openMapsSegments(page)
     assert.equal(await page.getByRole('button',{name:'Google Maps',exact:true}).isDisabled(),true)
     await page.getByRole('link',{name:'Google Maps e exportacao',exact:true}).click()
     assert.ok(await page.locator('#label-dispatch').evaluate(element=>{const box=element.getBoundingClientRect();return box.top>=-1&&box.top<window.innerHeight}))
@@ -431,6 +518,7 @@ try{
     for(const request of state.volumeRequests)assert.equal(request.captureNumber,captureNumbers.get(request.scanKey))
     assert.equal(await page.locator('.camera-batch-item button').count(),0)
     await page.getByRole('link',{name:'Exportar rota no Google Maps',exact:true}).click()
+    await openMapsSegments(page)
     assert.ok(await page.locator('#label-dispatch').evaluate(element=>{const box=element.getBoundingClientRect();return box.top>=-1&&box.top<window.innerHeight}))
     const links=await page.locator('.ld-links a').evaluateAll(elements=>elements.map(element=>element.href))
     assert.equal(links.length,13)
@@ -489,6 +577,7 @@ try{
   assert.deepEqual(state.dispatchRows.map(row=>row.driver_name),['Bruno','Jose','Rafael','Jose','Rafael'])
   await page.getByLabel('Lista do motorista',{exact:true}).selectOption(state.drivers[1].id)
   assert.equal(await page.locator('.ld-table tbody tr').count(),2)
+  await openMapsSegments(page)
   await page.getByRole('link',{name:'Google Maps: trecho 1/1',exact:true}).waitFor()
   const row=state.dispatchRows.find(row=>row.driver_name==='Jose')
   await page.getByLabel(`Endereco do pacote ${row.id}`,{exact:true}).fill('Rua Sintetica, 123, Centro, Suzano SP')
@@ -541,6 +630,7 @@ try{
   await expedition.context.close()
   }
   console.log(process.env.LABEL_READER_CASE==='correction'?'PASS: manual correction mobile/desktop, ambiguous and outside-base routes, uncertain and unavailable OCR, driver permissions, frozen retries without duplicate writes, Maps and Excel; no real writes.':'PASS: real App isolation/revocation, manual corrections, alternating drivers, 50-camera recovery on mobile/desktop without duplicate writes or per-package address confirmation, bounded retries, save-only replay, 4/10-stop Maps modes with all 50 destinations, separate clean Maps address, full complements in Excel, 9 photo/batch/camera packages and retained drafts; no real writes.')
+  }
 }catch(error){
   for(const{page,state}of diagnostics.filter(({page})=>!page.isClosed())){
     console.error(JSON.stringify(state),await page.locator('body').innerText())
