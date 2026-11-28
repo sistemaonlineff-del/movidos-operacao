@@ -5,6 +5,37 @@ import { createClient } from '@supabase/supabase-js'
 
 const compiled = buildSync({ entryPoints: ['src/cadastrosFilters.ts'], bundle: true, platform: 'node', format: 'esm', write: false })
 const { CADASTRO_TEXT_FILTERS, createCadastroFilters, applyCadastroFilters, numericMaskPattern } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
+const datesCompiled = buildSync({ entryPoints: ['src/cadastrosOperationDates.ts'], bundle: true, platform: 'node', format: 'esm', write: false })
+const { operationDatesPlan } = await import(`data:text/javascript;base64,${Buffer.from(datesCompiled.outputFiles[0].text).toString('base64')}`)
+
+test('bulk operation dates preserve populated and unselected fields without mutating registrations', () => {
+  const rows = [
+    { id: 'a', name: 'A', updated_at: 'version', operation_started_at: null, operation_ended_at: null },
+    { id: 'b', name: 'B', updated_at: 'version', operation_started_at: '2026-01-01', operation_ended_at: '2026-05-31' },
+  ]
+  const before = structuredClone(rows)
+  const changes = { operation_started_at: '2026-03-01', operation_ended_at: '2026-06-30' }
+  const plan = operationDatesPlan(rows, changes, true)
+  assert.deepEqual(plan.map(entry => entry.payload), [changes, {}])
+  assert.deepEqual(operationDatesPlan(rows, { operation_started_at: '2026-03-01' }, false).map(entry => entry.payload), [
+    { operation_started_at: '2026-03-01' }, { operation_started_at: '2026-03-01' },
+  ])
+  assert.deepEqual(rows, before)
+  assert.deepEqual(operationDatesPlan([rows[1]], { operation_started_at: '2026-01-01' }, false)[0].payload, {})
+})
+
+test('bulk dates validate the entire plan including preserved dates and reject invalid calendar dates', () => {
+  const row = { id: 'a', name: 'A', updated_at: 'version', operation_started_at: '2026-03-01', operation_ended_at: null }
+  for (const value of ['', '2026-02-30', '2026-13-01', '0000-01-01']) {
+    assert.throws(() => operationDatesPlan([row], { operation_ended_at: value }, true), /data válida/)
+  }
+  assert.throws(() => operationDatesPlan([row], { operation_ended_at: '2026-02-28' }, true), /anterior ao início/)
+  assert.throws(() => operationDatesPlan([row], {}, true), /pelo menos uma data/)
+  assert.throws(() => operationDatesPlan([], { operation_started_at: '2026-01-01' }, true), /Selecione/)
+  assert.throws(() => operationDatesPlan([{ ...row, updated_at: '' }], { operation_ended_at: '2026-04-01' }, true), /sem versão/)
+  assert.equal(operationDatesPlan([row], { operation_ended_at: '2026-03-01' }, true)[0].end, '2026-03-01')
+  assert.equal(operationDatesPlan([{ ...row, operation_started_at: null }], { operation_started_at: '2024-02-29' }, true)[0].start, '2024-02-29')
+})
 
 function recorder() {
   const calls = []

@@ -5,9 +5,11 @@ import { DROP_STATUSES, normalizePartner, normalizeZone, statusTone } from "./dr
 import { CADASTRO_TEXT_FILTERS, applyCadastroFilters, applyRegistrationKind, createCadastroFilters, type CadastroFilters, type RegistrationKind } from "./cadastrosFilters";
 import { useAccess } from "./access";
 import { DropRegistrationLinkActions } from "./DropRegistrationReview";
+import BulkOperationDates from "./BulkOperationDates";
+import type { OperationDatesRow } from "./cadastrosOperationDates";
 import "./cadastros-lista.css";
 
-type DropRow = {
+type DropRow = OperationDatesRow & {
   id: string;
   legacy_id: number | null;
   status: string;
@@ -21,7 +23,7 @@ type DropRow = {
   deactivated_reason: string | null;
 };
 const PAGE_SIZE = 50;
-const columns = "id,legacy_id,status,name,partner,responsible,phone,address,zone,is_active,deactivated_reason";
+const columns = "id,legacy_id,status,name,partner,responsible,phone,address,zone,is_active,deactivated_reason,operation_started_at,operation_ended_at,updated_at";
 const requests = new Map<string, Promise<{ rows: DropRow[]; count: number }>>();
 
 function readPage(filters: CadastroFilters, kind: RegistrationKind) {
@@ -101,6 +103,8 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: Registrat
   const [filters, setFilters] = useState(createCadastroFilters);
   const [draft, setDraft] = useState(createCadastroFilters);
   const [refresh, setRefresh] = useState(0);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [bulkRows, setBulkRows] = useState<DropRow[] | null>(null);
   const [rows, setRows] = useState<DropRow[]>([]),
     [count, setCount] = useState(0),
     [loading, setLoading] = useState(true),
@@ -128,6 +132,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: Registrat
     setLoading(true);
     setError("");
     setRows([]);
+    setSelected([]);
     readPage(filters, kind)
       .then((result) => {
         if (!current) return;
@@ -388,8 +393,12 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: Registrat
             + Novo cadastro
           </button>
           {kind === "drop_off" && <DropRegistrationLinkActions />}
+          {kind === "drop_off" && can("cadastros_edit") && <button className="secondary" disabled={busy || !selected.length} onClick={() => setBulkRows(rows.filter(row => selected.includes(row.id)))}>
+            Alterar datas em massa ({selected.length})
+          </button>}
         </div>
       </section>
+      {kind === "drop_off" && can("cadastros_edit") && <p>Selecione os cadastros desta página para alterar as datas. Ao mudar de página ou filtros, a seleção é limpa.</p>}
       <section className="card">
         <div className="table-wrap">
           <table aria-busy={busy}>
@@ -403,10 +412,13 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: Registrat
                   "Responsável",
                   "Telefone",
                   "Zona",
-                  "Ações",
+                  "Início da operação",
+                  "Fim da operação",
                 ].map((title) => (
                   <th key={title}>{title}</th>
                 ))}
+                {kind === "drop_off" && can("cadastros_edit") && <th><input type="checkbox" aria-label="Selecionar todos desta página" disabled={busy || !rows.length} checked={rows.length > 0 && selected.length === rows.length} onChange={event => setSelected(event.target.checked ? rows.map(row => row.id) : [])} /></th>}
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -428,6 +440,9 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: Registrat
                     <Phone value={drop.phone} />
                   </td>
                   <td>{drop.zone || "—"}</td>
+                  <td>{drop.operation_started_at?.split("-").reverse().join("/") || "—"}</td>
+                  <td>{drop.operation_ended_at?.split("-").reverse().join("/") || "—"}</td>
+                  {kind === "drop_off" && can("cadastros_edit") && <td onClick={event => event.stopPropagation()}><input type="checkbox" aria-label={`Selecionar cadastro ${drop.legacy_id ?? drop.id}`} disabled={busy} checked={selected.includes(drop.id)} onChange={event => setSelected(current => event.target.checked ? [...current, drop.id] : current.filter(id => id !== drop.id))} /></td>}
                   <td>
                     <button
                       className="table-action"
@@ -444,7 +459,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: Registrat
               ))}
               {!rows.length && (
                 <tr>
-                  <td colSpan={8} className="empty">
+                  <td colSpan={kind === "drop_off" && can("cadastros_edit") ? 11 : 10} className="empty">
                     {busy
                       ? "Carregando cadastros…"
                       : error
@@ -493,6 +508,7 @@ export default function CadastrosLista({ kind = "drop_off" }: { kind?: Registrat
           </div>
         </nav>
       </section>
+      {bulkRows && <BulkOperationDates rows={bulkRows} onClose={attempted => { setBulkRows(null); if (attempted) setRefresh(value => value + 1); }} />}
     </div>
   );
 }

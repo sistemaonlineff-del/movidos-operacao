@@ -2,6 +2,14 @@
 
 Aplicação que substitui o sistema Excel/VBA + Access por React/Vite, Flask e Supabase.
 
+## Datas de operacao em massa
+
+Em **Cadastros > DROP**, contas com **Editar cadastros** podem selecionar registros individuais ou todos da pagina e usar **Alterar datas em massa**. A selecao e limpa ao trocar filtros/pagina ou atualizar. Escolha inicio e/ou fim, confira a previa por ID/parceiro/responsavel e confirme. Por padrao, somente datas vazias sao preenchidas; desmarcar essa opcao substitui as datas dos campos marcados. Campos desmarcados nao mudam e a ferramenta nao apaga datas.
+
+Use as datas reais de operacao, nao as datas do fechamento. Para quem continua operando, deixe o fim desmarcado. A validacao considera as datas preservadas de cada cadastro e bloqueia fim anterior ao inicio antes de qualquer gravacao. As regras existentes do banco para sobreposicao e permissoes continuam valendo.
+
+As gravacoes sao sequenciais, com verificacao da versao apresentada na previa. Se um cadastro mudou, uma permissao foi revogada ou ocorrer erro, o lote para e informa quantas gravacoes foram confirmadas; nao desfaz as anteriores nem repete automaticamente. Feche e confira a lista antes de selecionar novamente, inclusive em caso de resposta perdida. Sem migracao nova, alteracao automatica de dados reais ou publicacao.
+
 ## Carregamento da API de expedicao (13/11/2026)
 
 "Expedicao indisponivel neste ambiente" significa que a resposta nao tem Content-Type JSON; nao prova falta de coluna ou necessidade de repetir SQL. No dominio oficial informado pela operadora, `https://movidos-operacao.vercel.app`, GET sem autenticacao em `/api/label-dispatch?day=2026-11-13` e `/api/label-volume` retornou HTTP 500, HTML e `FUNCTION_INVOCATION_FAILED`. `/api/label-routes` retornou HTTP 401 JSON, esperado sem sessao. A falha da funcao foi reproduzida no dominio oficial, sem acessar dados ou alterar permissoes; nao e apenas protecao da URL de deploy.

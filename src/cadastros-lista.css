@@ -26,6 +26,16 @@
 .cadastros-list-page .toolbar > div { display: flex; flex-wrap: wrap; gap: .5rem; min-width: 0; max-width: 100%; }
 .app .cadastros-list-page .toolbar button, .app .cadastros-list-page .filter-title button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .app .cadastros-list-page .cadastros-pagination { min-width: 0; width: 100%; }
+.bulk-operation-dates { width: min(960px, calc(100% - 2rem)); max-height: 90vh; box-sizing: border-box; overflow: auto; border: 0; border-radius: 12px; padding: 1.5rem; }
+.bulk-operation-dates::backdrop { background: rgba(16, 24, 32, .5); }
+.bulk-operation-dates fieldset { display: grid; gap: 1rem; border: 0; padding: 0; }
+.bulk-operation-dates label { display: flex; align-items: center; gap: .5rem; }
+.bulk-operation-dates input[type="checkbox"], .cadastros-list-page table input[type="checkbox"] { width: 18px; height: 18px; flex-shrink: 0; }
+.bulk-date-field { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
+.bulk-operation-dates .table-wrap { max-height: 40vh; overflow: auto; }
+.bulk-operation-dates td:last-child, .bulk-operation-dates th:last-child { position: static; box-shadow: none; }
+.bulk-dates-confirm { margin: 1rem 0; }
+.bulk-dates-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .75rem; }
 @media (max-width: 850px) {
   .app:has(.cadastros-list-page) { grid-template-columns: minmax(0, 1fr); }
   .app:has(.cadastros-list-page) > aside { position: static; height: auto; max-height: none; min-width: 0; display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: .5rem; }
