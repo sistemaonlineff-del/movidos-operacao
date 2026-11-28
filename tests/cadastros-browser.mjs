@@ -15,6 +15,7 @@ const target = {
   name: 'DROP FILTRO', partner, responsible: 'Ana "A", (Centro)\\', phone: '(11) 98765-4321',
   cnpj: '12.345.678/0001-90', address: 'Rua das Flores', address_number: '10', complement: 'Sala 2',
   neighborhood: 'Centro', municipality: 'Suzano', state: 'SP', postal_code: '01234-567', zone: 'LESTE',
+  operation_started_at: null, operation_ended_at: null, updated_at: '2026-01-01T00:00:00.000Z',
 }
 const drops = [
   target,
@@ -26,6 +27,9 @@ const drops = [
 ]
 const requests = [], writes = [], failures = [], external = []
 let viewer = false, rejectReads = false
+let rejectWriteId = '', loseWriteResponse = false
+let revision = 0
+let writeGate = null
 
 function splitExpressions(expression) {
   assert.ok(expression.startsWith('(') && expression.endsWith(')'), expression)
@@ -91,7 +95,17 @@ async function mockRequests(route) {
         const payload = request.postDataJSON()
         assert.ok(!viewer && ((table === 'drops' && request.method() === 'PATCH') || (table === 'audit_logs' && request.method() === 'POST')), 'Unexpected write')
         writes.push({ table, payload })
-        if (table === 'drops') drops.filter(row => matches(row, url.searchParams)).forEach(row => Object.assign(row, payload))
+        if (table === 'drops') {
+          const matching = drops.filter(row => matches(row, url.searchParams))
+          if (matching.some(row => row.id === rejectWriteId)) return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ message: 'Datas de operacao sobrepostas' }) })
+          matching.forEach(row => Object.assign(row, payload, { updated_at: `2026-11-27T00:00:${String(++revision).padStart(2, '0')}.000Z` }))
+          if (writeGate) await writeGate
+          if (loseWriteResponse) { loseWriteResponse = false; return route.abort('failed') }
+          if (url.searchParams.has('select')) {
+            if (!matching.length) return route.fulfill({ status: 406, contentType: 'application/json', body: JSON.stringify({ message: 'Cadastro alterado ou sem permissao', code: 'PGRST116' }) })
+            return json(matching[0])
+          }
+        }
         return json(null)
       }
       if (table === 'user_profiles') return json({ ...user, full_name: 'Teste cadastros', role: viewer ? 'operator' : 'admin', is_active: true })
@@ -228,6 +242,8 @@ try {
   await viewerPage.goto(`${baseURL}/cadastros`, { waitUntil: 'domcontentloaded' })
   await countIs(viewerPage, 1003)
   assert.equal(await viewerPage.locator('tbody .danger-action').count(), 0)
+  assert.equal(await viewerPage.getByRole('button', { name: /Alterar datas em massa/ }).count(), 0)
+  assert.equal(await viewerPage.getByLabel('Selecionar todos desta página').count(), 0)
   await viewerContext.close()
   viewer = false
 
@@ -253,6 +269,16 @@ try {
     await mobile.getByLabel('Nome DROP', { exact: true }).fill('DROP FILTRO')
     await countIs(mobile, 2)
     await mobile.screenshot({ path: `${output}/filters-mobile-${viewport.width}.png`, fullPage: true })
+    await mobile.getByLabel('Selecionar todos desta página').check()
+    await mobile.getByRole('button', { name: 'Alterar datas em massa (2)' }).click()
+    await mobile.getByLabel('Início da operação', { exact: true }).fill('2026-03-01')
+    const dialogGeometry = await mobile.getByRole('dialog').evaluate(element => {
+      const bounds = element.getBoundingClientRect()
+      return { left: bounds.left, right: bounds.right, width: document.documentElement.clientWidth, height: bounds.height, viewportHeight: innerHeight }
+    })
+    assert.ok(dialogGeometry.left >= 0 && dialogGeometry.right <= dialogGeometry.width && dialogGeometry.height <= dialogGeometry.viewportHeight, JSON.stringify(dialogGeometry))
+    await mobile.screenshot({ path: `${output}/bulk-dates-mobile-${viewport.width}.png`, fullPage: true })
+    await mobile.getByRole('button', { name: 'Cancelar', exact: true }).click()
     await mobile.getByRole('button', { name: 'Documentos', exact: true }).click()
     await mobile.waitForFunction(() => document.querySelector('meta[name="viewport"]')?.getAttribute('content') === 'width=980')
     assert.ok(Math.abs(await mobile.evaluate(() => document.documentElement.clientWidth) - 980) <= 1)
@@ -264,9 +290,122 @@ try {
     await mobileContext.close()
   }
   assert.deepEqual(writes, [])
+  console.log('Cadastros: checking bulk operation dates with isolated writes')
+  await page.goto(`${baseURL}/cadastros`, { waitUntil: 'domcontentloaded' })
+  await countIs(page, 1003)
+  await page.getByLabel('Selecionar cadastro 2000', { exact: true }).check()
+  await page.getByRole('button', { name: 'Próxima', exact: true }).click()
+  await page.getByText('Página 2 de 21', { exact: true }).waitFor()
+  await countIs(page, 1003)
+  assert.equal(await page.getByRole('button', { name: 'Alterar datas em massa (0)' }).isDisabled(), true)
+  await page.getByLabel('Nome DROP', { exact: true }).fill('DROP FILTRO')
+  await countIs(page, 2)
+  const plain = drops.find(row => row.id === 'drop-plain')
+  plain.operation_started_at = '2026-02-01'
+  await page.getByRole('button', { name: 'Atualizar', exact: true }).click()
+  await countIs(page, 2)
+  const openBulk = async () => {
+    await page.getByLabel('Selecionar todos desta página').check()
+    await page.getByRole('button', { name: 'Alterar datas em massa (2)' }).click()
+    await page.getByRole('dialog', { name: 'Alterar datas em massa' }).waitFor()
+  }
+  const confirmBulk = async () => {
+    await page.getByRole('checkbox', { name: /Confirmo aplicar as datas/ }).check()
+    await page.getByRole('button', { name: /Aplicar em \d+ cadastros/ }).click()
+  }
+  const closeBulk = async () => {
+    await page.getByRole('button', { name: 'Fechar e atualizar lista' }).click()
+    await countIs(page, 2)
+    assert.equal(await page.getByRole('button', { name: 'Alterar datas em massa (0)' }).isDisabled(), true)
+  }
+  await openBulk()
+  await page.getByLabel('Início da operação', { exact: true }).fill('2026-03-01')
+  await page.getByLabel('Alterar fim da operação', { exact: true }).check()
+  await page.getByLabel('Fim da operação', { exact: true }).fill('2026-03-31')
+  assert.equal(await page.getByRole('button', { name: 'Aplicar em 2 cadastros' }).isDisabled(), true)
+  assert.match(await page.getByRole('table', { name: 'Prévia das datas' }).innerText(), /01\/02\/2026 → 01\/02\/2026/)
+  await page.getByRole('button', { name: 'Cancelar', exact: true }).click()
+  assert.deepEqual(writes, [])
+  await openBulk()
+  await page.getByLabel('Início da operação', { exact: true }).fill('2026-03-01')
+  await page.getByLabel('Alterar fim da operação', { exact: true }).check()
+  await page.getByLabel('Fim da operação', { exact: true }).fill('2026-03-31')
+  let releaseWrite
+  writeGate = new Promise(resolve => { releaseWrite = resolve })
+  await confirmBulk()
+  assert.equal(await page.getByLabel('Início da operação', { exact: true }).isDisabled(), true)
+  assert.equal(await page.getByRole('button', { name: 'Fechar e atualizar lista' }).isDisabled(), true)
+  assert.equal(await page.getByRole('button', { name: 'Salvando…', exact: true }).isDisabled(), true)
+  await page.keyboard.press('Escape')
+  assert.equal(await page.getByRole('dialog').isVisible(), true)
+  writeGate = null
+  releaseWrite()
+  await page.getByRole('status').filter({ hasText: '2 cadastro(s) atualizado(s) com sucesso' }).waitFor()
+  assert.deepEqual(writes.map(write => write.payload), [
+    { operation_started_at: '2026-03-01', operation_ended_at: '2026-03-31' },
+    { operation_ended_at: '2026-03-31' },
+  ])
+  assert.equal(plain.operation_started_at, '2026-02-01')
+  await closeBulk()
+  await page.reload()
+  await countIs(page, 1003)
+  await page.getByLabel('Nome DROP', { exact: true }).fill('DROP FILTRO')
+  await countIs(page, 2)
+  assert.match(await page.locator('tbody .cadastro-row').first().innerText(), /01\/03\/2026/)
+
+  await openBulk()
+  await page.getByLabel('Início da operação', { exact: true }).fill('2026-04-01')
+  await page.getByText('0 cadastro(s) serão alterados; 2 permanecerão iguais.', { exact: true }).waitFor()
+  assert.equal(await page.getByRole('button', { name: 'Aplicar em 0 cadastros' }).isDisabled(), true)
+  await page.getByRole('button', { name: 'Cancelar', exact: true }).click()
+
+  await openBulk()
+  await page.getByLabel('Início da operação', { exact: true }).fill('2026-04-01')
+  await page.getByLabel('Preencher somente datas vazias', { exact: true }).uncheck()
+  await page.getByRole('alert').filter({ hasText: 'anterior ao início' }).waitFor()
+  assert.equal(writes.length, 2)
+  await page.getByLabel('Início da operação', { exact: true }).fill('2026-01-01')
+  await page.getByRole('checkbox', { name: /Confirmo aplicar as datas/ }).check()
+  await page.getByLabel('Início da operação', { exact: true }).fill('2026-01-02')
+  assert.equal(await page.getByRole('checkbox', { name: /Confirmo aplicar as datas/ }).isChecked(), false)
+  target.updated_at = '2026-11-27T01:00:00.000Z'
+  await confirmBulk()
+  await page.getByRole('alert').filter({ hasText: '0 de 2 gravações confirmadas' }).waitFor()
+  assert.equal(target.operation_started_at, '2026-03-01')
+  assert.equal(await page.getByRole('button', { name: 'Aplicar em 2 cadastros' }).isDisabled(), true)
+  await closeBulk()
+
+  await openBulk()
+  await page.getByLabel('Início da operação', { exact: true }).fill('2026-01-01')
+  await page.getByLabel('Preencher somente datas vazias', { exact: true }).uncheck()
+  rejectWriteId = 'drop-plain'
+  await confirmBulk()
+  await page.getByRole('alert').filter({ hasText: '1 de 2 gravações confirmadas' }).waitFor()
+  assert.equal(target.operation_started_at, '2026-01-01')
+  assert.equal(plain.operation_started_at, '2026-02-01')
+  assert.equal(target.operation_ended_at, '2026-03-31')
+  rejectWriteId = ''
+  await closeBulk()
+
+  await openBulk()
+  await page.getByLabel('Início da operação', { exact: true }).fill('2026-01-15')
+  await page.getByLabel('Preencher somente datas vazias', { exact: true }).uncheck()
+  loseWriteResponse = true
+  const beforeLost = writes.length
+  await confirmBulk()
+  await page.getByRole('alert').filter({ hasText: 'a última tentativa pode ter sido gravada' }).waitFor()
+  assert.equal(writes.length, beforeLost + 1, 'A lost response must not retry or continue the batch')
+  assert.equal(target.operation_started_at, '2026-01-15')
+  await closeBulk()
+  assert.match(await page.locator('tbody .cadastro-row').first().innerText(), /15\/01\/2026/)
+  await page.getByLabel('Selecionar cadastro 2000', { exact: true }).check()
+  await page.getByLabel('ID', { exact: true }).fill('2000')
+  await countIs(page, 1)
+  assert.equal(await page.getByRole('button', { name: 'Alterar datas em massa (0)' }).isDisabled(), true)
+  await context.close()
   assert.deepEqual(failures, [])
   assert.deepEqual(external, [])
-  console.log(`PASS cadastros: 15 fields, debounce, pagination, masked values, injection, exports >1000, kinds, permissions, recovery, desktop/mobile; ${requests.length} mocked reads, no real network or writes`)
+  console.log(`PASS cadastros: filters, pagination, exports, permissions, desktop/mobile, bulk dates, preview, persistence, conflicts, partial failure and lost response; ${requests.length} mocked reads, ${writes.length} mocked writes, no real network`)
 } finally {
   await browser.close()
 }
